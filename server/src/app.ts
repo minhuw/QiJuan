@@ -7,7 +7,9 @@ import { registerAccessRoutes } from './access-routes.js';
 import { installSessionGuard } from './auth.js';
 import type { AppConfig } from './config.js';
 import { openDatabase } from './db.js';
+import { registerEditionRoutes } from './edition-routes.js';
 import { registerImportRoutes } from './import-routes.js';
+import type { OpenLibraryTransport } from './metadata/openLibrary.js';
 import { requeueInterruptedJobs, startJobWorker } from './jobs.js';
 import { redactOptions } from './logger.js';
 import { defaultClientDist } from './paths.js';
@@ -17,6 +19,8 @@ export interface BuildAppOptions {
   /** `null` skips static files. Omit to serve `client/dist` when it exists. */
   clientDist?: string | null;
   logger?: FastifyServerOptions['logger'];
+  /** Defaults to the public Open Library endpoints. Tests pass a stub `fetch`. */
+  openLibrary?: OpenLibraryTransport;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -87,6 +91,11 @@ export async function buildApp(options: BuildAppOptions) {
       db,
       dataDir: options.config.dataDir,
       maxUploadBytes: options.config.maxUploadBytes,
+    });
+    registerEditionRoutes(app, {
+      db,
+      dataDir: options.config.dataDir,
+      openLibrary: options.openLibrary ?? {},
     });
 
     const clientDist = options.clientDist === undefined ? defaultClientDist() : options.clientDist;

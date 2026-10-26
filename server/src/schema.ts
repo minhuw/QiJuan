@@ -104,6 +104,7 @@ export const editionContributors = sqliteTable(
       .references(() => persons.id, { onDelete: 'cascade' }),
     role: text('role', { enum: ['author', 'translator'] }).notNull(),
     position: integer('position').notNull().default(0),
+    displayName: text('display_name'),
   },
   (table) => [primaryKey({ columns: [table.editionId, table.personId, table.role] })],
 );
@@ -182,6 +183,42 @@ export const covers = sqliteTable('covers', {
   bytes: integer('bytes').notNull(),
   mediaType: text('media_type').notNull(),
   relativePath: text('relative_path').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const fieldLocks = sqliteTable(
+  'field_locks',
+  {
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    field: text('field').notNull(),
+    lockedAt: text('locked_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.editionId, table.field] })],
+);
+
+export const editionSuggestions = sqliteTable('edition_suggestions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  libraryId: integer('library_id')
+    .notNull()
+    .references(() => libraries.id, { onDelete: 'cascade' }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  matchedEditionId: integer('matched_edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  createdAt: text('created_at').notNull(),
+  dismissedAt: text('dismissed_at'),
+});
+
+export const metadataPreviews = sqliteTable('metadata_previews', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  proposal: text('proposal').notNull(),
   createdAt: text('created_at').notNull(),
 });
 

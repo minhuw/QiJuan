@@ -8,6 +8,7 @@ import { CatalogError, checkIndexedLibrary } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { createImportJob, getVisibleJob, listVisibleJobs } from './jobs.js';
 import { listLibraryFiles } from './library-files.js';
+import { refreshLibraryMetadata } from './refresh.js';
 import type { AuthUser } from './sessions.js';
 
 const MAX_IMPORT_FILES = 20;
@@ -138,8 +139,9 @@ export function registerImportRoutes(app: FastifyInstance, deps: ImportRouteDeps
       const library = requireLibraryAccess(deps.db, user, libraryId);
       if (library.mode !== 'indexed') return reply.code(400).send({ error: 'library_mode' });
       const result = checkIndexedLibrary(deps.db, library.id);
+      const refreshed = refreshLibraryMetadata(deps.db, deps.dataDir, library.id);
       reply.header('cache-control', 'no-store');
-      return result;
+      return { ...result, refreshed: refreshed.refreshed };
     } catch (error) {
       return sendError(reply, error);
     }

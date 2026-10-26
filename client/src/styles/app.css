@@ -137,7 +137,8 @@ h2 {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
   font: inherit;
   color: var(--ink);
@@ -145,6 +146,37 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 0.25rem;
   padding: 0.45rem 0.6rem;
+}
+
+.field textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.book-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  border-top: 1px solid var(--line);
+  padding: 0.55rem 0;
+}
+
+.book-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hint-inline {
+  color: var(--ink-muted);
+}
+
+.cover-preview {
+  display: block;
+  width: 6rem;
+  height: auto;
+  margin: 0.5rem 0;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
 }
 
 .button {

@@ -20,9 +20,26 @@ export const COVER_PNG = Buffer.from(
   'base64',
 );
 
-export function buildEpub(options?: { identifier?: string; english?: string }): Buffer {
+export function buildEpub(options?: {
+  identifier?: string;
+  english?: string;
+  title?: string;
+  language?: string;
+  author?: string;
+  translator?: string | null;
+  description?: string | null;
+  publisher?: string | null;
+  cover?: Buffer;
+}): Buffer {
   const identifier = options?.identifier ?? EPUB_ID;
   const english = options?.english ?? ENGLISH_PARAGRAPH;
+  const title = options?.title ?? EPUB_TITLE;
+  const language = options?.language ?? EPUB_LANGUAGE;
+  const author = options?.author ?? EPUB_AUTHOR;
+  const translator = options?.translator ?? null;
+  const description = options?.description ?? null;
+  const publisher = options?.publisher ?? null;
+  const cover = options?.cover ?? COVER_PNG;
   const container = `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -30,14 +47,20 @@ export function buildEpub(options?: { identifier?: string; english?: string }): 
   </rootfiles>
 </container>
 `;
+  const metadata = [
+    `<dc:identifier id="bookid" opf:scheme="uuid">${xmlEscape(identifier)}</dc:identifier>`,
+    `<dc:title>${xmlEscape(title)}</dc:title>`,
+    `<dc:language>${xmlEscape(language)}</dc:language>`,
+    `<dc:creator opf:role="aut">${xmlEscape(author)}</dc:creator>`,
+  ];
+  if (translator) metadata.push(`<dc:creator opf:role="trl">${xmlEscape(translator)}</dc:creator>`);
+  if (description) metadata.push(`<dc:description>${xmlEscape(description)}</dc:description>`);
+  if (publisher) metadata.push(`<dc:publisher>${xmlEscape(publisher)}</dc:publisher>`);
+  metadata.push('<meta name="cover" content="cover-image"/>');
   const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="bookid" opf:scheme="uuid">${identifier}</dc:identifier>
-    <dc:title>${EPUB_TITLE}</dc:title>
-    <dc:language>${EPUB_LANGUAGE}</dc:language>
-    <dc:creator opf:role="aut">${EPUB_AUTHOR}</dc:creator>
-    <meta name="cover" content="cover-image"/>
+    ${metadata.join('\n    ')}
   </metadata>
   <manifest>
     <item id="cover-image" href="cover.png" media-type="image/png" properties="cover-image"/>
@@ -50,7 +73,7 @@ export function buildEpub(options?: { identifier?: string; english?: string }): 
 `;
   const chapter = `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-Hans">
-  <head><title>${EPUB_TITLE}</title></head>
+  <head><title>${xmlEscape(title)}</title></head>
   <body>
     <p>${CHINESE_PARAGRAPH}</p>
     <p>${english}</p>
@@ -62,8 +85,12 @@ export function buildEpub(options?: { identifier?: string; english?: string }): 
     { name: 'META-INF/container.xml', data: Buffer.from(container), method: 0 },
     { name: 'OEBPS/content.opf', data: Buffer.from(opf), method: 8 },
     { name: 'OEBPS/chapter.xhtml', data: Buffer.from(chapter), method: 0 },
-    { name: 'OEBPS/cover.png', data: COVER_PNG, method: 0 },
+    { name: 'OEBPS/cover.png', data: cover, method: 0 },
   ]);
+}
+
+function xmlEscape(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 export function buildTextPdf(): Buffer {

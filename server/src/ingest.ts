@@ -7,7 +7,10 @@ import { addIndexedAsset, addManagedAsset, createEdition } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { fileKind, parseBookFile } from './books.js';
 import { BookError, type BookMetadata } from './metadata.js';
-import { covers, editionContributors, editions, fileAssets, identifiers, jobItems, persons } from './schema.js';
+import { upsertPerson } from './persons.js';
+import { covers, editionContributors, editions, fileAssets, identifiers, jobItems } from './schema.js';
+import { recordEditionSuggestions } from './suggestions.js';
+import { cleanDescription, cleanLanguage, cleanName, cleanPublisher, cleanTitle } from './text.js';
 
 export interface ImportCommitInput {
   dataDir: string;
@@ -68,9 +71,12 @@ export function commitImportedFile(db: AppDatabase, input: ImportCommitInput, no
       libraryId: input.libraryId,
       title: displayTitle(metadata, input.originalFilename),
       language: cleanLanguage(metadata.language),
+      publisher: cleanPublisher(metadata.publisher),
+      description: cleanDescription(metadata.description),
     }, now);
     linkCreators(query, edition.id, metadata, stamp);
     linkIdentifiers(query, edition.id, metadata);
+    recordEditionSuggestions(query, edition.id, stamp);
     const asset =
       input.storage === 'managed'
         ? addManagedAsset(query, {
@@ -137,7 +143,7 @@ function linkCreators(db: AppDatabase, editionId: number, metadata: BookMetadata
     seen.add(key);
     const personId = upsertPerson(db, name, now);
     db.insert(editionContributors)
-      .values({ editionId, personId, role: creator.role, position })
+      .values({ editionId, personId, role: creator.role, position, displayName: name })
       .run();
     position += 1;
   }
@@ -156,25 +162,6 @@ function linkIdentifiers(db: AppDatabase, editionId: number, metadata: BookMetad
   }
 }
 
-function upsertPerson(db: AppDatabase, name: string, now: string): number {
-  const existing = db.select({ id: persons.id }).from(persons).where(eq(persons.name, name)).get();
-  if (existing) return existing.id;
-  try {
-    const inserted = db
-      .insert(persons)
-      .values({ name, sortName: name, createdAt: now })
-      .returning({ id: persons.id })
-      .get();
-    if (!inserted) throw new BookError('malformed');
-    return inserted.id;
-  } catch (error) {
-    if (!isUniqueConstraint(error)) throw error;
-    const again = db.select({ id: persons.id }).from(persons).where(eq(persons.name, name)).get();
-    if (!again) throw error;
-    return again.id;
-  }
-}
-
 function displayTitle(metadata: BookMetadata, filename: string): string {
   return cleanTitle(metadata.title) ?? cleanTitle(fileStem(filename)) ?? 'Untitled';
 }
@@ -185,30 +172,4 @@ function fileStem(filename: string): string {
   return stem || base;
 }
 
-function cleanTitle(value: string | null): string | null {
-  if (!value) return null;
-  const trimmed = value.replace(/\s+/g, ' ').trim();
-  if (!trimmed || /[\u0000-\u001f\u007f]/.test(trimmed)) return null;
-  return trimmed.slice(0, 500);
-}
 
-function cleanLanguage(value: string | null): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 35 || /[\u0000-\u001f\u007f]/.test(trimmed)) return null;
-  return trimmed;
-}
-
-function cleanName(value: string): string | null {
-  const trimmed = value.replace(/\s+/g, ' ').trim();
-  if (!trimmed || trimmed.length > 300 || /[\u0000-\u001f\u007f]/.test(trimmed)) return null;
-  return trimmed;
-}
-
-function isUniqueConstraint(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const code = 'code' in error ? String((error as { code: unknown }).code) : '';
-  if (code === 'SQLITE_CONSTRAINT_UNIQUE') return true;
-  const message = 'message' in error ? String((error as { message: unknown }).message) : '';
-  return code === 'SQLITE_CONSTRAINT' && message.includes('UNIQUE');
-}

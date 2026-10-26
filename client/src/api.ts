@@ -85,6 +85,58 @@ export async function api<T>(path: string, init?: { method?: string; body?: unkn
   return { status: response.status, data: payload as T | null, error: null };
 }
 
+export interface EditionSummary {
+  id: number;
+  libraryId: number;
+  title: string;
+  language: string | null;
+  authors: string[];
+  formats: Array<'epub' | 'pdf'>;
+}
+
+export interface EditionAsset {
+  id: number;
+  format: 'epub' | 'pdf';
+  originalFilename: string;
+  bytes: number;
+  availability: 'present' | 'missing';
+}
+
+export interface EditionDetail {
+  id: number;
+  libraryId: number;
+  title: string;
+  sortTitle: string;
+  language: string | null;
+  publisher: string | null;
+  publishedDate: string | null;
+  description: string | null;
+  series: { id: number; name: string } | null;
+  seriesOrder: number | null;
+  alternateTitles: Array<{ title: string; sortTitle: string | null }>;
+  authors: string[];
+  translators: string[];
+  tags: string[];
+  identifiers: Array<{ scheme: string; value: string }>;
+  locks: string[];
+  cover: { mediaType: string } | null;
+  assets: EditionAsset[];
+  suggestions: Array<{ id: number; otherEditionId: number; otherTitle: string }>;
+}
+
+export interface FieldPreview {
+  field: string;
+  locked: boolean;
+  status: 'kept' | 'change' | 'unchanged';
+  current: string | null;
+  proposed: string | null;
+}
+
+export interface MetadataPreview {
+  previewId: number;
+  fields: FieldPreview[];
+}
+
 export async function apiForm<T>(path: string, body: FormData): Promise<ApiResult<T>> {
   let response: Response;
   try {

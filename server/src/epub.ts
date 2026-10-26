@@ -1,6 +1,7 @@
 import {
   BookError,
   classifyIdentifier,
+  sniffImage,
   type BookCover,
   type BookCreator,
   type BookIdentifier,
@@ -51,7 +52,9 @@ export function parseEpub(filePath: string): BookMetadata {
     const creators = readCreators(opf);
     const identifiers = readIdentifiers(opf);
     const cover = readCover(zip, opf, opfName);
-    return { title, language, creators, identifiers, cover };
+    const description = firstValue(opf, 'description');
+    const publisher = firstValue(opf, 'publisher');
+    return { title, language, creators, identifiers, cover, description, publisher };
   } catch (error) {
     if (error instanceof BookError) throw error;
     if (error instanceof ZipError || error instanceof XmlError) throw new BookError('malformed');
@@ -141,16 +144,4 @@ function readCover(zip: ReturnType<typeof openZip>, opf: XmlNode, opfName: strin
   const mediaType = sniffImage(bytes);
   if (!mediaType) return null;
   return { bytes, mediaType };
-}
-
-export function sniffImage(bytes: Buffer): string | null {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes.toString('ascii', 1, 4) === 'PNG') return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 6 && (bytes.toString('ascii', 0, 6) === 'GIF87a' || bytes.toString('ascii', 0, 6) === 'GIF89a')) {
-    return 'image/gif';
-  }
-  if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
-    return 'image/webp';
-  }
-  return null;
 }

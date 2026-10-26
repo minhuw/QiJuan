@@ -1,8 +1,10 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation } from 'react-router';
 import { api, type Account, type LibraryInfo, type ListedUser, type Me, type SetupResponse } from './api';
+import { BookDetail, ReaderPage } from './book-detail';
+import { CatalogHome } from './catalog-home';
 import { ImportScreen } from './import-screen';
-import { LibraryHome, useLocale } from './shell';
+import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
   'invalid_request',
@@ -24,6 +26,12 @@ type Phase =
   | { kind: 'setup' }
   | { kind: 'login' }
   | { kind: 'ready'; user: Account; libraries: LibraryInfo[] };
+
+function pathId(value: string): number | null {
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) ? id : null;
+}
 
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
@@ -110,9 +118,28 @@ export function Gate() {
     return <ImportScreen libraries={phase.libraries} onSignOut={() => void signOut()} />;
   }
 
+  const readMatch = location.pathname.match(/^\/books\/([1-9]\d*)\/read\/([1-9]\d*)$/);
+  if (readMatch) {
+    const editionId = pathId(readMatch[1] ?? '');
+    const assetId = pathId(readMatch[2] ?? '');
+    if (editionId && assetId) {
+      return <ReaderPage editionId={editionId} assetId={assetId} onSignOut={() => void signOut()} />;
+    }
+  }
+  const bookMatch = location.pathname.match(/^\/books\/([1-9]\d*)$/);
+  if (bookMatch) {
+    const editionId = pathId(bookMatch[1] ?? '');
+    if (editionId) {
+      return (
+        <BookDetail editionId={editionId} role={phase.user.role} onSignOut={() => void signOut()} />
+      );
+    }
+  }
+
   return (
     <>
-      <LibraryHome />
+      <p className="tagline">{t('brand.tagline')}</p>
+      <h1>{t('home.title')}</h1>
       <p className="section-label">{t('home.libraries')}</p>
       {phase.libraries.length === 0 ? (
         <p className="placeholder">{t('home.noAccess')}</p>
@@ -123,6 +150,7 @@ export function Gate() {
           ))}
         </ul>
       )}
+      <CatalogHome />
       <div className="toolbar">
         <p className="signed-in">
           {t('account.signedIn')} <strong>{phase.user.username}</strong>

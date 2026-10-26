@@ -42,12 +42,16 @@ export function parsePdf(filePath: string): BookMetadata {
     const language = stringOf(root, 'Lang') ?? stringOf(info, 'Lang') ?? xmpValues(fd, xref.map, root, 'language')[0] ?? null;
     const creators = readCreators(info, fd, xref.map, root);
     const identifiers = xmpValues(fd, xref.map, root, 'identifier').map((value) => classifyIdentifier(value));
+    const description = xmpValues(fd, xref.map, root, 'description')[0] ?? stringOf(info, 'Subject') ?? null;
+    const publisher = xmpValues(fd, xref.map, root, 'publisher')[0] ?? stringOf(info, 'Publisher') ?? null;
     return {
       title,
       language,
       creators,
       identifiers,
       cover: null,
+      description,
+      publisher,
     };
   } catch (error) {
     if (error instanceof BookError) throw error;

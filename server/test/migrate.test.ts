@@ -22,7 +22,14 @@ describe('migrations', () => {
     expect(existsSync(path.join(migrationsDir, '0001_init.sql'))).toBe(true);
 
     const first = migrate({ databasePath, migrationsDir });
-    expect(first.applied).toEqual(['0001_init.sql', '0002_auth.sql', '0003_catalog.sql', '0004_jobs.sql']);
+    expect(first.applied).toEqual([
+      '0001_init.sql',
+      '0002_auth.sql',
+      '0003_catalog.sql',
+      '0004_jobs.sql',
+      '0005_edition_editing.sql',
+      '0006_contributor_display_name.sql',
+    ]);
     expect(first.backupPath).toBeNull();
 
     const { sqlite, db, schema } = openDatabase(databasePath);
@@ -42,6 +49,9 @@ describe('migrations', () => {
         'reading_positions',
         'jobs',
         'job_items',
+        'field_locks',
+        'edition_suggestions',
+        'metadata_previews',
       ]),
     );
     sqlite.close();
@@ -117,7 +127,12 @@ describe('migrations', () => {
     sqlite.close();
 
     const updated = migrate({ databasePath, migrationsDir: packaged });
-    expect(updated.applied).toEqual(['0003_catalog.sql', '0004_jobs.sql']);
+    expect(updated.applied).toEqual([
+      '0003_catalog.sql',
+      '0004_jobs.sql',
+      '0005_edition_editing.sql',
+      '0006_contributor_display_name.sql',
+    ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);
     expect(path.dirname(updated.backupPath!)).toBe(path.dirname(databasePath));
@@ -136,6 +151,9 @@ describe('migrations', () => {
     ).toEqual({ present: 1 });
     expect(
       current.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get(),
+    ).toEqual({ present: 1 });
+    expect(
+      current.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'field_locks'").get(),
     ).toEqual({ present: 1 });
     current.close();
   });
