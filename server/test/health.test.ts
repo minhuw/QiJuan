@@ -3,6 +3,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type { AppConfig } from '../src/config.js';
+import { migrate } from '../src/migrate.js';
+import { defaultMigrationsDir } from '../src/paths.js';
 import { makeTempDir } from './helpers.js';
 
 const cleanups: Array<() => void> = [];
@@ -20,6 +22,7 @@ function configIn(dir: string): AppConfig {
     libraryPaths: [path.join(dir, 'library')],
     databasePath: path.join(dir, 'qijuan.sqlite'),
     migrationsDir: path.join(dir, 'migrations'),
+    maxUploadBytes: 128 * 1024 * 1024,
   };
 }
 
@@ -27,7 +30,9 @@ describe('GET /health', () => {
   it('returns ok without auth or private data', async () => {
     const temp = makeTempDir();
     cleanups.push(temp.cleanup);
-    const app = await buildApp({ config: configIn(temp.dir), clientDist: null, logger: false });
+    const config = configIn(temp.dir);
+    migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
+    const app = await buildApp({ config, clientDist: null, logger: false });
     const response = await app.inject({ method: 'GET', url: '/health' });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
@@ -44,8 +49,10 @@ describe('GET /health', () => {
     writeFileSync(path.join(clientDist, 'index.html'), '<!doctype html><title>QiJuan</title>');
     writeFileSync(path.join(clientDist, 'app.js'), 'console.log("qijuan")');
 
+    const config = configIn(temp.dir);
+    migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
     const app = await buildApp({
-      config: configIn(temp.dir),
+      config,
       clientDist,
       logger: false,
     });

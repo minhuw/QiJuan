@@ -48,6 +48,34 @@
     "revoke": "收回",
     "empty": "还没有读者。"
   },
+  "import": {
+    "open": "导入",
+    "title": "导入书籍",
+    "back": "返回书库",
+    "empty": "还没有导入。",
+    "running": "正在导入。",
+    "error": "无法加载导入记录。",
+    "library": "书库",
+    "files": "文件",
+    "upload": "上传",
+    "folder": "书库内的文件夹",
+    "folderHint": "相对书库根目录的路径。",
+    "folderSubmit": "导入文件夹",
+    "summary": "完成摘要",
+    "noLibraries": "没有可用的书库。",
+    "status": {
+      "queued": "排队",
+      "running": "进行中",
+      "succeeded": "成功",
+      "failed": "失败",
+      "duplicate": "重复"
+    },
+    "fileError": {
+      "unsupported": "不支持的文件",
+      "malformed": "文件损坏",
+      "missing": "文件不存在"
+    }
+  },
   "errors": {
     "invalid_request": "请检查填写内容后再试。",
     "setup_complete": "已经完成初次设置。",
@@ -59,7 +87,10 @@
     "password_short": "密码至少需要 8 个字符。",
     "required": "请填写所有项目。",
     "network": "无法连接服务器。",
-    "internal": "出了点问题。"
+    "internal": "出了点问题。",
+    "payload_too_large": "上传的文件太大。",
+    "invalid_path": "这个文件夹不在书库内。",
+    "library_mode": "这个书库不能这样导入。"
   },
   "status": {
     "loading": "正在加载…",

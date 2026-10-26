@@ -1,3 +1,4 @@
+import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -6,6 +7,8 @@ import { registerAccessRoutes } from './access-routes.js';
 import { installSessionGuard } from './auth.js';
 import type { AppConfig } from './config.js';
 import { openDatabase } from './db.js';
+import { registerImportRoutes } from './import-routes.js';
+import { requeueInterruptedJobs, startJobWorker } from './jobs.js';
 import { redactOptions } from './logger.js';
 import { defaultClientDist } from './paths.js';
 
@@ -32,7 +35,10 @@ export async function buildApp(options: BuildAppOptions) {
   });
 
   let closed = false;
+  let stopWorker: (() => void) | null = null;
   app.addHook('onClose', async () => {
+    stopWorker?.();
+    stopWorker = null;
     if (closed) return;
     closed = true;
     sqlite.close();
@@ -61,10 +67,26 @@ export async function buildApp(options: BuildAppOptions) {
       async () => ({ ok: true as const }),
     );
 
+    await app.register(multipart, {
+      throwFileSizeLimit: false,
+      limits: {
+        fileSize: options.config.maxUploadBytes,
+        files: 20,
+        fields: 4,
+        fieldSize: 8 * 1024,
+        parts: 24,
+      },
+    });
+
     registerAccessRoutes(app, {
       sqlite,
       db,
       dataDir: options.config.dataDir,
+    });
+    registerImportRoutes(app, {
+      db,
+      dataDir: options.config.dataDir,
+      maxUploadBytes: options.config.maxUploadBytes,
     });
 
     const clientDist = options.clientDist === undefined ? defaultClientDist() : options.clientDist;
@@ -82,6 +104,18 @@ export async function buildApp(options: BuildAppOptions) {
         return reply.code(404).send({ error: 'not_found' });
       });
     }
+
+    requeueInterruptedJobs(db);
+    const worker = startJobWorker({
+      db,
+      dataDir: options.config.dataDir,
+      log: {
+        error(context, message) {
+          app.log.error(context, message);
+        },
+      },
+    });
+    stopWorker = worker.stop;
 
     return app;
   } catch (error) {

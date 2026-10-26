@@ -48,6 +48,34 @@
     "revoke": "Revoke",
     "empty": "No readers yet."
   },
+  "import": {
+    "open": "Import",
+    "title": "Import books",
+    "back": "Back to library",
+    "empty": "No imports yet.",
+    "running": "Import is running.",
+    "error": "The import could not be loaded.",
+    "library": "Library",
+    "files": "Files",
+    "upload": "Upload",
+    "folder": "Folder inside the library",
+    "folderHint": "Path relative to the library root.",
+    "folderSubmit": "Import folder",
+    "summary": "Completion summary",
+    "noLibraries": "No library is available.",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "duplicate": "Duplicate"
+    },
+    "fileError": {
+      "unsupported": "Unsupported file",
+      "malformed": "Malformed file",
+      "missing": "File is missing"
+    }
+  },
   "errors": {
     "invalid_request": "Check the fields and try again.",
     "setup_complete": "Setup has already been completed.",
@@ -59,7 +87,10 @@
     "password_short": "Password must be at least 8 characters.",
     "required": "Fill in all fields.",
     "network": "The server could not be reached.",
-    "internal": "Something went wrong."
+    "internal": "Something went wrong.",
+    "payload_too_large": "That upload is too large.",
+    "invalid_path": "That folder is outside the library.",
+    "library_mode": "That library cannot accept this import."
   },
   "status": {
     "loading": "Loading…",

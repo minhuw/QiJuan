@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation } from 'react-router';
 import { api, type Account, type LibraryInfo, type ListedUser, type Me, type SetupResponse } from './api';
+import { ImportScreen } from './import-screen';
 import { LibraryHome, useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -105,6 +106,10 @@ export function Gate() {
     return <Settings onSignOut={() => void signOut()} />;
   }
 
+  if (location.pathname === '/import') {
+    return <ImportScreen libraries={phase.libraries} onSignOut={() => void signOut()} />;
+  }
+
   return (
     <>
       <LibraryHome />
@@ -124,6 +129,9 @@ export function Gate() {
           {' · '}
           {t(`account.${phase.user.role}`)}
         </p>
+        <Link className="text-link" to="/import">
+          {t('import.open')}
+        </Link>
         {phase.user.role === 'admin' ? (
           <Link className="text-link" to="/settings">
             {t('settings.open')}

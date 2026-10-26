@@ -142,6 +142,37 @@ export const fileAssets = sqliteTable('file_assets', {
   createdAt: text('created_at').notNull(),
 });
 
+export const jobs = sqliteTable('jobs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  libraryId: integer('library_id')
+    .notNull()
+    .references(() => libraries.id, { onDelete: 'cascade' }),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  source: text('source', { enum: ['upload', 'folder'] }).notNull(),
+  status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed'] }).notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  startedAt: text('started_at'),
+  finishedAt: text('finished_at'),
+});
+
+export const jobItems = sqliteTable('job_items', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  jobId: integer('job_id')
+    .notNull()
+    .references(() => jobs.id, { onDelete: 'cascade' }),
+  position: integer('position').notNull(),
+  filename: text('filename').notNull(),
+  sourcePath: text('source_path').notNull(),
+  status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed', 'duplicate'] }).notNull(),
+  error: text('error'),
+  editionId: integer('edition_id').references(() => editions.id, { onDelete: 'set null' }),
+  assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
+  sha256: text('sha256'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const covers = sqliteTable('covers', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   editionId: integer('edition_id')

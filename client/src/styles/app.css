@@ -136,7 +136,8 @@ h2 {
   gap: 0.35rem;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   font: inherit;
   color: var(--ink);
@@ -213,4 +214,53 @@ h2 {
   gap: 1rem;
   align-items: center;
   margin-top: 0.5rem;
+}
+
+.import-block {
+  margin-top: 1.75rem;
+  padding-top: 0.25rem;
+}
+
+.import-list,
+.summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.summary-list {
+  margin-top: 0.35rem;
+}
+
+.import-row,
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+  border-top: 1px solid var(--line);
+  padding: 0.55rem 0;
+}
+
+.import-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.summary-row dd {
+  margin: 0;
+}
+
+.status-succeeded {
+  color: var(--jade);
+}
+
+.status-failed {
+  color: var(--vermilion);
+}
+
+.status-queued,
+.status-running,
+.status-duplicate {
+  color: var(--ink-muted);
 }

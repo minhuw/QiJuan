@@ -246,6 +246,39 @@ export function listLibraries(db: AppDatabase, user: AuthUser): PublicLibrary[] 
   }));
 }
 
+export function requireLibraryAccess(
+  db: AppDatabase,
+  user: AuthUser,
+  libraryId: number,
+): { id: number; name: string; mode: 'managed' | 'indexed'; rootPath: string } {
+  if (!Number.isInteger(libraryId) || libraryId < 1) throw new ApiError(400, 'invalid_request');
+  const library = db
+    .select({
+      id: libraries.id,
+      name: libraries.name,
+      mode: libraries.mode,
+      rootPath: libraries.rootPath,
+    })
+    .from(libraries)
+    .where(eq(libraries.id, libraryId))
+    .get();
+  if (!library) throw new ApiError(404, 'not_found');
+  if (user.role !== 'admin') {
+    const grant = db
+      .select({ userId: libraryGrants.userId })
+      .from(libraryGrants)
+      .where(and(eq(libraryGrants.userId, user.id), eq(libraryGrants.libraryId, libraryId)))
+      .get();
+    if (!grant) throw new ApiError(403, 'forbidden');
+  }
+  return {
+    id: library.id,
+    name: library.name,
+    mode: library.mode === 'indexed' ? 'indexed' : 'managed',
+    rootPath: library.rootPath,
+  };
+}
+
 export function grantLibrary(db: AppDatabase, userId: number, libraryId: number): void {
   const user = db.select({ id: users.id }).from(users).where(eq(users.id, userId)).get();
   const library = db.select({ id: libraries.id }).from(libraries).where(eq(libraries.id, libraryId)).get();

@@ -8,6 +8,9 @@ const SECRET_FILE = 'session.secret';
 
 export type TrustProxy = NonNullable<FastifyServerOptions['trustProxy']>;
 
+/** One uploaded book file. Larger originals belong on an indexed folder, not in the request body. */
+export const DEFAULT_MAX_UPLOAD_BYTES = 128 * 1024 * 1024;
+
 export interface AppConfig {
   dataDir: string;
   port: number;
@@ -16,11 +19,13 @@ export interface AppConfig {
   libraryPaths: string[];
   databasePath: string;
   migrationsDir: string;
+  maxUploadBytes: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const port = parsePort(env.QIJUAN_PORT);
   const trustProxy = parseTrustProxy(env.QIJUAN_TRUST_PROXY);
+  const maxUploadBytes = parseMaxUploadBytes(env.QIJUAN_MAX_UPLOAD_BYTES);
   const dataDir = path.resolve(env.QIJUAN_DATA_DIR?.trim() || './data');
   const libraryPaths = parseLibraryPaths(env.QIJUAN_LIBRARY_PATHS, dataDir);
   const databasePath = path.join(dataDir, 'qijuan.sqlite');
@@ -39,6 +44,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     libraryPaths,
     databasePath,
     migrationsDir,
+    maxUploadBytes,
   };
 }
 
@@ -83,6 +89,18 @@ export function parseLibraryPaths(value: string | undefined, dataDir: string): s
     .filter((part) => part.length > 0)
     .map((part) => path.resolve(part));
   return parts.length > 0 ? parts : fallback;
+}
+
+export function parseMaxUploadBytes(value: string | undefined): number {
+  if (value === undefined || value.trim() === '') return DEFAULT_MAX_UPLOAD_BYTES;
+  if (!/^\d+$/.test(value.trim())) {
+    throw new Error(`Invalid QIJUAN_MAX_UPLOAD_BYTES: ${value}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1024 * 1024 * 1024) {
+    throw new Error(`Invalid QIJUAN_MAX_UPLOAD_BYTES: ${value}`);
+  }
+  return parsed;
 }
 
 function loadSessionSecret(dataDir: string, fromEnv: string | undefined): string {

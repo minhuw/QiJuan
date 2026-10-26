@@ -59,6 +59,7 @@ The production server listens on `QIJUAN_PORT` (default 8080) and serves `client
 | `QIJUAN_TRUST_PROXY` | unset (off) | `true` trusts the forwarding proxy. An integer trusts that many hops. Any other value is a proxy address or list passed to Fastify. |
 | `QIJUAN_SESSION_SECRET` | persisted file | When unset, a secret is written to `session.secret` inside the data directory (mode `0600`) and reused. |
 | `QIJUAN_LIBRARY_PATHS` | `<data dir>/library` | Book library locations, separated by the platform path delimiter (`:` on Linux). |
+| `QIJUAN_MAX_UPLOAD_BYTES` | `134217728` (128 MiB) | Maximum size of one file in a multipart import. |
 
 Secrets, cookies, passwords, and recovery passwords are redacted in logs.
 
@@ -82,3 +83,9 @@ npm run test:acceptance
 ## Architecture
 
 QiJuan runs as one Node.js process. The catalog lives in SQLite on the data volume, and background jobs run in-process (no separate queue or cache). Backup to restic comes later. Open Library is an optional metadata source, not required to keep or read a library.
+
+## Import
+
+Upload EPUB and PDF files into a managed library, or import a directory that stays inside an indexed library root. The request only stores the uploads and enqueues a job. A loop in the same process claims the job. If the process stops while a job is running, that job is queued again on the next startup.
+
+A batch keeps going when one file is malformed or has an unsupported extension. Byte-for-byte duplicates attach to the existing asset and do not create a second edition. A different file with a similar title becomes its own edition. The import screen shows queued, running, succeeded, and failed files, then a completion summary.
