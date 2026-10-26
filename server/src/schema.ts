@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const appMeta = sqliteTable('app_meta', {
   key: text('key').primaryKey(),
@@ -47,4 +47,253 @@ export const libraryGrants = sqliteTable(
       .references(() => libraries.id, { onDelete: 'cascade' }),
   },
   (table) => [primaryKey({ columns: [table.userId, table.libraryId] })],
+);
+
+export const series = sqliteTable('series', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  libraryId: integer('library_id')
+    .notNull()
+    .references(() => libraries.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  sortName: text('sort_name').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const editions = sqliteTable('editions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  libraryId: integer('library_id')
+    .notNull()
+    .references(() => libraries.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  sortTitle: text('sort_title').notNull(),
+  language: text('language'),
+  publisher: text('publisher'),
+  publishedDate: text('published_date'),
+  description: text('description'),
+  seriesId: integer('series_id').references(() => series.id, { onDelete: 'set null' }),
+  seriesOrder: real('series_order'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  trashedAt: text('trashed_at'),
+});
+
+export const alternateTitles = sqliteTable('alternate_titles', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  sortTitle: text('sort_title'),
+});
+
+export const persons = sqliteTable('persons', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  sortName: text('sort_name').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const editionContributors = sqliteTable(
+  'edition_contributors',
+  {
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    personId: integer('person_id')
+      .notNull()
+      .references(() => persons.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['author', 'translator'] }).notNull(),
+    position: integer('position').notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.editionId, table.personId, table.role] })],
+);
+
+export const tags = sqliteTable('tags', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const identifiers = sqliteTable('identifiers', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  scheme: text('scheme').notNull(),
+  value: text('value').notNull(),
+});
+
+export const fileAssets = sqliteTable('file_assets', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  format: text('format', { enum: ['epub', 'pdf'] }).notNull(),
+  sha256: text('sha256').notNull(),
+  bytes: integer('bytes').notNull(),
+  originalFilename: text('original_filename').notNull(),
+  storage: text('storage', { enum: ['managed', 'indexed'] }).notNull(),
+  relativePath: text('relative_path').notNull(),
+  availability: text('availability', { enum: ['present', 'missing'] }).notNull().default('present'),
+  trashedAt: text('trashed_at'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const covers = sqliteTable('covers', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  sha256: text('sha256').notNull(),
+  bytes: integer('bytes').notNull(),
+  mediaType: text('media_type').notNull(),
+  relativePath: text('relative_path').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const shelves = sqliteTable('shelves', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  position: integer('position').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+});
+
+export const shelfItems = sqliteTable(
+  'shelf_items',
+  {
+    shelfId: integer('shelf_id')
+      .notNull()
+      .references(() => shelves.id, { onDelete: 'cascade' }),
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull().default(0),
+    addedAt: text('added_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.shelfId, table.editionId] })],
+);
+
+export const favorites = sqliteTable(
+  'favorites',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
+);
+
+export const readingQueues = sqliteTable(
+  'reading_queues',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    addedAt: text('added_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
+);
+
+export const ratings = sqliteTable(
+  'ratings',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    rating: integer('rating').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
+);
+
+export const readingStatuses = sqliteTable(
+  'reading_statuses',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['want', 'reading', 'finished', 'on_hold'] }).notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
+);
+
+export const bookmarks = sqliteTable('bookmarks', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
+  locator: text('locator').notNull(),
+  label: text('label'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const highlights = sqliteTable('highlights', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
+  locator: text('locator').notNull(),
+  quote: text('quote'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const notes = sqliteTable('notes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  editionId: integer('edition_id')
+    .notNull()
+    .references(() => editions.id, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const readingPositions = sqliteTable(
+  'reading_positions',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
+    locator: text('locator').notNull(),
+    revision: integer('revision').notNull().default(1),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
 );
