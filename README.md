@@ -24,6 +24,10 @@ npm run migrate
 
 If the database file already exists and a migration is pending, QiJuan copies it beside the database as a pre-migration backup before changing the schema. The server also migrates on startup.
 
+## First run
+
+When no administrator exists, the web UI shows setup instead of sign-in. Setup asks for an administrator username, a password, and a library name. It creates that administrator and one managed library inside the data directory, then starts a session. Setup is refused once an administrator exists. An administrator can create readers and grant or revoke libraries from Settings.
+
 ## Development
 
 `npm run dev` starts the API server and the Vite client together:

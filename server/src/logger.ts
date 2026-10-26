@@ -3,6 +3,7 @@ import pino from 'pino';
 /** Field paths removed from logs. Values are replaced; keys stay so operators can see the shape. */
 export const redactPaths = [
   'password',
+  'passwordHash',
   'secret',
   'sessionSecret',
   'recoveryPassword',
@@ -18,6 +19,7 @@ export const redactPaths = [
   'headers.authorization',
   'headers["set-cookie"]',
   '*.password',
+  '*.passwordHash',
   '*.secret',
   '*.sessionSecret',
   '*.recoveryPassword',
@@ -25,6 +27,7 @@ export const redactPaths = [
   '*.cookies',
   '*.authorization',
   '*.*.password',
+  '*.*.passwordHash',
   '*.*.secret',
   '*.*.sessionSecret',
   '*.*.recoveryPassword',

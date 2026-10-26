@@ -1,12 +1,13 @@
-import { BrowserRouter, Route, Routes } from 'react-router';
+import { BrowserRouter } from 'react-router';
+import { Gate } from './gate';
 import { Shell } from './shell';
 
-export function App() {
+export function App({ locale }: { locale?: string }) {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/*" element={<Shell />} />
-      </Routes>
+      <Shell locale={locale}>
+        <Gate />
+      </Shell>
     </BrowserRouter>
   );
 }

@@ -22,11 +22,17 @@ describe('migrations', () => {
     expect(existsSync(path.join(migrationsDir, '0001_init.sql'))).toBe(true);
 
     const first = migrate({ databasePath, migrationsDir });
-    expect(first.applied).toEqual(['0001_init.sql']);
+    expect(first.applied).toEqual(['0001_init.sql', '0002_auth.sql']);
     expect(first.backupPath).toBeNull();
 
     const { sqlite, db, schema } = openDatabase(databasePath);
     expect(db.select().from(schema.appMeta).all()).toEqual([]);
+    const tables = sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as { name: string }[];
+    expect(tables.map((table) => table.name)).toEqual(
+      expect.arrayContaining(['app_meta', 'users', 'sessions', 'libraries', 'library_grants']),
+    );
     sqlite.close();
 
     const second = migrate({ databasePath, migrationsDir });

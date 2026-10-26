@@ -14,6 +14,7 @@ describe('log redaction', () => {
       {
         sessionSecret: 'sekrit-value',
         password: 'pw-value',
+        passwordHash: 'hash-value',
         recoveryPassword: 'rec-value',
         cookie: 'cookie-value',
         req: {
@@ -30,7 +31,7 @@ describe('log redaction', () => {
     const out = lines.join('');
     expect(out).toContain('[Redacted]');
     expect(out).toContain('hello');
-    for (const secret of ['sekrit-value', 'pw-value', 'rec-value', 'cookie-value', 'sid-value', 'auth-value', 'nested-rec']) {
+    for (const secret of ['sekrit-value', 'pw-value', 'hash-value', 'rec-value', 'cookie-value', 'sid-value', 'auth-value', 'nested-rec']) {
       expect(out).not.toContain(secret);
     }
     expect(redactOptions.censor).toBe('[Redacted]');

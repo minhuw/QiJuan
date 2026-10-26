@@ -13,6 +13,56 @@
   },
   "home": {
     "title": "书库",
-    "placeholder": "这里还没有书。"
+    "placeholder": "这里还没有书。",
+    "libraries": "你的书库",
+    "noAccess": "还没有获得书库权限。"
+  },
+  "setup": {
+    "title": "初次设置",
+    "username": "用户名",
+    "password": "密码",
+    "libraryName": "书库名称",
+    "submit": "创建管理员"
+  },
+  "login": {
+    "title": "登录",
+    "username": "用户名",
+    "password": "密码",
+    "submit": "登录"
+  },
+  "account": {
+    "signedIn": "当前用户",
+    "signOut": "退出",
+    "admin": "管理员",
+    "reader": "读者",
+    "passwordHint": "至少 8 个字符。"
+  },
+  "settings": {
+    "open": "设置",
+    "title": "读者",
+    "back": "返回书库",
+    "username": "用户名",
+    "password": "密码",
+    "create": "创建读者",
+    "grant": "授予",
+    "revoke": "收回",
+    "empty": "还没有读者。"
+  },
+  "errors": {
+    "invalid_request": "请检查填写内容后再试。",
+    "setup_complete": "已经完成初次设置。",
+    "invalid_credentials": "用户名或密码不正确。",
+    "unauthorized": "请先登录。",
+    "forbidden": "没有权限这样做。",
+    "username_taken": "这个用户名已被使用。",
+    "not_found": "没有找到。",
+    "password_short": "密码至少需要 8 个字符。",
+    "required": "请填写所有项目。",
+    "network": "无法连接服务器。",
+    "internal": "出了点问题。"
+  },
+  "status": {
+    "loading": "正在加载…",
+    "retry": "重试"
   }
 }

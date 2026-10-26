@@ -13,6 +13,56 @@
   },
   "home": {
     "title": "Library",
-    "placeholder": "Nothing here yet."
+    "placeholder": "Nothing here yet.",
+    "libraries": "Your libraries",
+    "noAccess": "No library has been granted yet."
+  },
+  "setup": {
+    "title": "Set up this library",
+    "username": "Username",
+    "password": "Password",
+    "libraryName": "Library name",
+    "submit": "Create administrator"
+  },
+  "login": {
+    "title": "Sign in",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign in"
+  },
+  "account": {
+    "signedIn": "Signed in as",
+    "signOut": "Sign out",
+    "admin": "Administrator",
+    "reader": "Reader",
+    "passwordHint": "At least 8 characters."
+  },
+  "settings": {
+    "open": "Settings",
+    "title": "Readers",
+    "back": "Back to library",
+    "username": "Username",
+    "password": "Password",
+    "create": "Create reader",
+    "grant": "Grant",
+    "revoke": "Revoke",
+    "empty": "No readers yet."
+  },
+  "errors": {
+    "invalid_request": "Check the fields and try again.",
+    "setup_complete": "Setup has already been completed.",
+    "invalid_credentials": "Username or password is wrong.",
+    "unauthorized": "Sign in to continue.",
+    "forbidden": "You cannot do that.",
+    "username_taken": "That username is already used.",
+    "not_found": "That could not be found.",
+    "password_short": "Password must be at least 8 characters.",
+    "required": "Fill in all fields.",
+    "network": "The server could not be reached.",
+    "internal": "Something went wrong."
+  },
+  "status": {
+    "loading": "Loading…",
+    "retry": "Try again"
   }
 }
