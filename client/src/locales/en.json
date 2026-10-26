@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "nativeName": "English"
+  },
+  "brand": {
+    "mark": "栖卷",
+    "name": "QiJuan",
+    "tagline": "书有归处，人有闲读。"
+  },
+  "shell": {
+    "language": "Language",
+    "skip": "Skip to content"
+  },
+  "home": {
+    "title": "Library",
+    "placeholder": "Nothing here yet."
+  }
+}

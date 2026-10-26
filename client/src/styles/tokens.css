@@ -1,0 +1,48 @@
+:root {
+  color-scheme: light;
+  --paper: #f4efe4;
+  --paper-raised: #fbf7ef;
+  --ink: #231f1b;
+  --ink-muted: #5f584e;
+  --vermilion: #9d4036;
+  --jade: #3c6d5c;
+  --line: #e3d9c8;
+  --focus-ring: var(--vermilion);
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Palatino, serif;
+  --font-ui: "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Segoe UI", sans-serif;
+  --measure: 40rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #1b1815;
+    --paper-raised: #26221d;
+    --ink: #f4eee4;
+    --ink-muted: #c9bdae;
+    --vermilion: #d27a70;
+    --jade: #8fbfae;
+    --line: #3c342c;
+    --focus-ring: var(--vermilion);
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

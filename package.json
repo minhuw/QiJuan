@@ -1,0 +1,31 @@
+{
+  "name": "qijuan",
+  "version": "0.0.0",
+  "private": true,
+  "description": "栖卷 QiJuan — a self-hosted personal ebook library.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "ci": "npm run typecheck && npm test && npm run build",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace client",
+    "test": "npm test --workspace server && npm test --workspace client",
+    "test:acceptance": "npm run test:acceptance --workspace server",
+    "build": "npm run build --workspace client && npm run build --workspace server",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "tsx watch server/src/index.ts",
+    "dev:client": "npm run dev --workspace client",
+    "migrate": "tsx server/src/cli/migrate.ts",
+    "start": "node server/dist/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

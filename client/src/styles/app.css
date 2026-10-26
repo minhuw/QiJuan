@@ -1,0 +1,114 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.skip {
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  transform: translateY(-150%);
+  background: var(--paper-raised);
+  color: var(--ink);
+  padding: 0.4rem 0.7rem;
+}
+
+.skip:focus {
+  transform: none;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.brand-mark,
+.brand-name,
+.tagline,
+h1 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+}
+
+.brand-mark {
+  margin: 0;
+  color: var(--vermilion);
+  font-size: 1.4rem;
+  letter-spacing: 0.08em;
+}
+
+.brand-name {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+}
+
+.lang {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-muted);
+  font-size: 0.95rem;
+}
+
+.lang select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.home {
+  width: min(100% - 3rem, var(--measure));
+  margin: 4.5rem auto 3rem;
+}
+
+.tagline {
+  margin: 0 0 1.5rem;
+  color: var(--jade);
+}
+
+h1 {
+  margin: 0 0 0.75rem;
+  font-size: 2.25rem;
+  line-height: 1.2;
+}
+
+.placeholder {
+  margin: 0;
+  color: var(--ink-muted);
+}
