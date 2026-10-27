@@ -5,6 +5,8 @@ import path from 'node:path';
 export const RETENTION_DAILY = 7;
 export const RETENTION_WEEKLY = 4;
 export const RETENTION_MONTHLY = 6;
+export const CHECK_INTERVAL_HOURS = 168;
+export const TRANSIENT_ATTEMPTS = 3;
 
 /** Shown in the manifest and the UI for a run that omits book files. */
 export const METADATA_ONLY_SCOPE = 'metadata-only';
@@ -41,7 +43,8 @@ export interface PublicDestination {
   pathStyle: boolean;
   bucket: string;
   prefix: string;
-  accessKeyId: string;
+  accessKeyConfigured: true;
+  accessKeyHint: string;
   secretConfigured: true;
 }
 
@@ -65,8 +68,19 @@ export interface ScheduleView {
   retentionDaily: number;
   retentionWeekly: number;
   retentionMonthly: number;
+  checkIntervalHours: number;
+  nextCheckAt: string | null;
   scope: BackupScopeChoice;
   indexedLibraryIds: number[];
+}
+
+export interface SnapshotInfo {
+  id: string;
+  shortId: string;
+  time: string;
+  hostname: string;
+  tags: string[];
+  scope: string | null;
 }
 
 export interface LibraryMapEntry {
@@ -169,4 +183,11 @@ export function keptSnapshotReason(detail: string): string {
   const text = detail.trim().replace(/\s+/g, ' ');
   const core = text.endsWith('.') ? text : `${text}.`;
   return `${core} Retry the backup. The last successful snapshot was kept.`;
+}
+
+const TRANSIENT_RESTIC = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|connection refused|connection reset|timed out|timeout|SlowDown|RequestTimeout|RequestTimeTooSkewed|ServiceUnavailable|InternalError|Throttl|TLS handshake|temporary failure|i\/o timeout|dial tcp|network is unreachable|no such host|503 Service|502 Bad|429 /i;
+
+/** Network and throttle failures. File, mount, and password errors are not transient. */
+export function isTransientResticFailure(text: string): boolean {
+  return TRANSIENT_RESTIC.test(text);
 }

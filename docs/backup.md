@@ -44,9 +44,13 @@ Indexed folders are copied only when their libraries are explicitly selected. A 
 
 ## Schedule and retention
 
-The schedule is stored in SQLite. The in-process loop runs a due backup when it starts, including one that became due while QiJuan was stopped. It does not start a second backup or a retention pass while one is already running.
+The schedule is stored in SQLite. The in-process loop runs a due backup when it starts, including one that became due while QiJuan was stopped. It does not start a second backup, a repository check, a restore test, or a retention pass while one of those is already running. Import, rescan, metadata refresh, and the other library jobs wait while a backup task holds the process, and a backup waits while one of those jobs is running.
 
-Retention defaults to 7 daily, 4 weekly, and 6 monthly snapshots. Those counts are editable. `restic forget` runs only after a backup that finished successfully. A failed backup does not forget snapshots, so the last successful snapshot stays. If restic itself created a partial snapshot because a file could not be read, QiJuan forgets that partial snapshot only.
+Retention defaults to 7 daily, 4 weekly, and 6 monthly snapshots. Those counts are editable. `restic forget` runs only after a backup that finished successfully. A failed backup does not forget snapshots, so the last successful snapshot stays. Deleted books remain in the snapshots that retention keeps; forgetting a snapshot is what removes them. If restic itself created a partial snapshot because a file could not be read, QiJuan forgets that partial snapshot only.
+
+Do not put an S3 lifecycle expiration, a storage-class transition, or object lock on the bucket. Those rules delete or freeze objects the repository still needs, and they fight `restic forget`. The connection test reads the lifecycle and object-lock configuration and refuses the bucket when it finds those rules, or when the key is not allowed to read them. Aborting incomplete multipart uploads is fine. QiJuan does not create lifecycle rules of its own.
+
+A network failure during upload is tried three times. A missing file, a changed file, a missing mount, or a wrong recovery password is not retried; the job fails and the last successful snapshot stays.
 
 ## Failures
 
@@ -59,3 +63,13 @@ The job is failed, with a reason, when:
 - the restic process is killed or exits with an error
 
 The reason says what to fix and that a retry is safe. When a file's bytes changed, the reason names that file. QiJuan does not update the catalog hash during backup. Starting another backup after the failure can succeed. A retry unlocks a stale restic lock left by an interrupted process.
+
+## History, size, and checks
+
+After a successful backup, QiJuan asks restic for the snapshot list and for `stats --mode raw-data`. The Backup screen shows that history, the repository size, and the last run's added and processed bytes when restic reported them. If restic does not report a number, the screen says it was not reported. The history is not a second copy of the secret keys.
+
+An integrity check is `restic check`. It is scheduled after the first successful backup (the default interval is 168 hours) and can be run from the screen. Passing means the repository structure could be read. It does not restore a snapshot and does not show that a restore will succeed.
+
+A restore test is separate. It restores the newest snapshot into a temporary directory, reads the manifest, and checks the database and managed files. It then deletes that directory. The library is not replaced. Use Restore on the same screen when you mean to replace this installation, and only after the preview.
+
+The Dockerfile installs the pinned restic binary and checks its SHA-256 during the image build. That pin is the amd64 build. This repository has not recorded a finished image build. Set `QIJUAN_RESTIC_BIN` when you run QiJuan outside that image.

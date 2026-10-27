@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { and, asc, desc, eq, or } from 'drizzle-orm';
@@ -7,6 +7,7 @@ import { managedLibraryRoot } from '../accounts.js';
 import type { AppDatabase } from '../db.js';
 import { migrate } from '../migrate.js';
 import { backupJobs, backupSettings, libraries } from '../schema.js';
+import { holder, release, tryAcquire } from '../work-gate.js';
 import {
   destinationFromInput,
   generateRecoveryPassword,
@@ -21,22 +22,33 @@ import {
 } from './destination.js';
 import {
   BackupJobError,
+  CHECK_INTERVAL_HOURS,
   METADATA_ONLY_SCOPE,
   R2_PRESET,
   RETENTION_DAILY,
   RETENTION_MONTHLY,
   RETENTION_WEEKLY,
+  TRANSIENT_ATTEMPTS,
   type BackupJobView,
   type BackupScopeChoice,
   type DestinationConfig,
   type PublicDestination,
   type ScheduleView,
+  type SnapshotInfo,
+  isTransientResticFailure,
   keptSnapshotReason,
   resticOptions,
   scopeLabel,
   scrubSecrets,
 } from './model.js';
-import { parseResticMessages, readResticRelease, resticEnvironment, type ResticRunner } from './restic-run.js';
+import {
+  parseResticMessages,
+  parseResticStats,
+  readResticRelease,
+  resticEnvironment,
+  type ResticRunResult,
+  type ResticRunner,
+} from './restic-run.js';
 import { S3ProbeError, probeDestination } from './s3.js';
 import {
   findSnapshotRoot,
@@ -60,16 +72,25 @@ export interface BackupStatus {
   schedule: ScheduleView;
   lastSuccess: { finishedAt: string; snapshotId: string | null; scope: string } | null;
   job: BackupJobView | null;
+  active: BackupJobView | null;
+  history: SnapshotInfo[];
+  usage: {
+    repositoryBytes: number | null;
+    lastTransfer: { bytesAdded: number | null; bytesProcessed: number | null } | null;
+  };
+  integrityCheck: MaintenanceView & { nextRunAt: string | null };
+  restoreTest: MaintenanceView;
 }
 
-export interface SnapshotInfo {
-  id: string;
-  shortId: string;
-  time: string;
-  hostname: string;
-  tags: string[];
-  scope: string | null;
+export interface MaintenanceView {
+  status: BackupJobView['status'] | null;
+  phase: string | null;
+  reason: string | null;
+  finishedAt: string | null;
+  snapshotId: string | null;
 }
+
+export type { SnapshotInfo };
 
 export interface RestorePlanView {
   planId: string;
@@ -156,6 +177,7 @@ export class BackupService {
   status(): BackupStatus {
     const destination = readDestination(this.options.dataDir);
     const schedule = this.readSchedule();
+    const history = this.readHistory();
     return {
       destination: destination ? publicDestination(destination) : null,
       r2Preset: { endpoint: R2_PRESET.endpoint, region: R2_PRESET.region, pathStyle: true },
@@ -164,7 +186,15 @@ export class BackupService {
       },
       schedule,
       lastSuccess: this.lastSuccess(),
-      job: this.latestJob(),
+      job: this.latestJob('backup'),
+      active: this.activeJob(),
+      history: history.snapshots,
+      usage: {
+        repositoryBytes: history.repositoryBytes,
+        lastTransfer: this.lastTransfer(),
+      },
+      integrityCheck: { ...this.latestMaintenance('check'), nextRunAt: schedule.nextCheckAt },
+      restoreTest: this.latestMaintenance('restore-test'),
     };
   }
 
@@ -204,12 +234,19 @@ export class BackupService {
     retentionDaily: number;
     retentionWeekly: number;
     retentionMonthly: number;
+    checkIntervalHours?: number;
     scope: BackupScopeChoice;
     indexedLibraryIds: number[];
   }): ScheduleView {
     this.assertIndexedSelection(input.scope, input.indexedLibraryIds);
+    const previous = this.readSchedule();
+    const checkIntervalHours = input.checkIntervalHours ?? previous.checkIntervalHours;
     const stamp = this.now().toISOString();
     const nextRunAt = input.enabled ? new Date(this.now().getTime() + input.intervalHours * 60 * 60 * 1000).toISOString() : null;
+    const nextCheckAt =
+      checkIntervalHours !== previous.checkIntervalHours || !previous.nextCheckAt
+        ? new Date(this.now().getTime() + checkIntervalHours * 60 * 60 * 1000).toISOString()
+        : previous.nextCheckAt;
     this.options.source.db
       .update(backupSettings)
       .set({
@@ -219,6 +256,8 @@ export class BackupService {
         retentionDaily: input.retentionDaily,
         retentionWeekly: input.retentionWeekly,
         retentionMonthly: input.retentionMonthly,
+        checkIntervalHours,
+        nextCheckAt,
         scope: input.scope,
         indexedLibraryIds: JSON.stringify(input.indexedLibraryIds),
         updatedAt: stamp,
@@ -257,7 +296,28 @@ export class BackupService {
     if (this.hasActiveJob()) {
       throw new BackupJobError('A backup is already running or waiting. Wait for it to finish, then retry.');
     }
-    const id = this.insertJob(scope, indexedLibraryIds);
+    const id = this.insertJob('backup', scope, indexedLibraryIds);
+    const view = this.jobById(id);
+    if (!view) throw new BackupJobError('The backup job could not be stored.');
+    return view;
+  }
+
+  startCheck(): BackupJobView {
+    return this.startMaintenance('check');
+  }
+
+  startRestoreTest(): BackupJobView {
+    return this.startMaintenance('restore-test');
+  }
+
+  private startMaintenance(kind: 'check' | 'restore-test'): BackupJobView {
+    if (!readDestination(this.options.dataDir) || !readRecoveryPassword(this.options.dataDir)) {
+      throw new BackupJobError('Set a destination and a recovery password before starting a backup.');
+    }
+    if (this.hasActiveJob()) {
+      throw new BackupJobError('A backup is already running or waiting. Wait for it to finish, then retry.');
+    }
+    const id = this.insertJob(kind, 'managed', []);
     const view = this.jobById(id);
     if (!view) throw new BackupJobError('The backup job could not be stored.');
     return view;
@@ -326,6 +386,9 @@ export class BackupService {
       throw new BackupJobError(plan.inspection.reason ?? 'This snapshot is not compatible. Choose a different snapshot.');
     }
     if (this.lock) throw new BackupJobError('A backup is already running. Wait for it to finish, then activate the restore.');
+    if (!tryAcquire('backup')) {
+      throw new BackupJobError(this.busyReason());
+    }
     this.lock = true;
     let closed = false;
     try {
@@ -358,14 +421,17 @@ export class BackupService {
         : new BackupJobError('The snapshot could not be activated. The staging copy was kept so you can try again.');
     } finally {
       this.lock = false;
+      release('backup');
     }
   }
 
   private async tick(): Promise<void> {
     if (this.lock) return;
+    if (!tryAcquire('backup')) return;
     this.lock = true;
     try {
       this.enqueueSchedule();
+      this.enqueueCheck();
       const id = this.claimJob();
       if (id !== null) await this.runJob(id);
     } catch (error) {
@@ -374,6 +440,7 @@ export class BackupService {
       this.options.log?.error({ name: error instanceof Error ? error.name : 'Error' }, 'backup loop failed');
     } finally {
       this.lock = false;
+      release('backup');
     }
   }
 
@@ -383,7 +450,7 @@ export class BackupService {
     if (Date.parse(schedule.nextRunAt) > this.now().getTime()) return;
     if (this.hasActiveJob()) return;
     if (!readDestination(this.options.dataDir) || !readRecoveryPassword(this.options.dataDir)) return;
-    this.insertJob(schedule.scope, schedule.indexedLibraryIds);
+    this.insertJob('backup', schedule.scope, schedule.indexedLibraryIds);
     const next = new Date(this.now().getTime() + schedule.intervalHours * 60 * 60 * 1000).toISOString();
     this.options.source.db
       .update(backupSettings)
@@ -392,9 +459,33 @@ export class BackupService {
       .run();
   }
 
+  private enqueueCheck(): void {
+    if (!readDestination(this.options.dataDir) || !readRecoveryPassword(this.options.dataDir)) return;
+    const schedule = this.readSchedule();
+    if (!schedule.nextCheckAt) {
+      this.setNextCheck(schedule.checkIntervalHours);
+      return;
+    }
+    if (Date.parse(schedule.nextCheckAt) > this.now().getTime()) return;
+    if (!this.lastSuccess() || this.hasActiveJob()) return;
+    this.insertJob('check', 'managed', []);
+    this.setNextCheck(schedule.checkIntervalHours);
+  }
+
+  private setNextCheck(intervalHours: number): void {
+    const next = new Date(this.now().getTime() + intervalHours * 60 * 60 * 1000).toISOString();
+    this.options.source.db
+      .update(backupSettings)
+      .set({ nextCheckAt: next, updatedAt: this.now().toISOString() })
+      .where(eq(backupSettings.id, 1))
+      .run();
+  }
+
   private async runJob(id: number): Promise<void> {
     const row = this.options.source.db.select().from(backupJobs).where(eq(backupJobs.id, id)).get();
     if (!row || row.status !== 'running') return;
+    if (row.kind === 'check') return this.runCheck(id);
+    if (row.kind === 'restore-test') return this.runRestoreTest(id);
     const detail = parseDetail(row.detail);
     let stage: string | null = null;
     let partialSnapshot: string | null = null;
@@ -413,59 +504,12 @@ export class BackupService {
         indexedLibraryIds: detail.indexedLibraryIds,
       });
       stage = staged.root;
-      this.setPhase(id, 'uploading');
-      let lastProgress = 0;
-      const backup = await this.restic(
-        ready.destination,
-        ready.password,
-        [
-          ...resticOptions(ready.destination),
-          'backup',
-          '--json',
-          '--host',
-          'qijuan',
-          '--tag',
-          'qijuan',
-          '--tag',
-          `scope=${staged.label}`,
-          stage,
-        ],
-        (chunk) => {
-          const parsed = parseResticMessages(chunk);
-          const nowMs = Date.now();
-          if (parsed.percent === null || nowMs - lastProgress < 400) return;
-          lastProgress = nowMs;
-          this.setPhase(id, `uploading ${Math.round(parsed.percent * 100)}%`);
-        },
-      );
-      const messages = parseResticMessages(`${backup.stdout}\n${backup.stderr}`);
-      if (backup.signal) {
-        throw new BackupJobError(keptSnapshotReason('The backup was interrupted before restic finished'));
-      }
-      if (this.missingBinary(backup.stderr) || this.missingBinary(backup.stdout)) {
-        const release = readResticRelease();
-        throw new BackupJobError(
-          keptSnapshotReason(
-            `The restic ${release.version} program was not found. Install that release or set QIJUAN_RESTIC_BIN to the verified binary`,
-          ),
-        );
-      }
-      if (backup.code === 3) {
-        partialSnapshot = messages.snapshotId;
-        throw new BackupJobError(
-          keptSnapshotReason(
-            `Restic could not read every selected file${messages.errorMessage ? ` (${scrubSecrets(messages.errorMessage, this.secrets(ready))})` : ''}`,
-          ),
-        );
-      }
-      if (backup.code !== 0 || !messages.snapshotId) {
-        partialSnapshot = messages.snapshotId;
-        const detailText = messages.errorMessage || backup.stderr || backup.stdout || 'restic exited without a snapshot';
-        throw new BackupJobError(
-          keptSnapshotReason(
-            `The backup could not reach the destination (${scrubSecrets(detailText, this.secrets(ready))}). Check the endpoint, bucket, and credentials`,
-          ),
-        );
+      const uploaded = await this.uploadSnapshot(id, ready, stage, staged.label);
+      partialSnapshot = uploaded.partialSnapshot;
+      if (uploaded.error) throw uploaded.error;
+      const messages = uploaded.messages;
+      if (!messages?.snapshotId) {
+        throw new BackupJobError(keptSnapshotReason('The backup failed before a snapshot was stored'));
       }
       this.setPhase(id, 'retention');
       let retentionWarning: string | null = null;
@@ -485,11 +529,18 @@ export class BackupService {
           phase: 'succeeded',
           reason: retentionWarning,
           snapshotId: messages.snapshotId,
+          bytesAdded: messages.bytesAdded,
+          bytesProcessed: messages.bytesProcessed,
           finishedAt: stamp,
           updatedAt: stamp,
         })
         .where(eq(backupJobs.id, id))
         .run();
+      try {
+        await this.refreshHistory(ready.destination, ready.password);
+      } catch {
+        // The snapshot is stored. Size and history are reported when restic provides them.
+      }
     } catch (error) {
       if (ready && partialSnapshot) {
         await this.forgetSnapshot(ready.destination, ready.password, partialSnapshot);
@@ -543,6 +594,259 @@ export class BackupService {
   private async forgetSnapshot(destination: DestinationConfig, password: string, snapshotId: string): Promise<void> {
     await this.restic(destination, password, [...resticOptions(destination), 'unlock']);
     await this.restic(destination, password, [...resticOptions(destination), 'forget', snapshotId, '--prune']);
+  }
+
+  private async uploadSnapshot(
+    id: number,
+    ready: { destination: DestinationConfig; password: string },
+    stage: string,
+    label: string,
+  ): Promise<{
+    partialSnapshot: string | null;
+    error: BackupJobError | null;
+    messages: ReturnType<typeof parseResticMessages> | null;
+  }> {
+    let lastProgress = 0;
+    for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt += 1) {
+      this.setPhase(id, attempt === 1 ? 'uploading' : 'retrying');
+      const backup = await this.restic(
+        ready.destination,
+        ready.password,
+        [
+          ...resticOptions(ready.destination),
+          'backup',
+          '--json',
+          '--host',
+          'qijuan',
+          '--tag',
+          'qijuan',
+          '--tag',
+          `scope=${label}`,
+          stage,
+        ],
+        (chunk) => {
+          const parsed = parseResticMessages(chunk);
+          const nowMs = Date.now();
+          if (parsed.percent === null || nowMs - lastProgress < 400) return;
+          lastProgress = nowMs;
+          this.setPhase(id, `uploading ${Math.round(parsed.percent * 100)}%`);
+        },
+      );
+      const messages = parseResticMessages(`${backup.stdout}\n${backup.stderr}`);
+      if (backup.signal) {
+        return {
+          partialSnapshot: messages.snapshotId,
+          error: new BackupJobError(keptSnapshotReason('The backup was interrupted before restic finished')),
+          messages,
+        };
+      }
+      if (this.missingBinary(backup.stderr) || this.missingBinary(backup.stdout)) {
+        const pinned = readResticRelease();
+        return {
+          partialSnapshot: null,
+          error: new BackupJobError(
+            keptSnapshotReason(
+              `The restic ${pinned.version} program was not found. Install that release or set QIJUAN_RESTIC_BIN to the verified binary`,
+            ),
+          ),
+          messages,
+        };
+      }
+      if (backup.code === 3) {
+        return {
+          partialSnapshot: messages.snapshotId,
+          error: new BackupJobError(
+            keptSnapshotReason(
+              `Restic could not read every selected file${messages.errorMessage ? ` (${scrubSecrets(messages.errorMessage, this.secrets(ready))})` : ''}`,
+            ),
+          ),
+          messages,
+        };
+      }
+      if (backup.code === 0 && messages.snapshotId) {
+        return { partialSnapshot: null, error: null, messages };
+      }
+      const detailText = messages.errorMessage || backup.stderr || backup.stdout || 'restic exited without a snapshot';
+      const transient = isTransientResticFailure(detailText);
+      if (transient && messages.snapshotId && attempt < TRANSIENT_ATTEMPTS) {
+        await this.forgetSnapshot(ready.destination, ready.password, messages.snapshotId);
+      }
+      if (transient && attempt < TRANSIENT_ATTEMPTS) {
+        await this.restic(ready.destination, ready.password, [...resticOptions(ready.destination), 'unlock']);
+        await this.pause(attempt);
+        continue;
+      }
+      const tried = transient ? ` Tried ${TRANSIENT_ATTEMPTS} times.` : '';
+      return {
+        partialSnapshot: messages.snapshotId,
+        error: new BackupJobError(
+          keptSnapshotReason(
+            `The backup could not reach the destination (${scrubSecrets(detailText, this.secrets(ready))}). Check the endpoint, bucket, and credentials.${tried}`,
+          ),
+        ),
+        messages,
+      };
+    }
+    return {
+      partialSnapshot: null,
+      error: new BackupJobError(keptSnapshotReason('The backup failed before a snapshot was stored')),
+      messages: null,
+    };
+  }
+
+  private async runCheck(id: number): Promise<void> {
+    try {
+      const ready = this.requireReady();
+      await this.restic(ready.destination, ready.password, [...resticOptions(ready.destination), 'unlock']);
+      let result: ResticRunResult | null = null;
+      for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt += 1) {
+        this.setPhase(id, attempt === 1 ? 'checking' : 'retrying');
+        result = await this.restic(ready.destination, ready.password, [...resticOptions(ready.destination), 'check']);
+        if (result.code === 0 && !result.signal) break;
+        const detail = `${result.stdout}\n${result.stderr}`;
+        if (result.signal || attempt === TRANSIENT_ATTEMPTS || !isTransientResticFailure(detail)) {
+          throw new BackupJobError(
+            result.signal
+              ? 'The integrity check was interrupted. This was not a restore test, and the library was not changed.'
+              : this.resticFailure('The repository integrity check failed', result.stdout, result.stderr, ready.destination, ready.password),
+          );
+        }
+        await this.pause(attempt);
+      }
+      try {
+        await this.refreshHistory(ready.destination, ready.password);
+      } catch {
+        // A passed check still stands when the size report is unavailable.
+      }
+      this.finishJob(
+        id,
+        'succeeded',
+        'Integrity check passed. This only reads the restic repository. It did not restore a snapshot, so it does not show that a restore will succeed.',
+        null,
+      );
+    } catch (error) {
+      const reason = error instanceof BackupJobError ? error.message : 'The repository integrity check failed. The library was not changed.';
+      this.finishJob(id, 'failed', reason, null);
+      this.options.log?.error({ jobId: id }, 'backup check failed');
+    }
+  }
+
+  private async runRestoreTest(id: number): Promise<void> {
+    let stageParent: string | null = null;
+    try {
+      const ready = this.requireReady();
+      this.setPhase(id, 'listing');
+      const snapshots = await this.listSnapshots(ready.destination, ready.password);
+      const latest = [...snapshots].sort((left, right) => Date.parse(right.time) - Date.parse(left.time))[0];
+      if (!latest) {
+        throw new BackupJobError(
+          'There is no snapshot to restore. Make a backup first. The library was not changed. This is not an integrity check.',
+        );
+      }
+      this.setPhase(id, 'restoring');
+      stageParent = mkdtempSync(path.join(tmpdir(), 'qijuan-restore-test-'));
+      const restored = await this.restic(ready.destination, ready.password, [
+        ...resticOptions(ready.destination),
+        'restore',
+        latest.id,
+        '--target',
+        stageParent,
+      ]);
+      if (restored.code !== 0 || restored.signal) {
+        throw new BackupJobError(
+          `${this.resticFailure('The restore test could not copy the snapshot', restored.stdout, restored.stderr, ready.destination, ready.password)} The library was not changed.`,
+        );
+      }
+      const root = findSnapshotRoot(stageParent);
+      if (!root) throw new BackupJobError('The restore test did not find a QiJuan manifest. The library was not changed.');
+      const inspection = inspectSnapshot(root, this.options.migrationsDir);
+      if (!inspection.compatible) {
+        throw new BackupJobError(`${inspection.reason ?? 'The snapshot is not compatible.'} The library was not changed.`);
+      }
+      const files = inspection.manifest.metadataOnly ? ' It is metadata-only and has no book files.' : '';
+      this.finishJob(
+        id,
+        'succeeded',
+        `Restore test passed for snapshot ${latest.shortId}.${files} The snapshot was restored to a temporary directory and inspected. The library was not replaced. This is not an integrity check.`,
+        latest.id,
+      );
+    } catch (error) {
+      const reason = error instanceof BackupJobError ? error.message : 'The restore test failed. The library was not changed.';
+      this.finishJob(id, 'failed', reason, null);
+      this.options.log?.error({ jobId: id }, 'restore test failed');
+    } finally {
+      if (stageParent) rmSync(stageParent, { recursive: true, force: true });
+    }
+  }
+
+  private finishJob(id: number, status: 'succeeded' | 'failed', reason: string, snapshotId: string | null): void {
+    const stamp = this.now().toISOString();
+    try {
+      this.options.source.db
+        .update(backupJobs)
+        .set({ status, phase: status, reason, snapshotId, finishedAt: stamp, updatedAt: stamp })
+        .where(eq(backupJobs.id, id))
+        .run();
+    } catch {
+      // The database may already be closed during shutdown.
+    }
+  }
+
+  private async refreshHistory(destination: DestinationConfig, password: string): Promise<void> {
+    const listed = await this.restic(destination, password, [...resticOptions(destination), 'snapshots', '--json', '--tag', 'qijuan']);
+    const stats = await this.restic(destination, password, [...resticOptions(destination), 'stats', '--json', '--mode', 'raw-data']);
+    const current = this.readHistory();
+    const snapshots = listed.code === 0 ? parseSnapshots(listed.stdout) : current.snapshots;
+    const repositoryBytes = stats.code === 0 ? parseResticStats(stats.stdout) : current.repositoryBytes;
+    const file = path.join(this.options.dataDir, 'backup', 'history.json');
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, `${JSON.stringify({ snapshots, repositoryBytes })}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
+  }
+
+  private readHistory(): { snapshots: SnapshotInfo[]; repositoryBytes: number | null } {
+    try {
+      const parsed = JSON.parse(readFileSync(path.join(this.options.dataDir, 'backup', 'history.json'), 'utf8')) as {
+        snapshots?: unknown;
+        repositoryBytes?: unknown;
+      };
+      const snapshots = Array.isArray(parsed.snapshots)
+        ? parsed.snapshots.flatMap((entry) => {
+            if (typeof entry !== 'object' || entry === null) return [];
+            const record = entry as Partial<SnapshotInfo>;
+            if (typeof record.id !== 'string' || typeof record.time !== 'string') return [];
+            return [
+              {
+                id: record.id,
+                shortId: typeof record.shortId === 'string' ? record.shortId : record.id.slice(0, 8),
+                time: record.time,
+                hostname: typeof record.hostname === 'string' ? record.hostname : '',
+                tags: Array.isArray(record.tags) ? record.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+                scope: typeof record.scope === 'string' ? record.scope : null,
+              },
+            ];
+          })
+        : [];
+      return {
+        snapshots,
+        repositoryBytes: typeof parsed.repositoryBytes === 'number' ? parsed.repositoryBytes : null,
+      };
+    } catch {
+      return { snapshots: [], repositoryBytes: null };
+    }
+  }
+
+  private pause(attempt: number): Promise<void> {
+    const delay = this.pollMs >= 200 ? 2_000 * attempt : 0;
+    if (delay === 0) return Promise.resolve();
+    return new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
+  private busyReason(): string {
+    if (holder() === 'library') {
+      return 'A library import or maintenance job is running. Wait for it to finish, then try again.';
+    }
+    return 'A backup is already running. Wait for it to finish, then try again.';
   }
 
   private async ensureRepository(destination: DestinationConfig, password: string): Promise<void> {
@@ -623,16 +927,20 @@ export class BackupService {
     }
   }
 
-  private insertJob(scope: BackupScopeChoice, indexedLibraryIds: number[]): number {
+  private insertJob(
+    kind: 'backup' | 'check' | 'restore-test',
+    scope: BackupScopeChoice,
+    indexedLibraryIds: number[],
+  ): number {
     const stamp = this.now().toISOString();
     const inserted = this.options.source.db
       .insert(backupJobs)
       .values({
-        kind: 'backup',
+        kind,
         status: 'queued',
-        scope: scopeLabel(scope, indexedLibraryIds),
+        scope: kind === 'backup' ? scopeLabel(scope, indexedLibraryIds) : kind,
         phase: 'queued',
-        detail: JSON.stringify({ scope, indexedLibraryIds } satisfies JobDetail),
+        detail: JSON.stringify({ scope, indexedLibraryIds: kind === 'backup' ? indexedLibraryIds : [] } satisfies JobDetail),
         createdAt: stamp,
         updatedAt: stamp,
       })
@@ -704,6 +1012,8 @@ export class BackupService {
         retentionDaily: RETENTION_DAILY,
         retentionWeekly: RETENTION_WEEKLY,
         retentionMonthly: RETENTION_MONTHLY,
+        checkIntervalHours: CHECK_INTERVAL_HOURS,
+        nextCheckAt: null,
         scope: 'managed',
         indexedLibraryIds: [],
       };
@@ -715,6 +1025,8 @@ export class BackupService {
       retentionDaily: row.retentionDaily,
       retentionWeekly: row.retentionWeekly,
       retentionMonthly: row.retentionMonthly,
+      checkIntervalHours: row.checkIntervalHours,
+      nextCheckAt: row.nextCheckAt,
       scope: row.scope === 'metadata-only' ? 'metadata-only' : 'managed',
       indexedLibraryIds: parseIdList(row.indexedLibraryIds),
     };
@@ -731,9 +1043,52 @@ export class BackupService {
     return { finishedAt: row.finishedAt, snapshotId: row.snapshotId, scope: row.scope };
   }
 
-  private latestJob(): BackupJobView | null {
-    const row = this.options.source.db.select().from(backupJobs).orderBy(desc(backupJobs.id)).get();
+  private latestJob(kind: 'backup' | 'check' | 'restore-test'): BackupJobView | null {
+    const row = this.options.source.db
+      .select()
+      .from(backupJobs)
+      .where(eq(backupJobs.kind, kind))
+      .orderBy(desc(backupJobs.id))
+      .get();
     return row ? toJobView(row) : null;
+  }
+
+  private activeJob(): BackupJobView | null {
+    const row = this.options.source.db
+      .select()
+      .from(backupJobs)
+      .where(or(eq(backupJobs.status, 'queued'), eq(backupJobs.status, 'running')))
+      .orderBy(asc(backupJobs.id))
+      .get();
+    return row ? toJobView(row) : null;
+  }
+
+  private latestMaintenance(kind: 'check' | 'restore-test'): MaintenanceView {
+    const row = this.options.source.db
+      .select()
+      .from(backupJobs)
+      .where(eq(backupJobs.kind, kind))
+      .orderBy(desc(backupJobs.id))
+      .get();
+    if (!row) return { status: null, phase: null, reason: null, finishedAt: null, snapshotId: null };
+    return {
+      status: row.status,
+      phase: row.phase,
+      reason: row.reason,
+      finishedAt: row.finishedAt,
+      snapshotId: row.snapshotId,
+    };
+  }
+
+  private lastTransfer(): BackupStatus['usage']['lastTransfer'] {
+    const row = this.options.source.db
+      .select()
+      .from(backupJobs)
+      .where(and(eq(backupJobs.kind, 'backup'), eq(backupJobs.status, 'succeeded')))
+      .orderBy(desc(backupJobs.id))
+      .get();
+    if (!row || (row.bytesAdded === null && row.bytesProcessed === null)) return null;
+    return { bytesAdded: row.bytesAdded, bytesProcessed: row.bytesProcessed };
   }
 
   private jobById(id: number): BackupJobView | null {

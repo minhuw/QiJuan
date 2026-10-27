@@ -94,6 +94,28 @@ export function registerBackupRoutes(app: FastifyInstance, service: BackupServic
     }
   });
 
+  app.post('/api/backup/checks', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    reply.header('cache-control', 'no-store');
+    try {
+      const job = service.startCheck();
+      return reply.code(202).send({ job });
+    } catch (error) {
+      return sendBackupError(reply, error);
+    }
+  });
+
+  app.post('/api/backup/restore-tests', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    reply.header('cache-control', 'no-store');
+    try {
+      const job = service.startRestoreTest();
+      return reply.code(202).send({ job });
+    } catch (error) {
+      return sendBackupError(reply, error);
+    }
+  });
+
   app.post('/api/backup/restore/snapshots', async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     reply.header('cache-control', 'no-store');
@@ -157,6 +179,7 @@ function parseSchedule(value: unknown): {
   retentionDaily: number;
   retentionWeekly: number;
   retentionMonthly: number;
+  checkIntervalHours?: number;
   scope: BackupScopeChoice;
   indexedLibraryIds: number[];
 } | null {
@@ -168,6 +191,7 @@ function parseSchedule(value: unknown): {
     'retentionDaily',
     'retentionWeekly',
     'retentionMonthly',
+    'checkIntervalHours',
     'scope',
     'indexedLibraryIds',
   ]);
@@ -177,7 +201,10 @@ function parseSchedule(value: unknown): {
   const retentionDaily = boundedInt(body.retentionDaily, 0, 10_000);
   const retentionWeekly = boundedInt(body.retentionWeekly, 0, 10_000);
   const retentionMonthly = boundedInt(body.retentionMonthly, 0, 10_000);
+  const parsedCheck = body.checkIntervalHours === undefined ? undefined : boundedInt(body.checkIntervalHours, 1, HOUR_MAX);
   if (intervalHours === null || retentionDaily === null || retentionWeekly === null || retentionMonthly === null) return null;
+  if (parsedCheck === null) return null;
+  const checkIntervalHours = parsedCheck;
   if (body.scope !== 'metadata-only' && body.scope !== 'managed') return null;
   const indexedLibraryIds = idList(body.indexedLibraryIds);
   if (!indexedLibraryIds) return null;
@@ -187,6 +214,7 @@ function parseSchedule(value: unknown): {
     retentionDaily,
     retentionWeekly,
     retentionMonthly,
+    ...(checkIntervalHours === undefined ? {} : { checkIntervalHours }),
     scope: body.scope,
     indexedLibraryIds,
   };

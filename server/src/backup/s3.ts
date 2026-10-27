@@ -42,6 +42,66 @@ export async function probeDestination(destination: DestinationConfig): Promise<
   await multipartRoundTrip(destination, endpoint, multipartKey, Buffer.from('qijuan-multipart-part'));
   await deleteObject(destination, endpoint, key);
   await deleteObject(destination, endpoint, multipartKey);
+  await assertRepositoryPolicies(destination, endpoint);
+}
+
+/**
+ * Lifecycle expiration, storage-class transitions, and object lock delete or
+ * freeze objects restic still needs. Aborting incomplete multipart uploads
+ * is allowed. A key that cannot read these settings is rejected too: QiJuan
+ * will not claim the bucket is safe when it cannot see the rules.
+ */
+async function assertRepositoryPolicies(destination: DestinationConfig, endpoint: URL): Promise<void> {
+  const location = bucketLocation(destination, endpoint);
+  const lifecycle = await signedRequest(destination, endpoint, {
+    method: 'GET',
+    host: location.host,
+    path: location.path,
+    query: { lifecycle: '' },
+    body: Buffer.alloc(0),
+  });
+  if (lifecycle.status === 200) {
+    const xml = lifecycle.body.toString('utf8');
+    if (/<(Expiration|NoncurrentVersionExpiration|Transition|NoncurrentVersionTransition)\b/.test(xml)) {
+      throw new S3ProbeError(
+        'This bucket has a lifecycle rule that can expire, transition, or delete objects. Remove those rules. Restic retention is the only cleanup that should delete backup data. Aborting incomplete multipart uploads is allowed.',
+      );
+    }
+  } else if (!absentConfiguration(lifecycle, ['NoSuchLifecycleConfiguration', 'NoSuchLifecycle'])) {
+    if (lifecycle.status === 403) {
+      throw new S3ProbeError(
+        'This key cannot read the bucket lifecycle configuration. Allow that read, and remove expiration and transition rules before using the bucket.',
+      );
+    }
+    throw new S3ProbeError(errorText('read the bucket lifecycle', lifecycle));
+  }
+
+  const lock = await signedRequest(destination, endpoint, {
+    method: 'GET',
+    host: location.host,
+    path: location.path,
+    query: { 'object-lock': '' },
+    body: Buffer.alloc(0),
+  });
+  if (lock.status === 200 && /<ObjectLockEnabled>\s*Enabled\s*<\/ObjectLockEnabled>/.test(lock.body.toString('utf8'))) {
+    throw new S3ProbeError(
+      'Object lock is enabled on this bucket. Restic has to delete objects when retention removes a snapshot. Use a bucket without object lock or a default retention period.',
+    );
+  }
+  if (lock.status === 200) return;
+  if (absentConfiguration(lock, ['ObjectLockConfigurationNotFoundError', 'ObjectLockConfigurationNotFound'])) return;
+  if (lock.status === 403) {
+    throw new S3ProbeError(
+      'This key cannot read the bucket object-lock configuration. Allow that read, and use a bucket without object lock.',
+    );
+  }
+  throw new S3ProbeError(errorText('read the bucket object lock', lock));
+}
+
+function absentConfiguration(response: S3Response, codes: string[]): boolean {
+  if (response.status === 404) return true;
+  const code = xmlTag(response.body.toString('utf8'), 'Code');
+  return code !== null && codes.includes(code);
 }
 
 async function ensureBucket(destination: DestinationConfig, endpoint: URL): Promise<void> {

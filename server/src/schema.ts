@@ -394,18 +394,22 @@ export const backupSettings = sqliteTable('backup_settings', {
   retentionMonthly: integer('retention_monthly').notNull(),
   scope: text('scope', { enum: ['metadata-only', 'managed'] }).notNull(),
   indexedLibraryIds: text('indexed_library_ids').notNull(),
+  checkIntervalHours: integer('check_interval_hours').notNull(),
+  nextCheckAt: text('next_check_at'),
   updatedAt: text('updated_at').notNull(),
 });
 
 export const backupJobs = sqliteTable('backup_jobs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  kind: text('kind', { enum: ['backup'] }).notNull(),
+  kind: text('kind', { enum: ['backup', 'check', 'restore-test'] }).notNull(),
   status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed'] }).notNull(),
   scope: text('scope').notNull(),
   phase: text('phase'),
   reason: text('reason'),
   snapshotId: text('snapshot_id'),
   detail: text('detail').notNull(),
+  bytesAdded: integer('bytes_added'),
+  bytesProcessed: integer('bytes_processed'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   startedAt: text('started_at'),

@@ -12,6 +12,7 @@ import { OpenLibraryError, type OpenLibraryTransport } from './metadata/openLibr
 import { refreshEditionMetadata, refreshLibraryMetadata } from './refresh.js';
 import { editions, jobItems, jobs, libraries } from './schema.js';
 import type { AuthUser } from './sessions.js';
+import { release, tryAcquire } from './work-gate.js';
 import { ZipError } from './zip.js';
 
 const POLL_MS = 50;
@@ -192,6 +193,7 @@ export function startJobWorker(options: {
   timer.unref();
 
   async function workNext(): Promise<void> {
+    if (stopped || !tryAcquire('library')) return;
     try {
       const jobId = claimNextJob(options.db);
       if (jobId !== null) {
@@ -205,6 +207,8 @@ export function startJobWorker(options: {
         return;
       }
       options.log?.error({ name: error instanceof Error ? error.name : 'Error' }, 'job worker failed');
+    } finally {
+      release('library');
     }
   }
 

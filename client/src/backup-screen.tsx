@@ -14,8 +14,28 @@ interface DestinationForm {
   secretAccessKey: string;
 }
 
+interface BackupJob {
+  id: number;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  scope: string;
+  phase: string | null;
+  reason: string | null;
+}
+
+interface MaintenanceView {
+  status: BackupJob['status'] | null;
+  phase: string | null;
+  reason: string | null;
+  finishedAt: string | null;
+  snapshotId: string | null;
+}
+
 interface BackupStatus {
-  destination: Omit<DestinationForm, 'secretAccessKey'> & { secretConfigured: true } | null;
+  destination: Omit<DestinationForm, 'secretAccessKey' | 'accessKeyId'> & {
+    accessKeyConfigured: true;
+    accessKeyHint: string;
+    secretConfigured: true;
+  } | null;
   r2Preset: { endpoint: string; region: string; pathStyle: true };
   recovery: { configured: boolean };
   schedule: {
@@ -25,17 +45,21 @@ interface BackupStatus {
     retentionDaily: number;
     retentionWeekly: number;
     retentionMonthly: number;
+    checkIntervalHours: number;
+    nextCheckAt: string | null;
     scope: 'metadata-only' | 'managed';
     indexedLibraryIds: number[];
   };
   lastSuccess: { finishedAt: string; snapshotId: string | null; scope: string } | null;
-  job: {
-    id: number;
-    status: 'queued' | 'running' | 'succeeded' | 'failed';
-    scope: string;
-    phase: string | null;
-    reason: string | null;
-  } | null;
+  job: BackupJob | null;
+  active: BackupJob | null;
+  history: SnapshotInfo[];
+  usage: {
+    repositoryBytes: number | null;
+    lastTransfer: { bytesAdded: number | null; bytesProcessed: number | null } | null;
+  };
+  integrityCheck: MaintenanceView & { nextRunAt: string | null };
+  restoreTest: MaintenanceView;
 }
 
 interface SnapshotInfo {
@@ -80,6 +104,7 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [destination, setDestination] = useState<DestinationForm>(EMPTY_DESTINATION);
   const [secretConfigured, setSecretConfigured] = useState(false);
+  const [accessConfigured, setAccessConfigured] = useState(false);
   const [password, setPassword] = useState('');
   const [shownPassword, setShownPassword] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<BackupStatus['schedule'] | null>(null);
@@ -114,10 +139,11 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
         pathStyle: result.data.destination.pathStyle,
         bucket: result.data.destination.bucket,
         prefix: result.data.destination.prefix,
-        accessKeyId: result.data.destination.accessKeyId,
+        accessKeyId: '',
         secretAccessKey: '',
       });
       setSecretConfigured(true);
+      setAccessConfigured(true);
     }
     const libraries = await api<{ libraries: LibraryInfo[] }>('/api/libraries');
     if (libraries.data) setIndexed(libraries.data.libraries.filter((library) => library.mode === 'indexed'));
@@ -135,7 +161,7 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const running = status?.job?.status === 'queued' || status?.job?.status === 'running';
+  const running = status?.active?.status === 'queued' || status?.active?.status === 'running';
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => {
@@ -170,7 +196,8 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
       return;
     }
     setSecretConfigured(true);
-    setDestination((current) => ({ ...current, secretAccessKey: '' }));
+    setDestination((current) => ({ ...current, secretAccessKey: '', accessKeyId: '' }));
+    setAccessConfigured(true);
     await load();
   }
 
@@ -213,7 +240,19 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
     event.preventDefault();
     if (!schedule) return;
     setPending(true);
-    const result = await api('/api/backup/schedule', { method: 'PUT', body: schedule });
+    const result = await api('/api/backup/schedule', {
+      method: 'PUT',
+      body: {
+        enabled: schedule.enabled,
+        intervalHours: schedule.intervalHours,
+        retentionDaily: schedule.retentionDaily,
+        retentionWeekly: schedule.retentionWeekly,
+        retentionMonthly: schedule.retentionMonthly,
+        checkIntervalHours: schedule.checkIntervalHours,
+        scope: schedule.scope,
+        indexedLibraryIds: schedule.indexedLibraryIds,
+      },
+    });
     setPending(false);
     if (result.error) {
       setError(result.error);
@@ -234,6 +273,21 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
         indexedLibraryIds: scope === 'metadata-only' ? [] : schedule.indexedLibraryIds,
       },
     });
+    setPending(false);
+    if (result.error) {
+      setError(result.error);
+      setReason(result.reason ?? null);
+      return;
+    }
+    setError(null);
+    setReason(null);
+    await load();
+  }
+
+  async function runMaintenance(path: '/api/backup/checks' | '/api/backup/restore-tests') {
+    setPending(true);
+    setNotice(null);
+    const result = await api(path, { method: 'POST', body: {} });
     setPending(false);
     if (result.error) {
       setError(result.error);
@@ -343,6 +397,7 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
               {t('backup.presetR2')}
             </button>
           </div>
+          <p className="hint">{t('backup.guide')}</p>
           <p className="hint">{t('backup.r2Hint')}</p>
           <Field label={t('backup.endpoint')} value={destination.endpoint} onChange={(endpoint) => setDestination({ ...destination, endpoint })} />
           <Field label={t('backup.region')} value={destination.region} onChange={(region) => setDestination({ ...destination, region })} />
@@ -356,7 +411,18 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
           </label>
           <Field label={t('backup.bucket')} value={destination.bucket} onChange={(bucket) => setDestination({ ...destination, bucket })} />
           <Field label={t('backup.prefix')} value={destination.prefix} onChange={(prefix) => setDestination({ ...destination, prefix })} />
-          <Field label={t('backup.accessKey')} value={destination.accessKeyId} onChange={(accessKeyId) => setDestination({ ...destination, accessKeyId })} />
+          <Field
+            label={t('backup.accessKey')}
+            type="password"
+            value={destination.accessKeyId}
+            autoComplete="off"
+            onChange={(accessKeyId) => setDestination({ ...destination, accessKeyId })}
+            hint={
+              accessConfigured
+                ? `${t('backup.accessKept')}${status?.destination?.accessKeyHint ? ` · ${status.destination.accessKeyHint}` : ''}`
+                : undefined
+            }
+          />
           <Field
             label={t('backup.secretKey')}
             type="password"
@@ -437,6 +503,11 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
               value={schedule.retentionMonthly}
               onChange={(retentionMonthly) => setSchedule({ ...schedule, retentionMonthly })}
             />
+            <NumberField
+              label={t('backup.checkInterval')}
+              value={schedule.checkIntervalHours}
+              onChange={(checkIntervalHours) => setSchedule({ ...schedule, checkIntervalHours })}
+            />
             <fieldset className="field">
               <legend>{t('backup.scope')}</legend>
               <label>
@@ -487,25 +558,34 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
               {t('backup.runMetadata')}
             </button>
           </div>
+          <p className="hint">{t('backup.metadataLabel')}</p>
+          <p className="hint">
+            {schedule.indexedLibraryIds.length > 0 && schedule.scope !== 'metadata-only'
+              ? t('backup.indexedIncluded')
+              : t('backup.indexedExcluded')}
+          </p>
         </section>
       ) : null}
 
       <section>
         <h2>{t('backup.lastSuccess')}</h2>
         {status?.lastSuccess ? (
-          <p>
-            {status.lastSuccess.finishedAt}
-            {status.lastSuccess.scope ? ` · ${status.lastSuccess.scope}` : ''}
-          </p>
+          <>
+            <p>
+              {status.lastSuccess.finishedAt}
+              {status.lastSuccess.scope ? ` · ${status.lastSuccess.scope}` : ''}
+            </p>
+            <p>{scopeNote(status.lastSuccess.scope, t)}</p>
+          </>
         ) : (
           <p className="placeholder">{t('backup.none')}</p>
         )}
         <h2>{t('backup.next')}</h2>
         <p>{status?.schedule.nextRunAt ?? t('backup.notScheduled')}</p>
         <h2>{t('backup.progress')}</h2>
-        {status?.job && (status.job.status === 'queued' || status.job.status === 'running') ? (
+        {status?.active && (status.active.status === 'queued' || status.active.status === 'running') ? (
           <p role="status">
-            {status.job.scope} · {status.job.phase ?? status.job.status}
+            {status.active.scope} · {status.active.phase ?? status.active.status}
           </p>
         ) : (
           <p>{t('backup.idle')}</p>
@@ -520,8 +600,63 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
           </>
         ) : null}
         {status?.job?.scope === 'metadata-only' && status.job.status === 'succeeded' ? (
-          <p>{t('backup.scopeMetadata')}</p>
+          <p>{t('backup.metadataLabel')}</p>
         ) : null}
+      </section>
+
+      <section>
+        <h2>{t('backup.usage')}</h2>
+        <p>
+          {t('backup.repositorySize')}: {formatBytes(status?.usage.repositoryBytes, t('backup.unavailable'))}
+        </p>
+        <p>
+          {t('backup.transferred')}:{' '}
+          {status?.usage.lastTransfer
+            ? `${formatBytes(status.usage.lastTransfer.bytesAdded, t('backup.unavailable'))} / ${formatBytes(status.usage.lastTransfer.bytesProcessed, t('backup.unavailable'))}`
+            : t('backup.unavailable')}
+        </p>
+        <h2>{t('backup.history')}</h2>
+        <p className="hint">{t('backup.deletedKept')}</p>
+        {status && status.history.length > 0 ? (
+          <ul className="plain-list">
+            {status.history.map((snapshot) => (
+              <li key={snapshot.id}>
+                {snapshot.shortId} · {snapshot.time}
+                {snapshot.scope ? ` · ${snapshot.scope}` : ''}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="placeholder">{t('backup.noSnapshots')}</p>
+        )}
+      </section>
+
+      <section>
+        <h2>{t('backup.integrity')}</h2>
+        <p className="hint">{t('backup.integrityHint')}</p>
+        <p>
+          {t('backup.lastCheck')}: {status?.integrityCheck.finishedAt ?? t('backup.none')}
+          {status?.integrityCheck.status ? ` · ${status.integrityCheck.status}` : ''}
+        </p>
+        {status?.integrityCheck.reason ? <p>{status.integrityCheck.reason}</p> : null}
+        <p>
+          {t('backup.nextCheck')}: {status?.integrityCheck.nextRunAt ?? t('backup.notScheduled')}
+        </p>
+        <h2>{t('backup.restoreTest')}</h2>
+        <p className="hint">{t('backup.restoreTestHint')}</p>
+        <p>
+          {t('backup.lastRestoreTest')}: {status?.restoreTest.finishedAt ?? t('backup.none')}
+          {status?.restoreTest.status ? ` · ${status.restoreTest.status}` : ''}
+        </p>
+        {status?.restoreTest.reason ? <p>{status.restoreTest.reason}</p> : null}
+        <div className="toolbar">
+          <button className="button button-secondary" type="button" disabled={pending} onClick={() => void runMaintenance('/api/backup/checks')}>
+            {t('backup.checkNow')}
+          </button>
+          <button className="button button-secondary" type="button" disabled={pending} onClick={() => void runMaintenance('/api/backup/restore-tests')}>
+            {t('backup.restoreTest')}
+          </button>
+        </div>
       </section>
 
       <section>
@@ -599,6 +734,26 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
       </section>
     </div>
   );
+}
+
+function scopeNote(scope: string, t: (key: string) => string): string {
+  if (scope === 'metadata-only') return t('backup.metadataLabel');
+  if (scope.includes('indexed')) return t('backup.indexedIncluded');
+  return t('backup.indexedExcluded');
+}
+
+function formatBytes(value: number | null | undefined, unavailable: string): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return unavailable;
+  if (value < 1024) return `${value} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const digits = size >= 10 ? 0 : 1;
+  return `${size.toFixed(digits)} ${units[unit]}`;
 }
 
 function Field({

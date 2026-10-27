@@ -8,6 +8,7 @@ import { openDatabase } from '../src/db.js';
 import { migrate } from '../src/migrate.js';
 import { R2_PRESET } from '../src/backup/model.js';
 import { readResticRelease, type ResticRunResult, type ResticRunner } from '../src/backup/restic-run.js';
+import { release, tryAcquire } from '../src/work-gate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { makeTempDir, tempConfig } from './helpers.js';
 
@@ -88,6 +89,25 @@ async function waitJob(
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`backup did not reach ${status}`);
+}
+
+async function waitStatus(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  cookie: string,
+  ready: (body: {
+    integrityCheck?: { status?: string | null; reason?: string | null };
+    restoreTest?: { status?: string | null; reason?: string | null };
+    lastSuccess?: { snapshotId?: string | null };
+  }) => boolean,
+) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await app.inject({ method: 'GET', url: '/api/backup', headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    if (ready(body)) return body;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('backup status did not become ready');
 }
 
 describe('backup pin and screen data', () => {
@@ -228,7 +248,9 @@ describe('backup jobs', () => {
     expect(failed.statusCode).toBe(202);
     const failure = await waitJob(started.app, started.cookie, 'failed');
     expect(failure.job.reason).toMatch(/destination/i);
+    expect(failure.job.reason).toMatch(/Tried 3 times/);
     expect(failure.job.reason).toMatch(/last successful snapshot/i);
+    expect(calls.filter((args) => args.includes('backup'))).toHaveLength(3);
     expect(calls.some((args) => args.includes('forget'))).toBe(false);
 
     mode = 'kill';
@@ -558,6 +580,147 @@ describe('backup jobs', () => {
     release();
     const done = await waitJob(started.app, started.cookie, 'succeeded');
     expect(done.job.scope).toBe('metadata-only');
+  });
+
+  it('reports transfer size and does not call an integrity check a restore', async () => {
+    const snapshotId = 'e'.repeat(64);
+    const runner: ResticRunner = {
+      async run(args) {
+        if (args.includes('backup')) {
+          return result({
+            code: 0,
+            stdout: `{"message_type":"summary","snapshot_id":"${snapshotId}","data_added":1200,"total_bytes_processed":8000}\n`,
+          });
+        }
+        if (args.includes('snapshots')) {
+          return result({
+            code: 0,
+            stdout: JSON.stringify([
+              {
+                id: snapshotId,
+                short_id: 'eeeeeeee',
+                time: '2026-04-02T00:00:00Z',
+                hostname: 'qijuan',
+                tags: ['qijuan', 'scope=metadata-only'],
+              },
+            ]),
+          });
+        }
+        if (args.includes('stats')) return result({ code: 0, stdout: '{"total_size":4096,"total_file_count":2}\n' });
+        if (args.includes('check')) return result({ code: 0, stdout: 'no errors were found' });
+        return result({ code: 0 });
+      },
+    };
+    const started = await startApp(runner);
+    await configure(started.app, started.cookie);
+    const queued = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/jobs',
+      headers: { cookie: started.cookie },
+      payload: { scope: 'metadata-only' },
+    });
+    expect(queued.statusCode).toBe(202);
+    const success = await waitJob(started.app, started.cookie, 'succeeded');
+    expect(success.body.usage).toEqual({
+      repositoryBytes: 4096,
+      lastTransfer: { bytesAdded: 1200, bytesProcessed: 8000 },
+    });
+    expect(success.body.history).toEqual([expect.objectContaining({ id: snapshotId, scope: 'metadata-only' })]);
+    expect(success.body.job.scope).toBe('metadata-only');
+
+    const check = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/checks',
+      headers: { cookie: started.cookie },
+    });
+    expect(check.statusCode).toBe(202);
+    const checked = await waitStatus(started.app, started.cookie, (body) => body.integrityCheck?.status === 'succeeded');
+    expect(checked.integrityCheck.reason).toMatch(/did not restore a snapshot/);
+    expect(checked.integrityCheck.reason).not.toMatch(/Restore test passed/);
+
+    const restoreTest = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/restore-tests',
+      headers: { cookie: started.cookie },
+    });
+    expect(restoreTest.statusCode).toBe(202);
+    const tested = await waitStatus(started.app, started.cookie, (body) => body.restoreTest?.status === 'failed');
+    expect(tested.restoreTest.reason).toMatch(/library was not changed/);
+    expect(tested.restoreTest.reason).not.toMatch(/Integrity check passed/);
+    const stillThere = await started.app.inject({ method: 'GET', url: '/api/backup', headers: { cookie: started.cookie } });
+    expect(stillThere.statusCode).toBe(200);
+    expect(stillThere.json().lastSuccess.snapshotId).toBe(snapshotId);
+  });
+
+  it('waits to back up while library maintenance holds the gate, and waits to rescan while a backup runs', async () => {
+    let releaseBackup = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseBackup = resolve;
+    });
+    let backups = 0;
+    const runner: ResticRunner = {
+      async run(args) {
+        if (args.includes('backup')) {
+          backups += 1;
+          await gate;
+          return result({
+            code: 0,
+            stdout: '{"message_type":"summary","snapshot_id":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}\n',
+          });
+        }
+        if (args.includes('snapshots')) return result({ code: 0, stdout: '[]' });
+        return result({ code: 0 });
+      },
+    };
+    const started = await startApp(runner);
+    await configure(started.app, started.cookie);
+    expect(tryAcquire('library')).toBe(true);
+    try {
+      const queued = await started.app.inject({
+        method: 'POST',
+        url: '/api/backup/jobs',
+        headers: { cookie: started.cookie },
+        payload: { scope: 'metadata-only' },
+      });
+      expect(queued.statusCode).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(backups).toBe(0);
+      const waiting = await started.app.inject({ method: 'GET', url: '/api/backup', headers: { cookie: started.cookie } });
+      expect(waiting.json().active.status).toBe('queued');
+    } finally {
+      release('library');
+    }
+    for (let attempt = 0; attempt < 40 && backups === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(backups).toBe(1);
+    const sqlite = openDatabase(started.config.databasePath);
+    const now = '2026-04-01T00:00:00.000Z';
+    sqlite.sqlite
+      .prepare(
+        `INSERT INTO jobs (library_id, source, status, created_at, updated_at) VALUES (?, 'rescan', 'queued', ?, ?)`,
+      )
+      .run(started.libraryId, now, now);
+    sqlite.sqlite.close();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const during = openDatabase(started.config.databasePath);
+    const held = during.sqlite.prepare(`SELECT status, started_at FROM jobs WHERE source = 'rescan'`).get() as {
+      status: string;
+      started_at: string | null;
+    };
+    during.sqlite.close();
+    expect(held).toEqual({ status: 'queued', started_at: null });
+    releaseBackup();
+    await waitJob(started.app, started.cookie, 'succeeded');
+    let moved = false;
+    for (let attempt = 0; attempt < 40 && !moved; attempt += 1) {
+      const check = openDatabase(started.config.databasePath);
+      const row = check.sqlite.prepare(`SELECT status FROM jobs WHERE source = 'rescan'`).get() as { status: string };
+      check.sqlite.close();
+      moved = row.status !== 'queued';
+      if (!moved) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(moved).toBe(true);
   });
 });
 

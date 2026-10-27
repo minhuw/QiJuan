@@ -12,6 +12,19 @@ COPY . .
 
 RUN npm run build
 
+# Pinned restic. The checksum is the linux amd64 build recorded in
+# server/restic-release.json. Other architectures fail this step.
+RUN set -eu \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends bzip2 ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && test "$(dpkg --print-architecture)" = "amd64" \
+ && node --input-type=module -e "import { createHash } from 'node:crypto'; import { readFileSync, writeFileSync } from 'node:fs'; const pin = JSON.parse(readFileSync('/app/server/restic-release.json', 'utf8')); const response = await fetch(pin.url); if (!response.ok) { console.error('restic download failed'); process.exit(1); } const bytes = Buffer.from(await response.arrayBuffer()); const digest = createHash('sha256').update(bytes).digest('hex'); if (digest !== pin.sha256) { console.error('restic checksum mismatch'); process.exit(1); } writeFileSync('/tmp/restic.bz2', bytes);" \
+ && bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic \
+ && chmod 755 /usr/local/bin/restic \
+ && rm -f /tmp/restic.bz2 \
+ && restic version
+
 ENV NODE_ENV=production
 ENV QIJUAN_DATA_DIR=/data
 ENV QIJUAN_PORT=8080

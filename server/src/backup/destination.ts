@@ -48,6 +48,7 @@ export function writeDestination(dataDir: string, destination: DestinationConfig
 }
 
 export function publicDestination(destination: DestinationConfig): PublicDestination {
+  const hint = destination.accessKeyId.slice(-4);
   return {
     preset: destination.preset,
     endpoint: destination.endpoint,
@@ -55,7 +56,8 @@ export function publicDestination(destination: DestinationConfig): PublicDestina
     pathStyle: destination.pathStyle,
     bucket: destination.bucket,
     prefix: destination.prefix,
-    accessKeyId: destination.accessKeyId,
+    accessKeyConfigured: true,
+    accessKeyHint: hint.length > 0 ? hint : 'saved',
     secretConfigured: true,
   };
 }
@@ -143,7 +145,11 @@ export function destinationFromInput(value: unknown, previous: DestinationConfig
     typeof record.pathStyle === 'boolean' ? record.pathStyle : filled ? filled.pathStyle : null;
   const bucket = cleanBucket(record.bucket);
   const prefix = cleanPrefix(record.prefix);
-  const accessKeyId = cleanSecret(record.accessKeyId);
+  const accessRaw = record.accessKeyId;
+  const accessKeyId =
+    typeof accessRaw === 'string' && accessRaw.trim() === '' && previous
+      ? previous.accessKeyId
+      : cleanSecret(accessRaw);
   const secretRaw = record.secretAccessKey;
   const secretAccessKey =
     typeof secretRaw === 'string' && secretRaw.trim() === '' && previous

@@ -123,12 +123,16 @@ export interface ResticMessages {
   snapshotId: string | null;
   errorMessage: string | null;
   percent: number | null;
+  bytesAdded: number | null;
+  bytesProcessed: number | null;
 }
 
 export function parseResticMessages(stdout: string): ResticMessages {
   let snapshotId: string | null = null;
   let errorMessage: string | null = null;
   let percent: number | null = null;
+  let bytesAdded: number | null = null;
+  let bytesProcessed: number | null = null;
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('{')) continue;
@@ -140,6 +144,10 @@ export function parseResticMessages(stdout: string): ResticMessages {
     }
     if (message.message_type === 'summary' && typeof message.snapshot_id === 'string') {
       snapshotId = message.snapshot_id;
+    }
+    if (message.message_type === 'summary') {
+      if (typeof message.data_added === 'number') bytesAdded = message.data_added;
+      if (typeof message.total_bytes_processed === 'number') bytesProcessed = message.total_bytes_processed;
     }
     if (message.message_type === 'status' && typeof message.percent_done === 'number') {
       percent = message.percent_done;
@@ -155,5 +163,16 @@ export function parseResticMessages(stdout: string): ResticMessages {
       }
     }
   }
-  return { snapshotId, errorMessage, percent };
+  return { snapshotId, errorMessage, percent, bytesAdded, bytesProcessed };
+}
+
+export function parseResticStats(stdout: string): number | null {
+  const start = stdout.indexOf('{');
+  if (start < 0) return null;
+  try {
+    const parsed = JSON.parse(stdout.slice(start)) as { total_size?: unknown };
+    return typeof parsed.total_size === 'number' && Number.isFinite(parsed.total_size) ? parsed.total_size : null;
+  } catch {
+    return null;
+  }
 }

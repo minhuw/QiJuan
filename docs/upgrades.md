@@ -8,7 +8,7 @@ npm run migrate
 
 The server runs the same step when it starts, before it listens. A migration that is already recorded in `schema_migrations` is not applied again.
 
-The schema version stored in a backup manifest is the name of the latest migration file, for example `0013_job_sources.sql`. Restore refuses a snapshot whose schema version this server does not include, and a snapshot newer than this server. Upgrade QiJuan before restoring that snapshot. See [recovery.md](recovery.md).
+The schema version stored in a backup manifest is the name of the latest migration file, for example `0014_backup_maintenance.sql`. Restore refuses a snapshot whose schema version this server does not include, and a snapshot newer than this server. Upgrade QiJuan before restoring that snapshot. See [recovery.md](recovery.md).
 
 ## Pre-migration copy
 

@@ -4,6 +4,8 @@ Restore is for an administrator. On a machine that still runs QiJuan, open Backu
 
 The check lists what activation will replace: the database (users, grants, shelves, annotations, and reading positions), the application secret, and, for a full backup, managed books and custom covers. Nothing is replaced until you confirm activation.
 
+Test restore, on the same screen, is not this step. It restores into a temporary directory and leaves the current library in place. An integrity check does not restore anything. Neither one is a successful replacement of this installation.
+
 Activation replaces the data directory's database and application secret, runs any pending migrations, and points managed libraries at the new data directory. A full snapshot also replaces managed books and custom covers. A metadata-only snapshot does not delete or replace those files, because that backup did not include them. Sign in again with an account from the snapshot. The temporary administrator created on an empty install is replaced by the snapshot.
 
 ## Fresh install
@@ -15,7 +17,7 @@ Activation replaces the data directory's database and application secret, runs a
 5. Under Restore, enter the recovery password, list snapshots, check the snapshot, read the summary, confirm, and activate.
 6. Sign in with a user from the snapshot. Managed books, shelves, highlights, and reading positions from that snapshot are back.
 
-The acceptance test is this clean-install path against a local S3 server. It does not call Cloudflare, and it does not build a Docker image.
+The acceptance test is this clean-install path against a local S3 server (MinIO). It does not call Cloudflare, and it does not build a Docker image. Live R2 is not claimed as tested.
 
 ## If QiJuan cannot start
 

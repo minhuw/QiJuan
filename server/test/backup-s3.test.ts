@@ -8,6 +8,10 @@ interface MockOptions {
   createStatus: number;
   listStatus: number;
   allowPrefix: string;
+  lifecycleStatus?: number;
+  lifecycleBody?: string;
+  objectLockStatus?: number;
+  objectLockBody?: string;
 }
 
 interface MockServer {
@@ -52,6 +56,22 @@ function startS3(options: MockOptions): Promise<MockServer> {
       const pathname = decodeURIComponent(url.pathname);
       const match = /^\/([^/]+)(?:\/(.*))?$/.exec(pathname);
       const key = match?.[2] ?? '';
+      if (!key && method === 'GET' && url.searchParams.has('lifecycle')) {
+        response.statusCode = options.lifecycleStatus ?? 404;
+        response.end(
+          options.lifecycleBody ??
+            '<Error><Code>NoSuchLifecycleConfiguration</Code><Message>no lifecycle</Message></Error>',
+        );
+        return;
+      }
+      if (!key && method === 'GET' && url.searchParams.has('object-lock')) {
+        response.statusCode = options.objectLockStatus ?? 404;
+        response.end(
+          options.objectLockBody ??
+            '<Error><Code>ObjectLockConfigurationNotFoundError</Code><Message>no lock</Message></Error>',
+        );
+        return;
+      }
       if (!key && method === 'PUT') {
         response.statusCode = options.createStatus;
         if (options.createStatus === 200) {
@@ -211,6 +231,29 @@ describe('S3 connection probe', () => {
     expect(mock.requests.some((line) => line.startsWith('PUT /qijuan-backups/qijuan-connection-probe/') && line.includes('md5=yes'))).toBe(
       true,
     );
+  });
+
+  it('rejects a bucket whose lifecycle would delete or transition backup objects', async () => {
+    const mock = await startS3({
+      createStatus: 200,
+      listStatus: 200,
+      allowPrefix: 'library/qijuan-connection-probe/',
+      lifecycleStatus: 200,
+      lifecycleBody: '<LifecycleConfiguration><Rule><Expiration><Days>7</Days></Expiration></Rule></LifecycleConfiguration>',
+    });
+    await expect(probeDestination(destination(mock.endpoint, 'library'))).rejects.toThrow(/lifecycle/i);
+    expect(mock.objects.size).toBe(0);
+  });
+
+  it('rejects object lock because restic retention has to delete objects', async () => {
+    const mock = await startS3({
+      createStatus: 200,
+      listStatus: 200,
+      allowPrefix: 'library/qijuan-connection-probe/',
+      objectLockStatus: 200,
+      objectLockBody: '<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled></ObjectLockConfiguration>',
+    });
+    await expect(probeDestination(destination(mock.endpoint, 'library'))).rejects.toThrow(/object lock/i);
   });
 
   it('fails when the bucket cannot be created or listed', async () => {

@@ -40,6 +40,19 @@ describe('project layout', () => {
     expect(dockerfile).toMatch(/EXPOSE 8080/);
     expect(dockerfile).toMatch(/HEALTHCHECK/);
     expect(dockerfile).toContain('/health');
+    expect(dockerfile).toContain('restic-release.json');
+    expect(dockerfile).toContain('restic checksum mismatch');
+  });
+
+  it('publishes one amd64 image to GHCR and does not push pull requests', () => {
+    const workflow = readFileSync(path.join(root, '.github/workflows/publish-image.yml'), 'utf8');
+    expect(workflow).toContain('ghcr.io');
+    expect(workflow).toContain('platforms: linux/amd64');
+    expect(workflow).not.toMatch(/linux\/arm/);
+    expect(workflow).toContain('packages: write');
+    expect(workflow).toContain('secrets.GITHUB_TOKEN');
+    expect(workflow).toContain("push: ${{ github.event_name != 'pull_request' }}");
+    expect(workflow).toContain('npm run ci');
   });
 
   it('keeps acceptance tests out of the fast vitest config', () => {
