@@ -37,6 +37,15 @@ export const redactPaths = [
   '*.headers.cookie',
   '*.headers.authorization',
   '*.headers["set-cookie"]',
+  'token',
+  'tokenHash',
+  'opdsSecret',
+  '*.token',
+  '*.tokenHash',
+  '*.opdsSecret',
+  '*.*.token',
+  '*.*.tokenHash',
+  '*.*.opdsSecret',
 ];
 
 export const redactOptions = {

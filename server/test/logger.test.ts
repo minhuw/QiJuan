@@ -24,6 +24,8 @@ describe('log redaction', () => {
           },
         },
         nested: { recoveryPassword: 'nested-rec' },
+        token: 'qjt-plain-token',
+        tokenHash: 'hash-of-opds-token',
       },
       'hello',
     );
@@ -31,7 +33,18 @@ describe('log redaction', () => {
     const out = lines.join('');
     expect(out).toContain('[Redacted]');
     expect(out).toContain('hello');
-    for (const secret of ['sekrit-value', 'pw-value', 'hash-value', 'rec-value', 'cookie-value', 'sid-value', 'auth-value', 'nested-rec']) {
+    for (const secret of [
+      'sekrit-value',
+      'pw-value',
+      'hash-value',
+      'rec-value',
+      'cookie-value',
+      'sid-value',
+      'auth-value',
+      'nested-rec',
+      'qjt-plain-token',
+      'hash-of-opds-token',
+    ]) {
       expect(out).not.toContain(secret);
     }
     expect(redactOptions.censor).toBe('[Redacted]');

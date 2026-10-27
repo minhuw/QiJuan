@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { clearSessionCookie, readCookie, SESSION_COOKIE } from './cookies.js';
 import type { AppDatabase } from './db.js';
+import { authenticateOpdsToken, readBasicAuthorization } from './opds-tokens.js';
 import { readSessionUser, type AuthUser } from './sessions.js';
 
 declare module 'fastify' {
@@ -42,6 +43,7 @@ export function canonicalPath(url: string): string | null {
 /**
  * Setup, login, and health are public. Every other `/api` route needs a session,
  * as do later book, cover, download, search, annotation, and OPDS routes.
+ * OPDS also accepts HTTP Basic with a revocable client token, not the account password.
  * A malformed escape is not public.
  */
 export function routeRequiresSession(method: string, url: string): boolean {
@@ -57,13 +59,32 @@ export function installSessionGuard(app: FastifyInstance, db: AppDatabase): void
     if (request.is404) return;
     if (!routeRequiresSession(request.method, request.url)) return;
     const sessionId = readCookie(request.headers.cookie, SESSION_COOKIE);
-    const user = sessionId ? readSessionUser(db, sessionId) : null;
-    if (!user) {
+    const sessionUser = sessionId ? readSessionUser(db, sessionId) : null;
+    if (sessionUser) {
+      request.authUser = sessionUser;
+      return;
+    }
+    if (isOpdsPath(request.url)) {
+      const basic = readBasicAuthorization(request.headers.authorization);
+      const tokenUser = basic ? authenticateOpdsToken(db, basic.username, basic.password) : null;
+      if (tokenUser) {
+        request.authUser = tokenUser;
+        return;
+      }
       if (sessionId) reply.header('set-cookie', clearSessionCookie(request.protocol === 'https'));
+      reply.header('www-authenticate', 'Basic realm="QiJuan OPDS", charset="UTF-8"');
+      reply.header('cache-control', 'no-store');
       return reply.code(401).send({ error: 'unauthorized' });
     }
-    request.authUser = user;
+    if (sessionId) reply.header('set-cookie', clearSessionCookie(request.protocol === 'https'));
+    return reply.code(401).send({ error: 'unauthorized' });
   });
+}
+
+function isOpdsPath(url: string): boolean {
+  const path = canonicalPath(url);
+  if (!path) return false;
+  return path === '/opds' || path.startsWith('/opds/');
 }
 
 export function requireUser(request: FastifyRequest, reply: FastifyReply): AuthUser | null {

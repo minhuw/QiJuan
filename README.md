@@ -91,6 +91,10 @@ Search matches title, alternate titles, authors, translators, series, tags, and 
 
 The home screen shows continue reading from that user's position, recently added books, and that user's shelves. The same search can be shown as a cover grid or a compact list. Reading status, rating, favorite, shelves, and the queue belong to the signed-in user.
 
+## OPDS
+
+`GET /opds/catalog` is an OPDS 1.2 catalog. The client signs in with HTTP Basic: the QiJuan username and a revocable per-client token, not the account password. The feed lists only libraries that account can read. Reading-progress synchronization is not implemented. Details are in [docs/opds.md](docs/opds.md).
+
 ## Import
 
 Upload EPUB and PDF files into a managed library, or import a directory that stays inside an indexed library root. The request only stores the uploads and enqueues a job. A loop in the same process claims the job. If the process stops while a job is running, that job is queued again on the next startup.

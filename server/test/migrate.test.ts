@@ -32,6 +32,7 @@ describe('migrations', () => {
       '0007_search.sql',
       '0008_note_anchors.sql',
       '0009_reading_revisions.sql',
+      '0010_opds_tokens.sql',
     ]);
     expect(first.backupPath).toBeNull();
 
@@ -55,6 +56,7 @@ describe('migrations', () => {
         'field_locks',
         'edition_suggestions',
         'metadata_previews',
+        'opds_tokens',
       ]),
     );
     sqlite.close();
@@ -138,6 +140,7 @@ describe('migrations', () => {
       '0007_search.sql',
       '0008_note_anchors.sql',
       '0009_reading_revisions.sql',
+      '0010_opds_tokens.sql',
     ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);

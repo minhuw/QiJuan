@@ -370,3 +370,14 @@ export const readingPositions = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
 );
+
+export const opdsTokens = sqliteTable('opds_tokens', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  label: text('label').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdAt: text('created_at').notNull(),
+  revokedAt: text('revoked_at'),
+});
