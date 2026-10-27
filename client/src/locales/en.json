@@ -205,7 +205,15 @@
     "noHighlights": "No highlights yet.",
     "noNotes": "No notes yet.",
     "close": "Close",
-    "selection": "Selected text"
+    "selection": "Selected text",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fitWidth": "Fit width",
+    "zoom": "Zoom",
+    "page": "Page",
+    "thumbnails": "Thumbnails",
+    "outline": "Outline",
+    "scanNoText": "This scanned PDF has no searchable text."
   },
   "errors": {
     "invalid_request": "Check the fields and try again.",

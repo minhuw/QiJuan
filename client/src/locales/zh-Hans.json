@@ -205,7 +205,15 @@
     "noHighlights": "还没有划线。",
     "noNotes": "还没有笔记。",
     "close": "关闭",
-    "selection": "选中的文字"
+    "selection": "选中的文字",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fitWidth": "适合页宽",
+    "zoom": "缩放",
+    "page": "页码",
+    "thumbnails": "缩略图",
+    "outline": "大纲",
+    "scanNoText": "这份扫描版 PDF 没有可搜索的文字。"
   },
   "errors": {
     "invalid_request": "请检查填写内容后再试。",

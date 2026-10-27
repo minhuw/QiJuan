@@ -4,6 +4,7 @@ import { and, asc, eq, isNull } from 'drizzle-orm';
 import { absoluteBlobPath, managedBlobRelativePath } from './blobs.js';
 import { parseEpubCfi } from './cfi.js';
 import { CatalogError } from './catalog.js';
+import { parsePdfLocator } from './pdf-locator.js';
 import type { AppDatabase } from './db.js';
 import { requireLiveEdition } from './editions.js';
 import { resolveInsideRoot } from './library-files.js';
@@ -50,6 +51,7 @@ export interface ReadableAsset {
   absolutePath: string;
   bytes: number;
   filename: string;
+  format: 'epub' | 'pdf';
 }
 
 interface EpubAssetRow {
@@ -125,8 +127,8 @@ export function saveReadingPosition(
   input: { userId: number; editionId: number; assetId: number; locator: string },
   now = new Date(),
 ): StoredPosition {
-  const locator = requireCfi(input.locator);
-  requireEpubAsset(db, input.editionId, input.assetId);
+  const asset = requirePresentAsset(db, input.editionId, input.assetId);
+  const locator = locatorForAsset(asset.format, input.locator);
   const stamp = now.toISOString();
   db.transaction((tx) => {
     const query = tx as unknown as AppDatabase;
@@ -179,8 +181,8 @@ export function addBookmark(
   input: { userId: number; editionId: number; assetId: number; locator: string; label?: string | null },
   now = new Date(),
 ): AnnotationRow {
-  const locator = requireCfi(input.locator);
-  requireEpubAsset(db, input.editionId, input.assetId);
+  const asset = requirePresentAsset(db, input.editionId, input.assetId);
+  const locator = locatorForAsset(asset.format, input.locator);
   const label = cleanOptional(input.label, LABEL_MAX);
   const stamp = now.toISOString();
   const inserted = db
@@ -336,27 +338,33 @@ export function removeNote(db: AppDatabase, userId: number, editionId: number, n
   db.delete(notes).where(eq(notes.id, row.id)).run();
 }
 
-export function openEpubStream(db: AppDatabase, dataDir: string, editionId: number, assetId: number): ReadableAsset {
-  const asset = requireEpubAsset(db, editionId, assetId);
+export function openAssetStream(db: AppDatabase, dataDir: string, editionId: number, assetId: number): ReadableAsset {
+  const asset = requirePresentAsset(db, editionId, assetId);
   const absolutePath = resolveAssetAbsolute(dataDir, asset);
   if (!absolutePath) throw new CatalogError('not_found');
   try {
     const stat = statSync(absolutePath);
     if (!stat.isFile()) throw new CatalogError('not_found');
-    return { absolutePath, bytes: stat.size, filename: asset.originalFilename };
+    return { absolutePath, bytes: stat.size, filename: asset.originalFilename, format: asset.format };
   } catch (error) {
     if (error instanceof CatalogError) throw error;
     throw new CatalogError('not_found');
   }
 }
 
+export function openEpubStream(db: AppDatabase, dataDir: string, editionId: number, assetId: number): ReadableAsset {
+  const file = openAssetStream(db, dataDir, editionId, assetId);
+  if (file.format !== 'epub') throw new CatalogError('not_found');
+  return file;
+}
+
 export function epubReadStream(absolutePath: string): ReadStream {
   return createReadStream(absolutePath);
 }
 
-export function contentDisposition(filename: string): string {
+export function contentDisposition(filename: string, fallback = 'book.epub'): string {
   const cleaned = filename.replace(/[\r\n"]/g, '').trim();
-  const safe = cleaned.length > 0 && cleaned.length <= 200 ? cleaned : 'book.epub';
+  const safe = cleaned.length > 0 && cleaned.length <= 200 ? cleaned : fallback;
   return `inline; filename="${safe}"`;
 }
 
@@ -366,7 +374,16 @@ function requireCfi(value: string): string {
   return locator;
 }
 
-function requireEpubAsset(db: AppDatabase, editionId: number, assetId: number): EpubAssetRow {
+function locatorForAsset(format: 'epub' | 'pdf', value: string): string {
+  if (format === 'pdf') {
+    const locator = parsePdfLocator(value);
+    if (!locator) throw new CatalogError('invalid_request');
+    return locator;
+  }
+  return requireCfi(value);
+}
+
+function requirePresentAsset(db: AppDatabase, editionId: number, assetId: number): EpubAssetRow & { format: 'epub' | 'pdf' } {
   requireLiveEdition(db, editionId);
   if (!Number.isInteger(assetId) || assetId < 1) throw new CatalogError('invalid_request');
   const row = db
@@ -385,7 +402,14 @@ function requireEpubAsset(db: AppDatabase, editionId: number, assetId: number): 
     .innerJoin(libraries, eq(libraries.id, editions.libraryId))
     .where(and(eq(fileAssets.id, assetId), eq(fileAssets.editionId, editionId), isNull(fileAssets.trashedAt)))
     .get();
-  if (!row || row.format !== 'epub' || row.availability !== 'present') throw new CatalogError('not_found');
+  if (!row || row.availability !== 'present') throw new CatalogError('not_found');
+  if (row.format !== 'epub' && row.format !== 'pdf') throw new CatalogError('not_found');
+  return row;
+}
+
+function requireEpubAsset(db: AppDatabase, editionId: number, assetId: number): EpubAssetRow {
+  const row = requirePresentAsset(db, editionId, assetId);
+  if (row.format !== 'epub') throw new CatalogError('not_found');
   return row;
 }
 

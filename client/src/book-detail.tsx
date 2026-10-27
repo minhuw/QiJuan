@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'reac
 import { Link } from 'react-router';
 import { api, apiForm, type EditionDetail, type MetadataPreview } from './api';
 import { EpubReader } from './reader/epub-reader';
+import { PdfReader } from './reader/pdf-reader';
 import { ReadingActions } from './reading-actions';
 import { useLocale } from './shell';
 
@@ -498,7 +499,7 @@ export function ReaderPage({
       </p>
     );
   }
-  if (asset.format !== 'epub' || asset.availability !== 'present') {
+  if (asset.availability !== 'present' || (asset.format !== 'epub' && asset.format !== 'pdf')) {
     return (
       <>
         <div className="toolbar">
@@ -526,7 +527,11 @@ export function ReaderPage({
           {t('account.signOut')}
         </button>
       </div>
-      <EpubReader editionId={edition.id} assetId={asset.id} title={edition.title} />
+      {asset.format === 'pdf' ? (
+        <PdfReader editionId={edition.id} assetId={asset.id} title={edition.title} />
+      ) : (
+        <EpubReader editionId={edition.id} assetId={asset.id} title={edition.title} />
+      )}
     </>
   );
 }

@@ -10,7 +10,7 @@ import {
   contentDisposition,
   epubReadStream,
   loadReadingPlace,
-  openEpubStream,
+  openAssetStream,
   removeBookmark,
   removeHighlight,
   removeNote,
@@ -26,12 +26,13 @@ export function registerReaderRoutes(app: FastifyInstance, deps: { db: AppDataba
       const editionId = accessEdition(deps.db, user, (request.params as { editionId?: string }).editionId);
       const assetId = parseId((request.params as { assetId?: string }).assetId);
       if (!assetId) return reply.code(400).send({ error: 'invalid_request' });
-      const file = openEpubStream(deps.db, deps.dataDir, editionId, assetId);
-      reply.header('content-type', 'application/epub+zip');
+      const file = openAssetStream(deps.db, deps.dataDir, editionId, assetId);
+      const pdf = file.format === 'pdf';
+      reply.header('content-type', pdf ? 'application/pdf' : 'application/epub+zip');
       reply.header('content-length', file.bytes);
       reply.header('cache-control', 'private, no-store');
       reply.header('x-content-type-options', 'nosniff');
-      reply.header('content-disposition', contentDisposition(file.filename));
+      reply.header('content-disposition', contentDisposition(file.filename, pdf ? 'book.pdf' : 'book.epub'));
       return reply.send(epubReadStream(file.absolutePath));
     } catch (error) {
       return sendError(reply, error);

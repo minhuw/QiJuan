@@ -108,6 +108,10 @@ export async function buildApp(options: BuildAppOptions) {
         root: clientDist,
         prefix: '/',
         wildcard: false,
+        setHeaders(res, filePath) {
+          if (filePath.endsWith('.mjs')) res.setHeader('content-type', 'text/javascript; charset=utf-8');
+          else if (filePath.endsWith('.wasm')) res.setHeader('content-type', 'application/wasm');
+        },
       });
 
       app.setNotFoundHandler((request, reply) => {

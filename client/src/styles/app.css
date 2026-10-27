@@ -524,3 +524,78 @@ h2 {
     grid-template-columns: 1fr;
   }
 }
+
+.notice {
+  margin: 0.75rem 0 0;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  padding: 0.65rem 0.8rem;
+}
+
+.pdf-stage {
+  position: relative;
+  overflow: hidden;
+}
+
+.pdf-scroller {
+  height: 100%;
+  overflow: auto;
+  background: var(--paper);
+}
+
+.pdf-page {
+  position: relative;
+  margin: 0 auto;
+}
+
+.pdf-page canvas {
+  display: block;
+  background: var(--paper-raised);
+}
+
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  z-index: 2;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.pdf-thumbs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pdf-thumb {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: center;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  padding: 0.35rem;
+  cursor: pointer;
+}
+
+.pdf-thumb[aria-current='page'] {
+  border-color: var(--vermilion);
+}
+
+.pdf-thumb canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  background: var(--paper-raised);
+}
