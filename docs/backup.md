@@ -72,4 +72,4 @@ An integrity check is `restic check`. It is scheduled after the first successful
 
 A restore test is separate. It restores the newest snapshot into a temporary directory, reads the manifest, and checks the database and managed files. It then deletes that directory. The library is not replaced. Use Restore on the same screen when you mean to replace this installation, and only after the preview.
 
-The Dockerfile installs the pinned restic binary and checks its SHA-256 during the image build. That pin is the amd64 build. This repository has not recorded a finished image build. Set `QIJUAN_RESTIC_BIN` when you run QiJuan outside that image.
+The Dockerfile installs the pinned restic binary and checks its SHA-256 during the image build. That pin is the amd64 build. Set `QIJUAN_RESTIC_BIN` when you run QiJuan outside that image.
