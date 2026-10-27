@@ -66,7 +66,7 @@ Secrets, cookies, passwords, and recovery passwords are redacted in logs.
 
 ## Docker
 
-The image uses the multi-arch `node:22-bookworm` base, exposes port 8080, and checks `GET /health`. Compose runs a service named `qijuan` with a persistent data volume:
+The Dockerfile uses `node:22-bookworm`, exposes port 8080, and checks `GET /health`. Compose runs a service named `qijuan` with a persistent data volume. A multi-arch image build was not run; see [docs/limitations.md](docs/limitations.md).
 
 ```bash
 docker compose up --build
@@ -79,7 +79,18 @@ npm run ci
 npm run test:acceptance
 ```
 
-`npm run ci` typechecks, runs the fast test suite, and builds the client and server. Acceptance tests cover backup, restore, and performance only, and do not run during `npm test`.
+`npm run ci` typechecks, runs the fast test suite, and builds the client and server. Acceptance tests cover backup, restore, and performance only, and do not run during `npm test`. The performance test records a 10,000-edition run in [docs/performance.md](docs/performance.md).
+
+## Documentation
+
+- [Development setup](docs/development.md)
+- [Migrations and failed-upgrade recovery](docs/upgrades.md)
+- [Backup: S3, the R2 preset, and retention of 7 daily, 4 weekly, and 6 monthly snapshots](docs/backup.md)
+- [Fresh-install restore, and restic when QiJuan cannot start](docs/recovery.md)
+- [Annotation export](docs/export.md)
+- [OPDS 1.2, without reading-progress sync](docs/opds.md)
+- [Limitations](docs/limitations.md)
+- [Performance](docs/performance.md)
 
 ## Architecture
 

@@ -241,7 +241,7 @@ export function BookDetail({
     };
 
   return (
-    <>
+    <div className="book-page">
       <div className="toolbar">
         <Link className="text-link" to="/">
           {t('book.back')}
@@ -250,12 +250,24 @@ export function BookDetail({
           {t('account.signOut')}
         </button>
       </div>
-      <h1>{edition.title}</h1>
-      {edition.authors.length > 0 ? <p className="byline">{edition.authors.join(', ')}</p> : null}
-      {edition.translators.length > 0 ? (
-        <p className="byline">{edition.translators.join(', ')}</p>
-      ) : null}
-      {edition.description ? <p>{edition.description}</p> : null}
+      <div className="book-hero">
+        {edition.cover ? (
+          <img className="cover-preview" alt="" src={`/api/editions/${edition.id}/cover`} />
+        ) : (
+          <span className="cover-fallback">
+            <span className="cover-fallback-title">{edition.title}</span>
+            {edition.authors[0] ? <span className="cover-fallback-author">{edition.authors[0]}</span> : null}
+          </span>
+        )}
+        <div className="book-hero-copy">
+          <h1>{edition.title}</h1>
+          {edition.authors.length > 0 ? <p className="byline">{edition.authors.join(', ')}</p> : null}
+          {edition.translators.length > 0 ? (
+            <p className="byline">{edition.translators.join(', ')}</p>
+          ) : null}
+          {edition.description ? <p>{edition.description}</p> : null}
+        </div>
+      </div>
       <ReadingActions
         edition={edition}
         onEdition={(next) => {
@@ -272,9 +284,6 @@ export function BookDetail({
 
       <section className="import-block">
         <h2>{t('book.cover')}</h2>
-        {edition.cover ? (
-          <img className="cover-preview" alt="" src={`/api/editions/${edition.id}/cover`} />
-        ) : null}
         {locks.has('cover') ? <p className="hint">{t('book.locked')}</p> : null}
         <form className="form" onSubmit={(event) => void replaceCover(event)}>
           <label className="field" htmlFor={`${baseId}-cover`}>
@@ -456,7 +465,7 @@ export function BookDetail({
           ) : null}
         </section>
       ) : null}
-    </>
+    </div>
   );
 }
 

@@ -34,6 +34,7 @@ describe('migrations', () => {
       '0009_reading_revisions.sql',
       '0010_opds_tokens.sql',
       '0011_backup.sql',
+      '0012_library_sort.sql',
     ]);
     expect(first.backupPath).toBeNull();
 
@@ -143,6 +144,7 @@ describe('migrations', () => {
       '0009_reading_revisions.sql',
       '0010_opds_tokens.sql',
       '0011_backup.sql',
+      '0012_library_sort.sql',
     ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);

@@ -313,7 +313,7 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
   }
 
   return (
-    <>
+    <div className="backup-page">
       <p className="tagline">{t('brand.tagline')}</p>
       <h1>{t('backup.title')}</h1>
       <div className="toolbar">
@@ -597,7 +597,7 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
           </div>
         ) : null}
       </section>
-    </>
+    </div>
   );
 }
 

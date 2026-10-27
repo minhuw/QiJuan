@@ -151,7 +151,11 @@ export function ImportScreen({
       ) : null}
       {jobs === null && !error ? <p role="status">{t('status.loading')}</p> : null}
       {jobs && jobs.length === 0 ? <p className="placeholder">{t('import.empty')}</p> : null}
-      {running ? <p role="status">{t('import.running')}</p> : null}
+      {running ? (
+        <p className="import-progress" role="status">
+          {t('import.running')}
+        </p>
+      ) : null}
       {jobs?.map((job) => (
         <section key={job.id} className="import-block">
           <h2>{t('import.summary')}</h2>
