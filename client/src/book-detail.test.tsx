@@ -93,7 +93,12 @@ describe('book detail', () => {
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('link', { name: `${catalogs.en.book.read} EPUB` }));
-    expect(await screen.findByText(catalogs.en.book.readPlaceholder)).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: catalogs.en.reader.backToBook })).toHaveAttribute(
+      'href',
+      '/books/3',
+    );
+    expect(screen.getByRole('link', { name: catalogs.en.reader.library })).toHaveAttribute('href', '/');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
 
     window.history.pushState({}, '', '/books/3');
     cleanup();

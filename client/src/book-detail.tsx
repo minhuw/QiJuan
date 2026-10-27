@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { api, apiForm, type EditionDetail, type MetadataPreview } from './api';
+import { EpubReader } from './reader/epub-reader';
 import { ReadingActions } from './reading-actions';
 import { useLocale } from './shell';
 
@@ -497,21 +498,35 @@ export function ReaderPage({
       </p>
     );
   }
+  if (asset.format !== 'epub' || asset.availability !== 'present') {
+    return (
+      <>
+        <div className="toolbar">
+          <Link className="text-link" to={`/books/${edition.id}`}>
+            {t('book.back')}
+          </Link>
+          <button type="button" className="button button-secondary" onClick={onSignOut}>
+            {t('account.signOut')}
+          </button>
+        </div>
+        <h1>{edition.title}</h1>
+        <p>
+          {t('book.read')} {asset.format.toUpperCase()}
+        </p>
+        <p className="placeholder">
+          {asset.availability === 'missing' ? t('book.missing') : t('book.readPlaceholder')}
+        </p>
+      </>
+    );
+  }
   return (
     <>
       <div className="toolbar">
-        <Link className="text-link" to={`/books/${edition.id}`}>
-          {t('book.back')}
-        </Link>
         <button type="button" className="button button-secondary" onClick={onSignOut}>
           {t('account.signOut')}
         </button>
       </div>
-      <h1>{edition.title}</h1>
-      <p>
-        {t('book.read')} {asset.format.toUpperCase()}
-      </p>
-      <p className="placeholder">{t('book.readPlaceholder')}</p>
+      <EpubReader editionId={edition.id} assetId={asset.id} title={edition.title} />
     </>
   );
 }

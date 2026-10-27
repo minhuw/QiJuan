@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "epubjs": "https://codeload.github.com/futurepress/epub.js/tar.gz/eee359d0790002115a1156a9833c54f4bcd44c1d",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router": "^7.9.4"

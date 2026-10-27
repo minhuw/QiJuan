@@ -10,6 +10,7 @@ import { openDatabase } from './db.js';
 import { registerEditionRoutes } from './edition-routes.js';
 import { registerImportRoutes } from './import-routes.js';
 import { registerLibraryRoutes } from './library-routes.js';
+import { registerReaderRoutes } from './reader-routes.js';
 import type { OpenLibraryTransport } from './metadata/openLibrary.js';
 import { requeueInterruptedJobs, startJobWorker } from './jobs.js';
 import { redactOptions } from './logger.js';
@@ -99,6 +100,7 @@ export async function buildApp(options: BuildAppOptions) {
       openLibrary: options.openLibrary ?? {},
     });
     registerLibraryRoutes(app, { db });
+    registerReaderRoutes(app, { db, dataDir: options.config.dataDir });
 
     const clientDist = options.clientDist === undefined ? defaultClientDist() : options.clientDist;
     if (clientDist && existsSync(clientDist)) {

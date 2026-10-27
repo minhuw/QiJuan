@@ -344,6 +344,8 @@ export const notes = sqliteTable('notes', {
   editionId: integer('edition_id')
     .notNull()
     .references(() => editions.id, { onDelete: 'cascade' }),
+  assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
+  locator: text('locator'),
   body: text('body').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
