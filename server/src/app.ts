@@ -97,7 +97,10 @@ export async function buildApp(options: BuildAppOptions) {
     registerEditionRoutes(app, {
       db,
       dataDir: options.config.dataDir,
-      openLibrary: options.openLibrary ?? {},
+      openLibrary: {
+        origin: options.config.openLibraryOrigin,
+        ...options.openLibrary,
+      },
     });
     registerLibraryRoutes(app, { db });
     registerReaderRoutes(app, { db, dataDir: options.config.dataDir });

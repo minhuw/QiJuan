@@ -300,6 +300,11 @@ export function BookDetail({
             </li>
           ))}
         </ul>
+        <p>
+          <a href={`/api/editions/${edition.id}/annotations?format=markdown`}>{t('book.exportMarkdown')}</a>
+          {' · '}
+          <a href={`/api/editions/${edition.id}/annotations?format=json`}>{t('book.exportJson')}</a>
+        </p>
       </section>
 
       {edition.series ? (

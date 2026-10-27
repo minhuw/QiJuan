@@ -122,7 +122,9 @@
     "confirm": "应用所选",
     "noSuggestion": "没有建议。",
     "readPlaceholder": "阅读器尚未提供。",
-    "missing": "缺失"
+    "missing": "缺失",
+    "exportMarkdown": "导出划线与笔记（Markdown）",
+    "exportJson": "导出划线与笔记（JSON）"
   },
   "library": {
     "search": "搜索",
@@ -213,7 +215,8 @@
     "page": "页码",
     "thumbnails": "缩略图",
     "outline": "大纲",
-    "scanNoText": "这份扫描版 PDF 没有可搜索的文字。"
+    "scanNoText": "这份扫描版 PDF 没有可搜索的文字。",
+    "newerKept": "已保留较新的修改。"
   },
   "errors": {
     "invalid_request": "请检查填写内容后再试。",

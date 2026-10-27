@@ -155,10 +155,80 @@ describe('epub reader', () => {
     await waitFor(() => expect(puts).toEqual([movedCfi]));
     emit('epubcfi(/6/12!/4/1:0)');
     view.unmount();
-    expect(puts).toEqual([movedCfi, 'epubcfi(/6/12!/4/1:0)']);
+    await waitFor(() => expect(puts).toEqual([movedCfi, 'epubcfi(/6/12!/4/1:0)']));
     for (const locator of puts) {
       expect(locator.startsWith('epubcfi(')).toBe(true);
       expect(locator.endsWith('%')).toBe(false);
     }
+  });
+
+  it('reloads server state when a newer change was kept and does not retry the stale body', async () => {
+    const keptCfi = 'epubcfi(/6/14!/4/2:8)';
+    const pageStartCfi = 'epubcfi(/6/14!/4/2:0)';
+    const duringReloadCfi = 'epubcfi(/6/2!/4/1:0)';
+    const harness = install();
+    // epub.js resolves display(), then queues reportLocation, which emits relocated
+    // on a later frame with the visible page start — not the CFI passed in.
+    harness.session.display.mockImplementation(() => {
+      let resolveDisplayed: () => void = () => {};
+      const displayed = new Promise<void>((resolve) => {
+        resolveDisplayed = resolve;
+      });
+      queueMicrotask(() => {
+        resolveDisplayed();
+        queueMicrotask(() => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => harness.emit(pageStartCfi));
+          });
+        });
+      });
+      return displayed;
+    });
+    const puts: Array<{ locator: string; revision: number }> = [];
+    let gets = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith('/file')) return new Response(new Uint8Array([1, 2, 3, 4]));
+        if (url.endsWith('/reading-place') && (!init?.method || init.method === 'GET')) {
+          gets += 1;
+          if (gets > 1) harness.emit(duringReloadCfi);
+          const locator = gets === 1 ? savedCfi : keptCfi;
+          const revision = gets === 1 ? 4 : 9;
+          return json({
+            position: { locator, revision, assetId: 9, updatedAt: '2026-01-01T00:00:00.000Z' },
+            bookmarks: [],
+            highlights: [],
+            notes: [],
+          });
+        }
+        if (url.endsWith('/reading-place') && init?.method === 'PUT') {
+          puts.push(JSON.parse(String(init.body)) as { locator: string; revision: number });
+          return json(
+            {
+              error: 'conflict',
+              position: { locator: keptCfi, revision: 9, assetId: 9, updatedAt: '2026-01-02T00:00:00.000Z' },
+            },
+            409,
+          );
+        }
+        return json({ error: 'not_found' }, 404);
+      }),
+    );
+    renderReader('en');
+    expect(await screen.findByRole('combobox', { name: catalogs.en.reader.fontSize })).toBeEnabled();
+    harness.emit(movedCfi);
+    await waitFor(() => expect(puts).toEqual([expect.objectContaining({ locator: movedCfi, revision: 4 })]));
+    expect(await screen.findByText(catalogs.en.reader.newerKept)).toBeInTheDocument();
+    expect(harness.session.display).toHaveBeenCalledWith(keptCfi);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(puts).toEqual([expect.objectContaining({ locator: movedCfi, revision: 4 })]);
+    expect(puts.some((put) => put.locator === pageStartCfi || put.locator === duringReloadCfi)).toBe(false);
+    expect(gets).toBeGreaterThanOrEqual(2);
+    const laterCfi = 'epubcfi(/6/16!/4/2:1)';
+    harness.emit(laterCfi);
+    await waitFor(() => expect(puts.map((put) => put.locator)).toContain(laterCfi));
+    expect(puts.find((put) => put.locator === laterCfi)).toMatchObject({ revision: 9 });
   });
 });

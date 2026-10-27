@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { api } from '../api';
+import { api, type ApiResult } from '../api';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
 import { formatPdfLocator, parsePdfPlace, type PdfPlace } from './pdf/locator';
@@ -23,6 +23,7 @@ interface Bookmark {
   id: number;
   locator: string;
   label: string | null;
+  revision: number;
 }
 
 interface ReadingPlace {
@@ -66,13 +67,22 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
   const sessionRef = useRef<PdfSession | null>(null);
   const placeRef = useRef<PdfPlace | null>(null);
   const savedRef = useRef<string | null>(null);
-  const saverRef = useRef<{ push: (locator: string) => void; flush: () => void } | null>(null);
+  const saverRef = useRef<{ push: (locator: string) => void; flush: () => void; cancel: () => void } | null>(null);
+  const revisionRef = useRef(0);
+  const generationRef = useRef(0);
+  const chainRef = useRef(Promise.resolve());
+  const chainIdle = useRef(true);
   const renderedRef = useRef<RenderedPage | null>(null);
   const suppressScroll = useRef(false);
+  const holdRef = useRef(false);
+  const echoEpoch = useRef(0);
+  const heldEcho = useRef<{ token: number; epoch: number } | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const widthRef = useRef(0);
   const thumbs = useRef(new Map<number, HTMLCanvasElement>());
   const thumbTickets = useRef(new Map<number, number>());
   const [error, setError] = useState<string | null>(null);
+  const [keptNewer, setKeptNewer] = useState(false);
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<PdfPlace | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -89,12 +99,36 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
   const [pageDraft, setPageDraft] = useState('1');
 
   function remember(place: PdfPlace) {
+    if (holdRef.current) return;
     const locator = formatPdfLocator(place);
     if (!locator) return;
     placeRef.current = place;
     if (locator === savedRef.current) return;
     savedRef.current = locator;
     saverRef.current?.push(locator);
+  }
+
+  function releaseHeldEcho(token: number) {
+    const held = heldEcho.current;
+    if (!held || held.token !== token) return;
+    heldEcho.current = null;
+    if (holdTimer.current !== null) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+    // The restore sets scrollTop, and the scroll event can land on a later frame.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (generationRef.current !== token) return;
+        holdRef.current = false;
+      });
+    });
+  }
+
+  function settleHeldEcho(epoch: number) {
+    const held = heldEcho.current;
+    if (!held || held.epoch !== epoch) return;
+    releaseHeldEcho(held.token);
   }
 
   useEffect(() => {
@@ -104,10 +138,42 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     if (!scroller || !canvas || !textLayer) return;
     let alive = true;
     const saver = createDebouncedSave(POSITION_SAVE_DELAY_MS, (locator) => {
-      void api(`/api/editions/${editionId}/reading-place`, {
-        method: 'PUT',
-        body: { locator, assetId },
+      const ticket = generationRef.current;
+      const run = async () => {
+        if (ticket !== generationRef.current) return;
+        const result = await api<{ position: { locator: string; revision: number } }>(
+          `/api/editions/${editionId}/reading-place`,
+          { method: 'PUT', body: { locator, assetId, revision: revisionRef.current } },
+        );
+        if (!alive || ticket !== generationRef.current) return;
+        if (result.status === 409) {
+          const reloaded = await reloadReading(true);
+          if (!alive) return;
+          if (reloaded) {
+            setKeptNewer(true);
+            setError(null);
+          }
+          return;
+        }
+        if (result.error || !result.data?.position) {
+          setError(result.error ?? 'internal');
+          return;
+        }
+        revisionRef.current = result.data.position.revision;
+        savedRef.current = result.data.position.locator;
+      };
+      if (chainIdle.current) {
+        chainIdle.current = false;
+        const promise = run().finally(() => {
+          if (chainRef.current === promise) chainIdle.current = true;
+        });
+        chainRef.current = promise;
+        return;
+      }
+      const promise = chainRef.current.then(run, run).finally(() => {
+        if (chainRef.current === promise) chainIdle.current = true;
       });
+      chainRef.current = promise;
     });
     saverRef.current = saver;
 
@@ -124,7 +190,10 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
       }
       const bytes = await fileResponse.arrayBuffer();
       if (!alive) return;
-      if (place.data) setBookmarks(place.data.bookmarks);
+      if (place.data) {
+        setBookmarks(place.data.bookmarks);
+        revisionRef.current = place.data.position?.revision ?? 0;
+      }
       try {
         const session = await openPdfSession(bytes);
         if (!alive) {
@@ -158,6 +227,10 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
 
     return () => {
       alive = false;
+      if (holdTimer.current !== null) {
+        clearTimeout(holdTimer.current);
+        holdTimer.current = null;
+      }
       saver.flush();
       saverRef.current = null;
       void sessionRef.current?.destroy();
@@ -180,11 +253,16 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     const shell = pageRef.current;
     if (!ready || !session || !place || !canvas || !textLayer || !scroller || !shell) return;
     let cancel = false;
+    const epoch = echoEpoch.current;
     const width = scroller.clientWidth || 640;
     void session
       .renderPage({ page: place.page, zoom: place.zoom, containerWidth: width, canvas, textLayer })
       .then((rendered) => {
-        if (cancel || !rendered) return;
+        if (cancel) return;
+        if (!rendered) {
+          settleHeldEcho(epoch);
+          return;
+        }
         const current = placeRef.current;
         if (!current || current.page !== place.page || current.zoom !== place.zoom) return;
         renderedRef.current = rendered;
@@ -197,6 +275,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
         scroller.scrollTop = point.y;
         suppressScroll.current = false;
         remember(current);
+        settleHeldEcho(epoch);
         setError((previous) => (previous === 'internal' ? null : previous));
       })
       .catch(() => {
@@ -204,6 +283,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
         const current = placeRef.current;
         if (!current || current.page !== place.page || current.zoom !== place.zoom) return;
         setError('internal');
+        settleHeldEcho(epoch);
       });
     return () => {
       cancel = true;
@@ -215,7 +295,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     if (!ready || !scroller) return;
     const node: HTMLDivElement = scroller;
     function onScroll() {
-      if (suppressScroll.current) return;
+      if (suppressScroll.current || holdRef.current) return;
       const rendered = renderedRef.current;
       const place = placeRef.current;
       if (!rendered || !place) return;
@@ -319,6 +399,69 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     setView({ ...current, zoom });
   }
 
+  async function reloadReading(adoptPosition: boolean): Promise<boolean> {
+    generationRef.current += 1;
+    const token = generationRef.current;
+    saverRef.current?.cancel();
+    holdRef.current = true;
+    heldEcho.current = null;
+    if (holdTimer.current !== null) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+    let handed = false;
+    try {
+      const place = await api<ReadingPlace>(`/api/editions/${editionId}/reading-place`);
+      if (place.error || !place.data) {
+        setError(place.error ?? 'network');
+        return false;
+      }
+      setBookmarks(place.data.bookmarks);
+      const position = place.data.position;
+      revisionRef.current = position?.revision ?? 0;
+      if (adoptPosition && position) {
+        const parsed = parsePdfPlace(position.locator);
+        if (parsed) {
+          const canonical = formatPdfLocator(parsed);
+          if (canonical) savedRef.current = canonical;
+          placeRef.current = parsed;
+          setPageDraft(String(parsed.page));
+          // Ignore scroll and remember until this restore has been painted.
+          // A scroll during the GET would otherwise be written with this revision.
+          echoEpoch.current += 1;
+          heldEcho.current = { token, epoch: echoEpoch.current };
+          holdTimer.current = setTimeout(() => releaseHeldEcho(token), 5000);
+          handed = true;
+          setView(parsed);
+        }
+      }
+      return true;
+    } finally {
+      if (!handed) {
+        holdRef.current = false;
+        heldEcho.current = null;
+      }
+    }
+  }
+
+  async function settle<T>(result: ApiResult<T>): Promise<T | null | undefined> {
+    if (result.status === 409) {
+      const reloaded = await reloadReading(true);
+      if (reloaded) {
+        setKeptNewer(true);
+        setError(null);
+      }
+      return undefined;
+    }
+    if (result.error) {
+      setError(result.error);
+      return null;
+    }
+    setError(null);
+    setKeptNewer(false);
+    return result.data;
+  }
+
   async function addBookmark() {
     const place = placeRef.current;
     if (!place) return;
@@ -326,24 +469,22 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     if (!locator) return;
     const result = await api<{ bookmark: Bookmark }>(`/api/editions/${editionId}/bookmarks`, {
       method: 'POST',
-      body: { locator, assetId },
+      body: { locator, assetId, revision: 0 },
     });
-    if (result.error || !result.data?.bookmark) {
-      setError(result.error ?? 'internal');
-      return;
-    }
-    setError(null);
-    setBookmarks((items) => [...items, result.data!.bookmark]);
+    const data = await settle(result);
+    if (!data?.bookmark) return;
+    setBookmarks((items) => [...items, data.bookmark]);
     setPanel('bookmarks');
   }
 
-  async function removeBookmark(id: number) {
-    const result = await api(`/api/editions/${editionId}/bookmarks/${id}`, { method: 'DELETE' });
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setBookmarks((items) => items.filter((item) => item.id !== id));
+  async function removeBookmark(item: Bookmark) {
+    const result = await api(`/api/editions/${editionId}/bookmarks/${item.id}`, {
+      method: 'DELETE',
+      body: { revision: item.revision },
+    });
+    const data = await settle(result);
+    if (data === undefined || result.error) return;
+    setBookmarks((items) => items.filter((mark) => mark.id !== item.id));
   }
 
   async function runSearch(event: FormEvent) {
@@ -395,6 +536,11 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
       {searchable === false ? (
         <p className="notice" role="status">
           {t('reader.scanNoText')}
+        </p>
+      ) : null}
+      {keptNewer ? (
+        <p className="notice" role="status">
+          {t('reader.newerKept')}
         </p>
       ) : null}
       <div className="reader-controls">
@@ -554,7 +700,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
                         >
                           {label}
                         </button>
-                        <button type="button" className="button button-secondary" onClick={() => void removeBookmark(item.id)}>
+                        <button type="button" className="button button-secondary" onClick={() => void removeBookmark(item)}>
                           {t('reader.remove')}
                         </button>
                       </li>

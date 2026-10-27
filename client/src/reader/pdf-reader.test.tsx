@@ -192,7 +192,7 @@ describe('pdf reader', () => {
     await waitFor(() => expect(puts).toEqual(['pdfpos(page=5;x=0;y=400;zoom=1.5)']));
     fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.fitWidth }));
     view.unmount();
-    expect(puts.at(-1)).toBe('pdfpos(page=5;x=0;y=400;fit=width)');
+    await waitFor(() => expect(puts.at(-1)).toBe('pdfpos(page=5;x=0;y=400;fit=width)'));
     for (const locator of puts) {
       expect(locator.includes('%')).toBe(false);
       expect(parsePdfPlace(locator)?.page).toBe(5);
@@ -248,5 +248,54 @@ describe('pdf reader', () => {
       expect(canvases.length).toBeGreaterThan(0);
       for (const canvas of canvases) expect(canvas.hidden).toBe(false);
     });
+  });
+
+  it('keeps a newer pdf position instead of sending the stale page again', async () => {
+    const session = sessionFor();
+    vi.mocked(openPdfSession).mockResolvedValue(session);
+    const puts: Array<{ locator: string; revision: number }> = [];
+    let gets = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith('/file')) return new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+        if (url.endsWith('/reading-place') && (!init?.method || init.method === 'GET')) {
+          gets += 1;
+          if (gets > 1) {
+            const scroller = document.querySelector('.pdf-scroller');
+            if (scroller instanceof HTMLElement) {
+              scroller.scrollTop = 80;
+              scroller.dispatchEvent(new Event('scroll'));
+            }
+          }
+          return json({
+            position: { locator: saved, revision: gets === 1 ? 2 : 6, assetId: 10, updatedAt: '2026-01-01T00:00:00.000Z' },
+            bookmarks: [],
+            highlights: [],
+            notes: [],
+          });
+        }
+        if (url.endsWith('/reading-place') && init?.method === 'PUT') {
+          puts.push(JSON.parse(String(init.body)) as { locator: string; revision: number });
+          return json({ error: 'conflict', position: { locator: saved, revision: 6, assetId: 10, updatedAt: '2026-01-02T00:00:00.000Z' } }, 409);
+        }
+        return json({ error: 'not_found' }, 404);
+      }),
+    );
+    renderReader('en');
+    expect(await screen.findByRole('button', { name: 'Chapter' })).toBeInTheDocument();
+    await waitFor(() => expect(session.renderPage).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.nextPage }));
+    await waitFor(() =>
+      expect(puts).toEqual([expect.objectContaining({ locator: 'pdfpos(page=5;x=0;y=400;zoom=1.5)', revision: 2 })]),
+    );
+    expect(await screen.findByText(catalogs.en.reader.newerKept)).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(puts).toHaveLength(1);
+    expect(gets).toBeGreaterThanOrEqual(2);
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.nextPage }));
+    await waitFor(() => expect(puts).toHaveLength(2));
+    expect(puts[1]).toMatchObject({ locator: 'pdfpos(page=5;x=0;y=400;zoom=1.5)', revision: 6 });
   });
 });

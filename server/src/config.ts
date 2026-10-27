@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyServerOptions } from 'fastify';
+import { OPEN_LIBRARY_ORIGIN } from './metadata/openLibrary.js';
 import { defaultMigrationsDir } from './paths.js';
 
 const SECRET_FILE = 'session.secret';
@@ -20,12 +21,15 @@ export interface AppConfig {
   databasePath: string;
   migrationsDir: string;
   maxUploadBytes: number;
+  /** Base URL for Open Library. Reading a stored book does not call it. */
+  openLibraryOrigin: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const port = parsePort(env.QIJUAN_PORT);
   const trustProxy = parseTrustProxy(env.QIJUAN_TRUST_PROXY);
   const maxUploadBytes = parseMaxUploadBytes(env.QIJUAN_MAX_UPLOAD_BYTES);
+  const openLibraryOrigin = parseHttpOrigin(env.QIJUAN_OPEN_LIBRARY_ORIGIN, OPEN_LIBRARY_ORIGIN);
   const dataDir = path.resolve(env.QIJUAN_DATA_DIR?.trim() || './data');
   const libraryPaths = parseLibraryPaths(env.QIJUAN_LIBRARY_PATHS, dataDir);
   const databasePath = path.join(dataDir, 'qijuan.sqlite');
@@ -45,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databasePath,
     migrationsDir,
     maxUploadBytes,
+    openLibraryOrigin,
   };
 }
 
@@ -89,6 +94,20 @@ export function parseLibraryPaths(value: string | undefined, dataDir: string): s
     .filter((part) => part.length > 0)
     .map((part) => path.resolve(part));
   return parts.length > 0 ? parts : fallback;
+}
+
+export function parseHttpOrigin(value: string | undefined, fallback: string): string {
+  const raw = value === undefined || value.trim() === '' ? fallback : value.trim();
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`Invalid QIJUAN_OPEN_LIBRARY_ORIGIN: ${value}`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`Invalid QIJUAN_OPEN_LIBRARY_ORIGIN: ${value}`);
+  }
+  return url.origin;
 }
 
 export function parseMaxUploadBytes(value: string | undefined): number {

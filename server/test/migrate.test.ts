@@ -31,6 +31,7 @@ describe('migrations', () => {
       '0006_contributor_display_name.sql',
       '0007_search.sql',
       '0008_note_anchors.sql',
+      '0009_reading_revisions.sql',
     ]);
     expect(first.backupPath).toBeNull();
 
@@ -136,6 +137,7 @@ describe('migrations', () => {
       '0006_contributor_display_name.sql',
       '0007_search.sql',
       '0008_note_anchors.sql',
+      '0009_reading_revisions.sql',
     ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);

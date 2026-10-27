@@ -60,6 +60,7 @@ The production server listens on `QIJUAN_PORT` (default 8080) and serves `client
 | `QIJUAN_SESSION_SECRET` | persisted file | When unset, a secret is written to `session.secret` inside the data directory (mode `0600`) and reused. |
 | `QIJUAN_LIBRARY_PATHS` | `<data dir>/library` | Book library locations, separated by the platform path delimiter (`:` on Linux). |
 | `QIJUAN_MAX_UPLOAD_BYTES` | `134217728` (128 MiB) | Maximum size of one file in a multipart import. |
+| `QIJUAN_OPEN_LIBRARY_ORIGIN` | `https://openlibrary.org` | Optional metadata provider. Browsing, opening a stored book, and saving progress do not call it. No backup destination is required. |
 
 Secrets, cookies, passwords, and recovery passwords are redacted in logs.
 

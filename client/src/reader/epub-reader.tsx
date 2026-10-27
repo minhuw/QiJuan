@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { api } from '../api';
+import { api, type ApiResult } from '../api';
 import { isSavedEpubLocator } from './epub/cfi';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
@@ -26,18 +26,21 @@ interface Bookmark {
   id: number;
   locator: string;
   label: string | null;
+  revision: number;
 }
 
 interface Highlight {
   id: number;
   locator: string;
   quote: string | null;
+  revision: number;
 }
 
 interface Note {
   id: number;
   locator: string | null;
   body: string;
+  revision: number;
 }
 
 interface ReadingPlace {
@@ -54,6 +57,22 @@ const INITIAL_TYPE: Typography = {
   margin: '1.5rem',
   theme: 'paper',
 };
+
+/**
+ * epub.js resolves display(), then runs reportLocation on a later queue frame
+ * and emits relocated on the animation frame after that. The caller resumes
+ * before that queue frame is scheduled, so ignore moves for one frame past the
+ * echo. The event carries the visible page start, not the CFI passed to display().
+ */
+function afterRelocatedEcho(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+  });
+}
 
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
@@ -83,8 +102,14 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
   const cfiRef = useRef<string | null>(null);
   const savedRef = useRef<string | null>(null);
   const typeRef = useRef<Typography>(INITIAL_TYPE);
-  const saverRef = useRef<{ flush: () => void } | null>(null);
+  const saverRef = useRef<{ flush: () => void; cancel: () => void } | null>(null);
+  const revisionRef = useRef(0);
+  const generationRef = useRef(0);
+  const chainRef = useRef(Promise.resolve());
+  const chainIdle = useRef(true);
+  const holdRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [keptNewer, setKeptNewer] = useState(false);
   const [ready, setReady] = useState(false);
   const [flow, setFlow] = useState<ReaderFlow>('paginated');
   const [font, setFont] = useState<ReaderFont>(INITIAL_TYPE.font);
@@ -104,15 +129,98 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
 
+  async function reloadReading(adoptPosition: boolean): Promise<boolean> {
+    generationRef.current += 1;
+    saverRef.current?.cancel();
+    // Cover the GET as well as display(): a relocated event in that gap would
+    // otherwise be sent with the revision this reload is about to adopt.
+    holdRef.current = true;
+    try {
+      const place = await api<ReadingPlace>(`/api/editions/${editionId}/reading-place`);
+      if (place.error || !place.data) {
+        setError(place.error ?? 'network');
+        return false;
+      }
+      setBookmarks(place.data.bookmarks);
+      setHighlights(place.data.highlights);
+      setNotes(place.data.notes);
+      const position = place.data.position;
+      revisionRef.current = position?.revision ?? 0;
+      if (adoptPosition && position && isSavedEpubLocator(position.locator)) {
+        savedRef.current = position.locator;
+        cfiRef.current = position.locator;
+        try {
+          await sessionRef.current?.display(position.locator);
+        } catch {
+          // The kept place stays; a failed display must not write a local CFI.
+        }
+      }
+      await afterRelocatedEcho();
+      return true;
+    } finally {
+      holdRef.current = false;
+    }
+  }
+
+  async function settle<T>(result: ApiResult<T>): Promise<T | null | undefined> {
+    if (result.status === 409) {
+      const reloaded = await reloadReading(true);
+      if (reloaded) {
+        setKeptNewer(true);
+        setError(null);
+      }
+      return undefined;
+    }
+    if (result.error) {
+      setError(result.error);
+      return null;
+    }
+    setError(null);
+    setKeptNewer(false);
+    return result.data;
+  }
+
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
     let alive = true;
     const saver = createDebouncedSave(POSITION_SAVE_DELAY_MS, (locator) => {
-      void api(`/api/editions/${editionId}/reading-place`, {
-        method: 'PUT',
-        body: { locator, assetId },
+      const ticket = generationRef.current;
+      const run = async () => {
+        if (ticket !== generationRef.current) return;
+        const result = await api<{ position: { locator: string; revision: number } }>(
+          `/api/editions/${editionId}/reading-place`,
+          { method: 'PUT', body: { locator, assetId, revision: revisionRef.current } },
+        );
+        if (!alive || ticket !== generationRef.current) return;
+        if (result.status === 409) {
+          const reloaded = await reloadReading(true);
+          if (!alive) return;
+          if (reloaded) {
+            setKeptNewer(true);
+            setError(null);
+          }
+          return;
+        }
+        if (result.error || !result.data?.position) {
+          setError(result.error ?? 'internal');
+          return;
+        }
+        revisionRef.current = result.data.position.revision;
+        savedRef.current = result.data.position.locator;
+      };
+      if (chainIdle.current) {
+        chainIdle.current = false;
+        const promise = run().finally(() => {
+          if (chainRef.current === promise) chainIdle.current = true;
+        });
+        chainRef.current = promise;
+        return;
+      }
+      const promise = chainRef.current.then(run, run).finally(() => {
+        if (chainRef.current === promise) chainIdle.current = true;
       });
+      chainRef.current = promise;
     });
     saverRef.current = saver;
     let offRelocated = () => {};
@@ -134,6 +242,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
       const initialCfi = isSavedEpubLocator(initial) ? initial : null;
       cfiRef.current = initialCfi;
       savedRef.current = initialCfi;
+      revisionRef.current = place.data?.position?.revision ?? 0;
       if (place.data) {
         setBookmarks(place.data.bookmarks);
         setHighlights(place.data.highlights);
@@ -159,6 +268,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
           if (isSavedEpubLocator(note.locator)) session.underline(note.locator);
         }
         offRelocated = session.onRelocated((locator) => {
+          if (holdRef.current) return;
           if (!isSavedEpubLocator(locator)) return;
           cfiRef.current = locator;
           if (locator === savedRef.current) return;
@@ -235,14 +345,11 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
     if (!isSavedEpubLocator(locator)) return;
     const result = await api<{ bookmark: Bookmark }>(`/api/editions/${editionId}/bookmarks`, {
       method: 'POST',
-      body: { locator, assetId },
+      body: { locator, assetId, revision: 0 },
     });
-    if (result.error || !result.data?.bookmark) {
-      setError(result.error ?? 'internal');
-      return;
-    }
-    setError(null);
-    setBookmarks((items) => [...items, result.data!.bookmark]);
+    const data = await settle(result);
+    if (!data?.bookmark) return;
+    setBookmarks((items) => [...items, data.bookmark]);
     setPanel('bookmarks');
   }
 
@@ -250,15 +357,12 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
     if (!selection) return;
     const result = await api<{ highlight: Highlight }>(`/api/editions/${editionId}/highlights`, {
       method: 'POST',
-      body: { locator: selection.cfi, assetId, quote: selection.quote || null },
+      body: { locator: selection.cfi, assetId, quote: selection.quote || null, revision: 0 },
     });
-    if (result.error || !result.data?.highlight) {
-      setError(result.error ?? 'internal');
-      return;
-    }
-    setError(null);
-    sessionRef.current?.highlight(result.data.highlight.locator);
-    setHighlights((items) => [...items, result.data!.highlight]);
+    const data = await settle(result);
+    if (!data?.highlight) return;
+    sessionRef.current?.highlight(data.highlight.locator);
+    setHighlights((items) => [...items, data.highlight]);
     setSelection(null);
     setPanel('highlights');
   }
@@ -273,45 +377,45 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
     }
     const result = await api<{ note: Note }>(`/api/editions/${editionId}/notes`, {
       method: 'POST',
-      body: { locator: selection.cfi, assetId, body },
+      body: { locator: selection.cfi, assetId, body, revision: 0 },
     });
-    if (result.error || !result.data?.note) {
-      setError(result.error ?? 'internal');
-      return;
-    }
-    setError(null);
-    if (isSavedEpubLocator(result.data.note.locator)) sessionRef.current?.underline(result.data.note.locator);
-    setNotes((items) => [...items, result.data!.note]);
+    const data = await settle(result);
+    if (!data?.note) return;
+    if (isSavedEpubLocator(data.note.locator)) sessionRef.current?.underline(data.note.locator);
+    setNotes((items) => [...items, data.note]);
     setNoteBody('');
     setSelection(null);
     setPanel('notes');
   }
 
-  async function removeBookmark(id: number) {
-    const result = await api(`/api/editions/${editionId}/bookmarks/${id}`, { method: 'DELETE' });
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setBookmarks((items) => items.filter((item) => item.id !== id));
+  async function removeBookmark(item: Bookmark) {
+    const result = await api(`/api/editions/${editionId}/bookmarks/${item.id}`, {
+      method: 'DELETE',
+      body: { revision: item.revision },
+    });
+    const data = await settle(result);
+    if (data === undefined || result.error) return;
+    setBookmarks((items) => items.filter((mark) => mark.id !== item.id));
   }
 
   async function removeHighlight(mark: Highlight) {
-    const result = await api(`/api/editions/${editionId}/highlights/${mark.id}`, { method: 'DELETE' });
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
+    const result = await api(`/api/editions/${editionId}/highlights/${mark.id}`, {
+      method: 'DELETE',
+      body: { revision: mark.revision },
+    });
+    const data = await settle(result);
+    if (data === undefined || result.error) return;
     sessionRef.current?.removeMark(mark.locator, 'highlight');
     setHighlights((items) => items.filter((item) => item.id !== mark.id));
   }
 
   async function removeNote(note: Note) {
-    const result = await api(`/api/editions/${editionId}/notes/${note.id}`, { method: 'DELETE' });
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
+    const result = await api(`/api/editions/${editionId}/notes/${note.id}`, {
+      method: 'DELETE',
+      body: { revision: note.revision },
+    });
+    const data = await settle(result);
+    if (data === undefined || result.error) return;
     if (isSavedEpubLocator(note.locator)) sessionRef.current?.removeMark(note.locator, 'underline');
     setNotes((items) => items.filter((item) => item.id !== note.id));
   }
@@ -346,6 +450,11 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
       {error ? (
         <p className="alert" role="alert">
           {errorText(t, error)}
+        </p>
+      ) : null}
+      {keptNewer ? (
+        <p className="notice" role="status">
+          {t('reader.newerKept')}
         </p>
       ) : null}
       <div className="reader-controls">
@@ -539,7 +648,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
                       <button type="button" className="reader-toc-button" onClick={() => go(item.locator)}>
                         {item.label || item.locator}
                       </button>
-                      <button type="button" className="button button-secondary" onClick={() => void removeBookmark(item.id)}>
+                      <button type="button" className="button button-secondary" onClick={() => void removeBookmark(item)}>
                         {t('reader.remove')}
                       </button>
                     </li>

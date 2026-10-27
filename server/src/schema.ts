@@ -317,6 +317,7 @@ export const bookmarks = sqliteTable('bookmarks', {
   assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
   locator: text('locator').notNull(),
   label: text('label'),
+  revision: integer('revision').notNull().default(1),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -332,6 +333,7 @@ export const highlights = sqliteTable('highlights', {
   assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
   locator: text('locator').notNull(),
   quote: text('quote'),
+  revision: integer('revision').notNull().default(1),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -347,6 +349,7 @@ export const notes = sqliteTable('notes', {
   assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
   locator: text('locator'),
   body: text('body').notNull(),
+  revision: integer('revision').notNull().default(1),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });

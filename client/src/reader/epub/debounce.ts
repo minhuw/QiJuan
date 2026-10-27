@@ -29,5 +29,9 @@ export function createDebouncedSave(delayMs: number, save: (locator: string) => 
       pending = null;
       if (next) void save(next);
     },
+    cancel() {
+      clearTimer();
+      pending = null;
+    },
   };
 }

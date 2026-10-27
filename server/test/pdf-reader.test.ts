@@ -157,7 +157,7 @@ describe('pdf reading place', () => {
       method: 'PUT',
       url: `/api/editions/${editionId}/reading-place`,
       headers: { cookie: started.cookie },
-      payload: { locator: adaPlace, assetId },
+      payload: { locator: adaPlace, assetId, revision: 0 },
     });
     expect(first.statusCode).toBe(200);
     expect(first.json().position).toMatchObject({ locator: adaPlace, revision: 1, assetId });
@@ -167,7 +167,7 @@ describe('pdf reading place', () => {
       method: 'POST',
       url: `/api/editions/${editionId}/bookmarks`,
       headers: { cookie: started.cookie },
-      payload: { locator: adaPlace, assetId, label: 'Page 2' },
+      payload: { locator: adaPlace, assetId, label: 'Page 2', revision: 0 },
     });
     expect(marked.statusCode).toBe(201);
     expect(parsePdfPlace(marked.json().bookmark.locator)).toMatchObject({ page: 2, x: 12.5, y: 240 });
@@ -214,7 +214,7 @@ describe('pdf reading place', () => {
       method: 'PUT',
       url: `/api/editions/${editionId}/reading-place`,
       headers: { cookie: beauCookie },
-      payload: { locator: beauPlace, assetId },
+      payload: { locator: beauPlace, assetId, revision: 0 },
     });
     expect(beauSave.statusCode).toBe(200);
     expect(beauSave.json().position.locator).toBe(beauPlace);

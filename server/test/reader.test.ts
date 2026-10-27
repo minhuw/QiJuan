@@ -129,7 +129,7 @@ describe('epub reading place', () => {
       method: 'PUT',
       url: `/api/editions/${editionId}/reading-place`,
       headers: { cookie: started.cookie },
-      payload: { locator: cfi, assetId },
+      payload: { locator: cfi, assetId, revision: 0 },
     });
     expect(first.statusCode).toBe(200);
     expect(first.json().position).toMatchObject({ locator: cfi, revision: 1, assetId });
@@ -140,7 +140,7 @@ describe('epub reading place', () => {
       method: 'PUT',
       url: `/api/editions/${editionId}/reading-place`,
       headers: { cookie: started.cookie },
-      payload: { locator: laterCfi, assetId },
+      payload: { locator: laterCfi, assetId, revision: 1 },
     });
     expect(second.statusCode).toBe(200);
     expect(second.json().position).toMatchObject({ locator: laterCfi, revision: 2, assetId });
@@ -149,7 +149,7 @@ describe('epub reading place', () => {
       method: 'POST',
       url: `/api/editions/${editionId}/bookmarks`,
       headers: { cookie: started.cookie },
-      payload: { locator: cfi, assetId, label: 'Start' },
+      payload: { locator: cfi, assetId, label: 'Start', revision: 0 },
     });
     expect(marked.statusCode).toBe(201);
     const bookmarkId = marked.json().bookmark.id as number;
@@ -158,7 +158,7 @@ describe('epub reading place', () => {
       method: 'POST',
       url: `/api/editions/${editionId}/highlights`,
       headers: { cookie: started.cookie },
-      payload: { locator: laterCfi, assetId, quote: '书有归处' },
+      payload: { locator: laterCfi, assetId, quote: '书有归处', revision: 0 },
     });
     expect(markedText.statusCode).toBe(201);
 
@@ -166,7 +166,7 @@ describe('epub reading place', () => {
       method: 'POST',
       url: `/api/editions/${editionId}/notes`,
       headers: { cookie: started.cookie },
-      payload: { locator: noteCfi, assetId, body: 'Remember this sentence.' },
+      payload: { locator: noteCfi, assetId, body: 'Remember this sentence.', revision: 0 },
     });
     expect(noted.statusCode).toBe(201);
     expect(noted.json().note.locator).toBe(noteCfi);
@@ -175,7 +175,7 @@ describe('epub reading place', () => {
       method: 'PATCH',
       url: `/api/editions/${editionId}/notes/${noteId}`,
       headers: { cookie: started.cookie },
-      payload: { body: 'A revised note.' },
+      payload: { body: 'A revised note.', revision: 1 },
     });
     expect(edited.statusCode).toBe(200);
     expect(edited.json().note).toMatchObject({ locator: noteCfi, body: 'A revised note.' });

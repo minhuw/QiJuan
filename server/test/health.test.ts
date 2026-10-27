@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type { AppConfig } from '../src/config.js';
 import { migrate } from '../src/migrate.js';
+import { OPEN_LIBRARY_ORIGIN } from '../src/metadata/openLibrary.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { makeTempDir } from './helpers.js';
 
@@ -23,6 +24,7 @@ function configIn(dir: string): AppConfig {
     databasePath: path.join(dir, 'qijuan.sqlite'),
     migrationsDir: path.join(dir, 'migrations'),
     maxUploadBytes: 128 * 1024 * 1024,
+    openLibraryOrigin: OPEN_LIBRARY_ORIGIN,
   };
 }
 

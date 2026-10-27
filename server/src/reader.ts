@@ -27,6 +27,7 @@ export interface AnnotationRow {
   label: string | null;
   quote: string | null;
   assetId: number | null;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,8 +37,19 @@ export interface NoteRow {
   locator: string | null;
   body: string;
   assetId: number | null;
+  revision: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** The stored row is not the revision the client last saw. The payload is the current resource. */
+export class RevisionConflict extends Error {
+  readonly code = 'conflict' as const;
+
+  constructor(readonly payload: Record<string, unknown>) {
+    super('conflict');
+    this.name = 'RevisionConflict';
+  }
 }
 
 export interface ReadingPlace {
@@ -81,6 +93,7 @@ export function loadReadingPlace(db: AppDatabase, userId: number, editionId: num
       locator: bookmarks.locator,
       label: bookmarks.label,
       assetId: bookmarks.assetId,
+      revision: bookmarks.revision,
       createdAt: bookmarks.createdAt,
       updatedAt: bookmarks.updatedAt,
     })
@@ -94,6 +107,7 @@ export function loadReadingPlace(db: AppDatabase, userId: number, editionId: num
       locator: highlights.locator,
       quote: highlights.quote,
       assetId: highlights.assetId,
+      revision: highlights.revision,
       createdAt: highlights.createdAt,
       updatedAt: highlights.updatedAt,
     })
@@ -107,6 +121,7 @@ export function loadReadingPlace(db: AppDatabase, userId: number, editionId: num
       locator: notes.locator,
       body: notes.body,
       assetId: notes.assetId,
+      revision: notes.revision,
       createdAt: notes.createdAt,
       updatedAt: notes.updatedAt,
     })
@@ -124,20 +139,26 @@ export function loadReadingPlace(db: AppDatabase, userId: number, editionId: num
 
 export function saveReadingPosition(
   db: AppDatabase,
-  input: { userId: number; editionId: number; assetId: number; locator: string },
+  input: { userId: number; editionId: number; assetId: number; locator: string; revision: number },
   now = new Date(),
 ): StoredPosition {
   const asset = requirePresentAsset(db, input.editionId, input.assetId);
   const locator = locatorForAsset(asset.format, input.locator);
   const stamp = now.toISOString();
-  db.transaction((tx) => {
+  return db.transaction((tx) => {
     const query = tx as unknown as AppDatabase;
     const existing = query
-      .select({ revision: readingPositions.revision })
+      .select({
+        locator: readingPositions.locator,
+        revision: readingPositions.revision,
+        assetId: readingPositions.assetId,
+        updatedAt: readingPositions.updatedAt,
+      })
       .from(readingPositions)
       .where(and(eq(readingPositions.userId, input.userId), eq(readingPositions.editionId, input.editionId)))
       .get();
     if (!existing) {
+      if (input.revision !== 0) throw new RevisionConflict({ position: null });
       query
         .insert(readingPositions)
         .values({
@@ -149,38 +170,40 @@ export function saveReadingPosition(
           updatedAt: stamp,
         })
         .run();
-      return;
+      return { locator, revision: 1, assetId: input.assetId, updatedAt: stamp };
     }
+    if (existing.revision !== input.revision) throw new RevisionConflict({ position: existing });
+    const revision = existing.revision + 1;
     query
       .update(readingPositions)
       .set({
         assetId: input.assetId,
         locator,
-        revision: existing.revision + 1,
+        revision,
         updatedAt: stamp,
       })
       .where(and(eq(readingPositions.userId, input.userId), eq(readingPositions.editionId, input.editionId)))
       .run();
+    return { locator, revision, assetId: input.assetId, updatedAt: stamp };
   });
-  const saved = db
-    .select({
-      locator: readingPositions.locator,
-      revision: readingPositions.revision,
-      assetId: readingPositions.assetId,
-      updatedAt: readingPositions.updatedAt,
-    })
-    .from(readingPositions)
-    .where(and(eq(readingPositions.userId, input.userId), eq(readingPositions.editionId, input.editionId)))
-    .get();
-  if (!saved) throw new CatalogError('invalid_request');
-  return saved;
 }
+
+const bookmarkReturn = {
+  id: bookmarks.id,
+  locator: bookmarks.locator,
+  label: bookmarks.label,
+  assetId: bookmarks.assetId,
+  revision: bookmarks.revision,
+  createdAt: bookmarks.createdAt,
+  updatedAt: bookmarks.updatedAt,
+};
 
 export function addBookmark(
   db: AppDatabase,
-  input: { userId: number; editionId: number; assetId: number; locator: string; label?: string | null },
+  input: { userId: number; editionId: number; assetId: number; locator: string; label?: string | null; revision: number },
   now = new Date(),
 ): AnnotationRow {
+  if (input.revision !== 0) throw new RevisionConflict({ bookmark: null });
   const asset = requirePresentAsset(db, input.editionId, input.assetId);
   const locator = locatorForAsset(asset.format, input.locator);
   const label = cleanOptional(input.label, LABEL_MAX);
@@ -193,38 +216,105 @@ export function addBookmark(
       assetId: input.assetId,
       locator,
       label,
+      revision: 1,
       createdAt: stamp,
       updatedAt: stamp,
     })
-    .returning({
-      id: bookmarks.id,
-      locator: bookmarks.locator,
-      label: bookmarks.label,
-      assetId: bookmarks.assetId,
-      createdAt: bookmarks.createdAt,
-      updatedAt: bookmarks.updatedAt,
-    })
+    .returning(bookmarkReturn)
     .get();
   if (!inserted) throw new CatalogError('invalid_request');
   return { ...inserted, quote: null };
 }
 
-export function removeBookmark(db: AppDatabase, userId: number, editionId: number, bookmarkId: number): void {
+export function updateBookmark(
+  db: AppDatabase,
+  input: {
+    userId: number;
+    editionId: number;
+    bookmarkId: number;
+    revision: number;
+    label?: string | null;
+    locator?: string;
+  },
+  now = new Date(),
+): AnnotationRow {
+  requireLiveEdition(db, input.editionId);
+  const label = input.label === undefined ? undefined : cleanOptional(input.label, LABEL_MAX);
+  return db.transaction((tx) => {
+    const query = tx as unknown as AppDatabase;
+    const existing = query
+      .select(bookmarkReturn)
+      .from(bookmarks)
+      .where(and(eq(bookmarks.id, input.bookmarkId), eq(bookmarks.userId, input.userId), eq(bookmarks.editionId, input.editionId)))
+      .get();
+    if (!existing) throw new CatalogError('not_found');
+    if (existing.revision !== input.revision) throw new RevisionConflict({ bookmark: { ...existing, quote: null } });
+    let locator = existing.locator;
+    if (input.locator !== undefined) {
+      if (existing.assetId == null) throw new CatalogError('not_found');
+      const asset = requirePresentAsset(query, input.editionId, existing.assetId);
+      locator = locatorForAsset(asset.format, input.locator);
+    }
+    const updated = query
+      .update(bookmarks)
+      .set({
+        label: label === undefined ? existing.label : label,
+        locator,
+        revision: existing.revision + 1,
+        updatedAt: now.toISOString(),
+      })
+      .where(eq(bookmarks.id, existing.id))
+      .returning(bookmarkReturn)
+      .get();
+    if (!updated) throw new CatalogError('not_found');
+    return { ...updated, quote: null };
+  });
+}
+
+export function removeBookmark(
+  db: AppDatabase,
+  userId: number,
+  editionId: number,
+  bookmarkId: number,
+  revision: number,
+): void {
   requireLiveEdition(db, editionId);
   const row = db
-    .select({ id: bookmarks.id })
+    .select(bookmarkReturn)
     .from(bookmarks)
     .where(and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId), eq(bookmarks.editionId, editionId)))
     .get();
   if (!row) throw new CatalogError('not_found');
+  if (row.revision !== revision) throw new RevisionConflict({ bookmark: { ...row, quote: null } });
   db.delete(bookmarks).where(eq(bookmarks.id, row.id)).run();
 }
 
+const highlightReturn = {
+  id: highlights.id,
+  locator: highlights.locator,
+  quote: highlights.quote,
+  assetId: highlights.assetId,
+  revision: highlights.revision,
+  createdAt: highlights.createdAt,
+  updatedAt: highlights.updatedAt,
+};
+
+const noteReturn = {
+  id: notes.id,
+  locator: notes.locator,
+  body: notes.body,
+  assetId: notes.assetId,
+  revision: notes.revision,
+  createdAt: notes.createdAt,
+  updatedAt: notes.updatedAt,
+};
+
 export function addHighlight(
   db: AppDatabase,
-  input: { userId: number; editionId: number; assetId: number; locator: string; quote?: string | null },
+  input: { userId: number; editionId: number; assetId: number; locator: string; quote?: string | null; revision: number },
   now = new Date(),
 ): AnnotationRow {
+  if (input.revision !== 0) throw new RevisionConflict({ highlight: null });
   const locator = requireCfi(input.locator);
   requireEpubAsset(db, input.editionId, input.assetId);
   const quote = cleanOptional(input.quote, QUOTE_MAX);
@@ -237,38 +327,82 @@ export function addHighlight(
       assetId: input.assetId,
       locator,
       quote,
+      revision: 1,
       createdAt: stamp,
       updatedAt: stamp,
     })
-    .returning({
-      id: highlights.id,
-      locator: highlights.locator,
-      quote: highlights.quote,
-      assetId: highlights.assetId,
-      createdAt: highlights.createdAt,
-      updatedAt: highlights.updatedAt,
-    })
+    .returning(highlightReturn)
     .get();
   if (!inserted) throw new CatalogError('invalid_request');
   return { ...inserted, label: null };
 }
 
-export function removeHighlight(db: AppDatabase, userId: number, editionId: number, highlightId: number): void {
+export function updateHighlight(
+  db: AppDatabase,
+  input: {
+    userId: number;
+    editionId: number;
+    highlightId: number;
+    revision: number;
+    quote?: string | null;
+    locator?: string;
+  },
+  now = new Date(),
+): AnnotationRow {
+  requireLiveEdition(db, input.editionId);
+  const quote = input.quote === undefined ? undefined : cleanOptional(input.quote, QUOTE_MAX);
+  const locator = input.locator === undefined ? undefined : requireCfi(input.locator);
+  return db.transaction((tx) => {
+    const query = tx as unknown as AppDatabase;
+    const existing = query
+      .select(highlightReturn)
+      .from(highlights)
+      .where(
+        and(eq(highlights.id, input.highlightId), eq(highlights.userId, input.userId), eq(highlights.editionId, input.editionId)),
+      )
+      .get();
+    if (!existing) throw new CatalogError('not_found');
+    if (existing.revision !== input.revision) throw new RevisionConflict({ highlight: { ...existing, label: null } });
+    const updated = query
+      .update(highlights)
+      .set({
+        quote: quote === undefined ? existing.quote : quote,
+        locator: locator === undefined ? existing.locator : locator,
+        revision: existing.revision + 1,
+        updatedAt: now.toISOString(),
+      })
+      .where(eq(highlights.id, existing.id))
+      .returning(highlightReturn)
+      .get();
+    if (!updated) throw new CatalogError('not_found');
+    return { ...updated, label: null };
+  });
+}
+
+export function removeHighlight(
+  db: AppDatabase,
+  userId: number,
+  editionId: number,
+  highlightId: number,
+  revision: number,
+): void {
   requireLiveEdition(db, editionId);
   const row = db
-    .select({ id: highlights.id })
+    .select(highlightReturn)
     .from(highlights)
     .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId), eq(highlights.editionId, editionId)))
     .get();
   if (!row) throw new CatalogError('not_found');
+  if (row.revision !== revision) throw new RevisionConflict({ highlight: { ...row, label: null } });
   db.delete(highlights).where(eq(highlights.id, row.id)).run();
 }
 
 export function addNote(
   db: AppDatabase,
-  input: { userId: number; editionId: number; assetId: number; locator: string; body: string },
+  input: { userId: number; editionId: number; assetId: number; locator: string; body: string; revision: number },
   now = new Date(),
 ): NoteRow {
+  if (input.revision !== 0) throw new RevisionConflict({ note: null });
   const locator = requireCfi(input.locator);
   requireEpubAsset(db, input.editionId, input.assetId);
   const body = cleanRequired(input.body, NOTE_MAX);
@@ -281,17 +415,11 @@ export function addNote(
       assetId: input.assetId,
       locator,
       body,
+      revision: 1,
       createdAt: stamp,
       updatedAt: stamp,
     })
-    .returning({
-      id: notes.id,
-      locator: notes.locator,
-      body: notes.body,
-      assetId: notes.assetId,
-      createdAt: notes.createdAt,
-      updatedAt: notes.updatedAt,
-    })
+    .returning(noteReturn)
     .get();
   if (!inserted) throw new CatalogError('invalid_request');
   return inserted;
@@ -299,42 +427,40 @@ export function addNote(
 
 export function updateNote(
   db: AppDatabase,
-  input: { userId: number; editionId: number; noteId: number; body: string },
+  input: { userId: number; editionId: number; noteId: number; body: string; revision: number },
   now = new Date(),
 ): NoteRow {
   requireLiveEdition(db, input.editionId);
   const body = cleanRequired(input.body, NOTE_MAX);
-  const existing = db
-    .select({ id: notes.id })
-    .from(notes)
-    .where(and(eq(notes.id, input.noteId), eq(notes.userId, input.userId), eq(notes.editionId, input.editionId)))
-    .get();
-  if (!existing) throw new CatalogError('not_found');
-  const updated = db
-    .update(notes)
-    .set({ body, updatedAt: now.toISOString() })
-    .where(eq(notes.id, existing.id))
-    .returning({
-      id: notes.id,
-      locator: notes.locator,
-      body: notes.body,
-      assetId: notes.assetId,
-      createdAt: notes.createdAt,
-      updatedAt: notes.updatedAt,
-    })
-    .get();
-  if (!updated) throw new CatalogError('not_found');
-  return updated;
+  return db.transaction((tx) => {
+    const query = tx as unknown as AppDatabase;
+    const existing = query
+      .select(noteReturn)
+      .from(notes)
+      .where(and(eq(notes.id, input.noteId), eq(notes.userId, input.userId), eq(notes.editionId, input.editionId)))
+      .get();
+    if (!existing) throw new CatalogError('not_found');
+    if (existing.revision !== input.revision) throw new RevisionConflict({ note: existing });
+    const updated = query
+      .update(notes)
+      .set({ body, revision: existing.revision + 1, updatedAt: now.toISOString() })
+      .where(eq(notes.id, existing.id))
+      .returning(noteReturn)
+      .get();
+    if (!updated) throw new CatalogError('not_found');
+    return updated;
+  });
 }
 
-export function removeNote(db: AppDatabase, userId: number, editionId: number, noteId: number): void {
+export function removeNote(db: AppDatabase, userId: number, editionId: number, noteId: number, revision: number): void {
   requireLiveEdition(db, editionId);
   const row = db
-    .select({ id: notes.id })
+    .select(noteReturn)
     .from(notes)
     .where(and(eq(notes.id, noteId), eq(notes.userId, userId), eq(notes.editionId, editionId)))
     .get();
   if (!row) throw new CatalogError('not_found');
+  if (row.revision !== revision) throw new RevisionConflict({ note: row });
   db.delete(notes).where(eq(notes.id, row.id)).run();
 }
 
@@ -358,8 +484,26 @@ export function openEpubStream(db: AppDatabase, dataDir: string, editionId: numb
   return file;
 }
 
-export function epubReadStream(absolutePath: string): ReadStream {
-  return createReadStream(absolutePath);
+export function epubReadStream(absolutePath: string, range?: { start: number; end: number }): ReadStream {
+  return range ? createReadStream(absolutePath, range) : createReadStream(absolutePath);
+}
+
+/**
+ * One `bytes=start-end` range. `null` means the whole file.
+ * `'invalid'` is an unsatisfiable or malformed range.
+ */
+export function parseByteRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | 'invalid' | null {
+  if (header === undefined) return null;
+  const match = /^bytes=(\d+)-(\d*)$/.exec(header.trim());
+  if (!match || size < 1) return 'invalid';
+  const start = Number(match[1]);
+  const end = match[2] === '' ? size - 1 : Number(match[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return 'invalid';
+  if (start < 0 || start >= size || end < start || end >= size) return 'invalid';
+  return { start, end };
 }
 
 export function contentDisposition(filename: string, fallback = 'book.epub'): string {

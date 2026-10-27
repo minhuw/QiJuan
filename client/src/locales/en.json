@@ -122,7 +122,9 @@
     "confirm": "Apply selected",
     "noSuggestion": "No suggestion.",
     "readPlaceholder": "The reader is not here yet.",
-    "missing": "Missing"
+    "missing": "Missing",
+    "exportMarkdown": "Export highlights and notes (Markdown)",
+    "exportJson": "Export highlights and notes (JSON)"
   },
   "library": {
     "search": "Search",
@@ -213,7 +215,8 @@
     "page": "Page",
     "thumbnails": "Thumbnails",
     "outline": "Outline",
-    "scanNoText": "This scanned PDF has no searchable text."
+    "scanNoText": "This scanned PDF has no searchable text.",
+    "newerKept": "A newer change was kept."
   },
   "errors": {
     "invalid_request": "Check the fields and try again.",
