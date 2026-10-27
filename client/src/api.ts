@@ -28,6 +28,7 @@ export interface ApiResult<T> {
   status: number;
   data: T | null;
   error: string | null;
+  reason?: string | null;
 }
 
 export interface ImportItem {
@@ -78,9 +79,14 @@ export async function api<T>(path: string, init?: { method?: string; body?: unkn
 
   if (response.status === 204) return { status: 204, data: null, error: null };
 
-  const payload = (await response.json().catch(() => null)) as ({ error?: string } & T) | null;
+  const payload = (await response.json().catch(() => null)) as ({ error?: string; reason?: string } & T) | null;
   if (!response.ok) {
-    return { status: response.status, data: null, error: payload?.error ?? 'internal' };
+    return {
+      status: response.status,
+      data: null,
+      error: payload?.error ?? 'internal',
+      reason: typeof payload?.reason === 'string' ? payload.reason : null,
+    };
   }
   return { status: response.status, data: payload as T | null, error: null };
 }

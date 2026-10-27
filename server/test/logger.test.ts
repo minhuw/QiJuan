@@ -26,6 +26,8 @@ describe('log redaction', () => {
         nested: { recoveryPassword: 'nested-rec' },
         token: 'qjt-plain-token',
         tokenHash: 'hash-of-opds-token',
+        secretAccessKey: 'aws-secret-value',
+        accessKeyId: 'aws-key-value',
       },
       'hello',
     );
@@ -44,6 +46,8 @@ describe('log redaction', () => {
       'nested-rec',
       'qjt-plain-token',
       'hash-of-opds-token',
+      'aws-secret-value',
+      'aws-key-value',
     ]) {
       expect(out).not.toContain(secret);
     }

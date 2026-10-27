@@ -5,6 +5,9 @@ import path from 'node:path';
 import Fastify, { type FastifyServerOptions } from 'fastify';
 import { registerAccessRoutes } from './access-routes.js';
 import { installSessionGuard } from './auth.js';
+import { registerBackupRoutes } from './backup-routes.js';
+import { BackupService } from './backup/service.js';
+import { createSpawnRunner, resolveResticBin, type ResticRunner } from './backup/restic-run.js';
 import type { AppConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { registerEditionRoutes } from './edition-routes.js';
@@ -24,11 +27,25 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions['logger'];
   /** Defaults to the public Open Library endpoints. Tests pass a stub `fetch`. */
   openLibrary?: OpenLibraryTransport;
+  /** Tests pass a fake restic. Production spawns the pinned binary. */
+  restic?: ResticRunner;
+  resticBin?: string;
+  backupPollMs?: number;
 }
 
 export async function buildApp(options: BuildAppOptions) {
   mkdirSync(path.dirname(options.config.databasePath), { recursive: true });
-  const { sqlite, db } = openDatabase(options.config.databasePath);
+  const opened = openDatabase(options.config.databasePath);
+  const state = { sqlite: opened.sqlite, db: opened.db };
+  const live = {
+    get sqlite() {
+      return state.sqlite;
+    },
+    get db() {
+      return state.db;
+    },
+    dataDir: options.config.dataDir,
+  };
 
   const app = Fastify({
     trustProxy: options.config.trustProxy,
@@ -43,17 +60,20 @@ export async function buildApp(options: BuildAppOptions) {
 
   let closed = false;
   let stopWorker: (() => void) | null = null;
+  let stopBackup: (() => void) | null = null;
   app.addHook('onClose', async () => {
+    stopBackup?.();
+    stopBackup = null;
     stopWorker?.();
     stopWorker = null;
     if (closed) return;
     closed = true;
-    sqlite.close();
+    state.sqlite.close();
   });
 
   try {
     // Before every route, so later book, cover, download, search, annotation, and OPDS handlers cannot skip auth.
-    installSessionGuard(app, db);
+    installSessionGuard(app, live);
 
     app.get(
       '/health',
@@ -85,27 +105,69 @@ export async function buildApp(options: BuildAppOptions) {
       },
     });
 
-    registerAccessRoutes(app, {
-      sqlite,
-      db,
-      dataDir: options.config.dataDir,
-    });
+    registerAccessRoutes(app, live);
     registerImportRoutes(app, {
-      db,
+      get db() {
+        return state.db;
+      },
       dataDir: options.config.dataDir,
       maxUploadBytes: options.config.maxUploadBytes,
     });
     registerEditionRoutes(app, {
-      db,
+      get db() {
+        return state.db;
+      },
       dataDir: options.config.dataDir,
       openLibrary: {
         origin: options.config.openLibraryOrigin,
         ...options.openLibrary,
       },
     });
-    registerLibraryRoutes(app, { db });
-    registerReaderRoutes(app, { db, dataDir: options.config.dataDir });
-    registerOpdsRoutes(app, { db, dataDir: options.config.dataDir });
+    registerLibraryRoutes(app, {
+      get db() {
+        return state.db;
+      },
+    });
+    registerReaderRoutes(app, {
+      get db() {
+        return state.db;
+      },
+      dataDir: options.config.dataDir,
+    });
+    registerOpdsRoutes(app, {
+      get db() {
+        return state.db;
+      },
+      dataDir: options.config.dataDir,
+    });
+    const backup = new BackupService({
+      source: live,
+      dataDir: options.config.dataDir,
+      databasePath: options.config.databasePath,
+      migrationsDir: options.config.migrationsDir,
+      openLibraryOrigin: options.config.openLibraryOrigin,
+      runner: options.restic ?? createSpawnRunner(options.resticBin ?? resolveResticBin()),
+      pollMs: options.backupPollMs,
+      closeDatabase() {
+        try {
+          state.sqlite.pragma('wal_checkpoint(TRUNCATE)');
+        } catch {
+          // The file is replaced immediately after this.
+        }
+        state.sqlite.close();
+      },
+      openDatabase() {
+        const next = openDatabase(options.config.databasePath);
+        state.sqlite = next.sqlite;
+        state.db = next.db;
+      },
+      log: {
+        error(context, message) {
+          app.log.error(context, message);
+        },
+      },
+    });
+    registerBackupRoutes(app, backup);
 
     const clientDist = options.clientDist === undefined ? defaultClientDist() : options.clientDist;
     if (clientDist && existsSync(clientDist)) {
@@ -127,9 +189,11 @@ export async function buildApp(options: BuildAppOptions) {
       });
     }
 
-    requeueInterruptedJobs(db);
+    requeueInterruptedJobs(state.db);
     const worker = startJobWorker({
-      db,
+      get db() {
+        return state.db;
+      },
       dataDir: options.config.dataDir,
       log: {
         error(context, message) {
@@ -138,6 +202,7 @@ export async function buildApp(options: BuildAppOptions) {
       },
     });
     stopWorker = worker.stop;
+    stopBackup = backup.start().stop;
 
     return app;
   } catch (error) {

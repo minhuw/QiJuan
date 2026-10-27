@@ -53,20 +53,20 @@ export function routeRequiresSession(method: string, url: string): boolean {
   return PROTECTED_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
-export function installSessionGuard(app: FastifyInstance, db: AppDatabase): void {
+export function installSessionGuard(app: FastifyInstance, source: { readonly db: AppDatabase }): void {
   app.addHook('preHandler', async (request, reply) => {
     // Unknown URLs use the not-found handler, which inherits this hook. Leave those as 404.
     if (request.is404) return;
     if (!routeRequiresSession(request.method, request.url)) return;
     const sessionId = readCookie(request.headers.cookie, SESSION_COOKIE);
-    const sessionUser = sessionId ? readSessionUser(db, sessionId) : null;
+    const sessionUser = sessionId ? readSessionUser(source.db, sessionId) : null;
     if (sessionUser) {
       request.authUser = sessionUser;
       return;
     }
     if (isOpdsPath(request.url)) {
       const basic = readBasicAuthorization(request.headers.authorization);
-      const tokenUser = basic ? authenticateOpdsToken(db, basic.username, basic.password) : null;
+      const tokenUser = basic ? authenticateOpdsToken(source.db, basic.username, basic.password) : null;
       if (tokenUser) {
         request.authUser = tokenUser;
         return;

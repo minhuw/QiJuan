@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation } from 'react-router';
 import { api, type Account, type LibraryInfo, type ListedUser, type Me, type SetupResponse } from './api';
+import { BackupScreen } from './backup-screen';
 import { BookDetail, ReaderPage } from './book-detail';
 import { CatalogHome } from './catalog-home';
 import { ImportScreen } from './import-screen';
@@ -110,6 +111,11 @@ export function Gate() {
     return <LoginForm onDone={(user, libraries) => setPhase({ kind: 'ready', user, libraries })} />;
   }
 
+  if (location.pathname === '/backup') {
+    if (phase.user.role !== 'admin') return <Navigate to="/" replace />;
+    return <BackupScreen onSignOut={() => void signOut()} />;
+  }
+
   if (location.pathname === '/settings') {
     if (phase.user.role !== 'admin') return <Navigate to="/" replace />;
     return <Settings onSignOut={() => void signOut()} />;
@@ -165,6 +171,11 @@ export function Gate() {
         {phase.user.role === 'admin' ? (
           <Link className="text-link" to="/settings">
             {t('settings.open')}
+          </Link>
+        ) : null}
+        {phase.user.role === 'admin' ? (
+          <Link className="text-link" to="/backup">
+            {t('backup.open')}
           </Link>
         ) : null}
         <button type="button" className="button button-secondary" onClick={() => void signOut()}>
@@ -388,6 +399,9 @@ function Settings({ onSignOut }: { onSignOut: () => void }) {
       <div className="toolbar">
         <Link className="text-link" to="/">
           {t('settings.back')}
+        </Link>
+        <Link className="text-link" to="/backup">
+          {t('backup.open')}
         </Link>
         <button type="button" className="button button-secondary" onClick={onSignOut}>
           {t('account.signOut')}

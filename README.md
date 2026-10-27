@@ -83,7 +83,7 @@ npm run test:acceptance
 
 ## Architecture
 
-QiJuan runs as one Node.js process. The catalog lives in SQLite on the data volume, and background jobs run in-process (no separate queue or cache). Backup to restic comes later. Open Library is an optional metadata source, not required to keep or read a library.
+QiJuan runs as one Node.js process. The catalog lives in SQLite on the data volume, and background jobs run in-process (no separate queue or cache). An administrator can back up that data with restic. See [docs/backup.md](docs/backup.md) and [docs/recovery.md](docs/recovery.md). Open Library is an optional metadata source, not required to keep or read a library.
 
 ## Library
 

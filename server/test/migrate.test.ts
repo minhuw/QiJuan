@@ -33,6 +33,7 @@ describe('migrations', () => {
       '0008_note_anchors.sql',
       '0009_reading_revisions.sql',
       '0010_opds_tokens.sql',
+      '0011_backup.sql',
     ]);
     expect(first.backupPath).toBeNull();
 
@@ -141,6 +142,7 @@ describe('migrations', () => {
       '0008_note_anchors.sql',
       '0009_reading_revisions.sql',
       '0010_opds_tokens.sql',
+      '0011_backup.sql',
     ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);

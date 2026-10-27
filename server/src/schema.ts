@@ -381,3 +381,31 @@ export const opdsTokens = sqliteTable('opds_tokens', {
   createdAt: text('created_at').notNull(),
   revokedAt: text('revoked_at'),
 });
+
+export const backupSettings = sqliteTable('backup_settings', {
+  id: integer('id').primaryKey(),
+  scheduleEnabled: integer('schedule_enabled').notNull(),
+  intervalHours: integer('interval_hours').notNull(),
+  nextRunAt: text('next_run_at'),
+  retentionDaily: integer('retention_daily').notNull(),
+  retentionWeekly: integer('retention_weekly').notNull(),
+  retentionMonthly: integer('retention_monthly').notNull(),
+  scope: text('scope', { enum: ['metadata-only', 'managed'] }).notNull(),
+  indexedLibraryIds: text('indexed_library_ids').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const backupJobs = sqliteTable('backup_jobs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  kind: text('kind', { enum: ['backup'] }).notNull(),
+  status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed'] }).notNull(),
+  scope: text('scope').notNull(),
+  phase: text('phase'),
+  reason: text('reason'),
+  snapshotId: text('snapshot_id'),
+  detail: text('detail').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  startedAt: text('started_at'),
+  finishedAt: text('finished_at'),
+});

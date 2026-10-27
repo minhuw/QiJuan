@@ -11,3 +11,4 @@ coverage/
 *.sqlite-wal
 *.sqlite-shm
 *.pre-migration
+.cache/
