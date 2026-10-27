@@ -116,6 +116,8 @@
     "suggestionNote": "These stay separate. Nothing here merges or deletes an edition.",
     "dismiss": "Dismiss",
     "lookup": "Look up metadata",
+    "lookupRunning": "Looking up metadata…",
+    "applyRunning": "Applying the selected fields…",
     "preview": "Suggested changes",
     "kept": "Kept",
     "unchanged": "Unchanged",

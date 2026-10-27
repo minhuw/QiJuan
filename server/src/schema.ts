@@ -149,8 +149,10 @@ export const jobs = sqliteTable('jobs', {
     .notNull()
     .references(() => libraries.id, { onDelete: 'cascade' }),
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
-  source: text('source', { enum: ['upload', 'folder'] }).notNull(),
+  source: text('source', { enum: ['upload', 'folder', 'lookup', 'apply', 'refresh', 'rescan'] }).notNull(),
   status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed'] }).notNull(),
+  payload: text('payload'),
+  result: text('result'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   startedAt: text('started_at'),

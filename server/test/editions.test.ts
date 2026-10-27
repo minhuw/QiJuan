@@ -86,6 +86,18 @@ async function waitForJob(app: Awaited<ReturnType<typeof buildApp>>, cookie: str
   throw new Error(`job ${id} did not finish`);
 }
 
+async function completeJob(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  cookie: string,
+  started: { statusCode: number; json: () => unknown },
+) {
+  expect(started.statusCode).toBe(202);
+  const body = started.json() as { job: { id: number } };
+  const job = await waitForJob(app, cookie, body.job.id);
+  expect(job.status).toBe('succeeded');
+  return job;
+}
+
 async function upload(
   app: Awaited<ReturnType<typeof buildApp>>,
   cookie: string,
@@ -148,9 +160,11 @@ describe('edition editing', () => {
       url: `/api/editions/${editionId}/refresh`,
       headers: { cookie },
     });
-    expect(refreshed.statusCode).toBe(200);
-    expect(refreshed.json().edition.title).toBe('Corrected Title');
-    expect(refreshed.json().edition.description).toBe('Hand written.');
+    await completeJob(app, cookie, refreshed);
+    const afterRefresh = await app.inject({ method: 'GET', url: `/api/editions/${editionId}`, headers: { cookie } });
+    expect(afterRefresh.statusCode).toBe(200);
+    expect(afterRefresh.json().edition.title).toBe('Corrected Title');
+    expect(afterRefresh.json().edition.description).toBe('Hand written.');
     expect(readFileSync(blobPath).equals(epub)).toBe(true);
     expect(statSync(blobPath).ino).toBe(before.ino);
 
@@ -221,7 +235,7 @@ describe('edition editing', () => {
       url: `/api/libraries/${library.id}/rescan`,
       headers: { cookie },
     });
-    expect(rescan.statusCode).toBe(200);
+    await completeJob(app, cookie, rescan);
     const afterRescan = await app.inject({ method: 'GET', url: `/api/editions/${editionId}`, headers: { cookie } });
     expect(afterRescan.statusCode).toBe(200);
     const rescanned = afterRescan.json().edition as {
@@ -254,9 +268,11 @@ describe('edition editing', () => {
       url: `/api/editions/${editionId}/refresh`,
       headers: { cookie },
     });
-    expect(refresh.statusCode).toBe(200);
-    expect(refresh.json().edition.title).toBe('Corrected Title');
-    expect(refresh.json().edition.description).toBe('Second pass.');
+    await completeJob(app, cookie, refresh);
+    const afterRefresh = await app.inject({ method: 'GET', url: `/api/editions/${editionId}`, headers: { cookie } });
+    expect(afterRefresh.statusCode).toBe(200);
+    expect(afterRefresh.json().edition.title).toBe('Corrected Title');
+    expect(afterRefresh.json().edition.description).toBe('Second pass.');
     expect(readFileSync(epubPath).equals(second)).toBe(true);
     const dbAfter = new Database(config.databasePath, { readonly: true });
     const coverAfter = dbAfter.prepare('SELECT sha256 FROM covers WHERE edition_id = ?').get(editionId) as { sha256: string };
@@ -301,8 +317,9 @@ describe('edition editing', () => {
         locks: string[];
       });
       const refresh = await app.inject({ method: 'POST', url: `/api/editions/${id}/refresh`, headers: { cookie } });
-      expect(refresh.statusCode).toBe(200);
-      expect(refresh.json().edition.language).toBe('la');
+      await completeJob(app, cookie, refresh);
+      const afterRefresh = await app.inject({ method: 'GET', url: `/api/editions/${id}`, headers: { cookie } });
+      expect(afterRefresh.json().edition.language).toBe('la');
     }
     expect(details.every((edition) => edition.language === 'la')).toBe(true);
     expect(details.every((edition) => edition.publisher === 'North Press')).toBe(true);
@@ -444,9 +461,10 @@ describe('edition editing', () => {
       url: `/api/editions/${first}/refresh`,
       headers: { cookie },
     });
-    expect(refreshed.statusCode).toBe(200);
-    expect(refreshed.json().edition.authors).toEqual(['van Gogh']);
-    expect(refreshed.json().edition.translators).toEqual(['wang wei']);
+    await completeJob(app, cookie, refreshed);
+    const afterRefresh = await app.inject({ method: 'GET', url: `/api/editions/${first}`, headers: { cookie } });
+    expect(afterRefresh.json().edition.authors).toEqual(['van Gogh']);
+    expect(afterRefresh.json().edition.translators).toEqual(['wang wei']);
 
     const otherAfter = await app.inject({ method: 'GET', url: `/api/editions/${second}`, headers: { cookie } });
     expect(otherAfter.json().edition.authors).toEqual(['Van Gogh']);

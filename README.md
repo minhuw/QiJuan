@@ -108,16 +108,16 @@ The home screen shows continue reading from that user's position, recently added
 
 ## Import
 
-Upload EPUB and PDF files into a managed library, or import a directory that stays inside an indexed library root. The request only stores the uploads and enqueues a job. A loop in the same process claims the job. If the process stops while a job is running, that job is queued again on the next startup.
+Upload EPUB and PDF files into a managed library, or import a directory that stays inside an indexed library root. The request only stores the uploads and enqueues a job. A loop in the same process claims one job at a time. Metadata lookup, applying a preview, refreshing an edition, and rescanning an indexed library use that same jobs table. If the process stops while a job is running, that job is queued again on the next startup.
 
 A batch keeps going when one file is malformed or has an unsupported extension. Byte-for-byte duplicates attach to the existing asset and do not create a second edition. A different file with a similar title becomes its own edition. The import screen shows queued, running, succeeded, and failed files, then a completion summary.
 
 ## Metadata
 
-A book page edits title, alternate titles, sort title, authors, translators, description, series and series order, publisher, publication date, language, identifiers, and tags. Saving a field locks it. Replacing a cover stores a new image and does not change the book file. Rescan and metadata refresh skip locked fields, including the cover.
+A book page edits title, alternate titles, sort title, authors, translators, description, series and series order, publisher, publication date, language, identifiers, and tags. Saving a field locks it. Replacing a cover stores a new image and does not change the book file. Rescan and metadata refresh run as jobs and skip locked fields, including the cover.
 
 Batch edit sets language, publisher, tags, or series on several editions and locks those fields.
 
-Open Library is optional. Lookup uses `https://openlibrary.org/search.json`, the ISBN API, and the Covers API, with a User-Agent identifying QiJuan and no API key. The preview marks locked fields as kept. Apply writes only the fields an administrator confirms, and only when they are not locked.
+Open Library is optional. Lookup uses `https://openlibrary.org/search.json`, the ISBN API, and the Covers API, with a User-Agent identifying QiJuan and no API key. Lookup and apply return a job id. The book page polls that job, then shows the same preview. No match finishes with an empty preview. If Open Library cannot be reached, the job fails and the edition is left unchanged. The preview marks locked fields as kept. Apply writes only the fields an administrator confirms, and only when they are not locked.
 
 A new file with the same normalized title and main author, but different bytes, stays its own edition. QiJuan stores a suggestion that can be dismissed. It does not merge or delete either edition. A different language or translator is a different edition.

@@ -69,6 +69,7 @@ describe('import screen', () => {
       updatedAt: '2026-01-01T00:00:01.000Z',
       startedAt: '2026-01-01T00:00:01.000Z',
       finishedAt: null,
+      result: null,
       summary: { total: 4, queued: 1, running: 1, succeeded: 1, failed: 1, duplicate: 0 },
       items: [
         { id: 1, position: 0, filename: 'tale.epub', status: 'succeeded', error: null, editionId: 1, assetId: 1, sha256: 'abc' },

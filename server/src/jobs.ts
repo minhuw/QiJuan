@@ -1,20 +1,27 @@
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { and, asc, desc, eq, or } from 'drizzle-orm';
-import { CatalogError } from './catalog.js';
+import { listLibraries } from './accounts.js';
+import { CatalogError, checkIndexedLibrary } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { commitImportedFile } from './ingest.js';
 import { resolveInsideRoot } from './library-files.js';
 import { BookError } from './metadata.js';
-import { ZipError } from './zip.js';
-import { listLibraries } from './accounts.js';
-import { jobItems, jobs, libraries } from './schema.js';
+import { PREVIEW_FIELDS, type PreviewField, applyMetadataPreview, createMetadataPreview } from './metadata/apply.js';
+import { OpenLibraryError, type OpenLibraryTransport } from './metadata/openLibrary.js';
+import { refreshEditionMetadata, refreshLibraryMetadata } from './refresh.js';
+import { editions, jobItems, jobs, libraries } from './schema.js';
 import type { AuthUser } from './sessions.js';
+import { ZipError } from './zip.js';
 
 const POLL_MS = 50;
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+export type JobSource = 'upload' | 'folder' | 'lookup' | 'apply' | 'refresh' | 'rescan';
 export type ItemStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'duplicate';
+
+const IMPORT_SOURCES = new Set<JobSource>(['upload', 'folder']);
+const PREVIEW_FIELD_SET = new Set<string>(PREVIEW_FIELDS);
 
 export interface JobSummary {
   total: number;
@@ -39,12 +46,14 @@ export interface JobItemView {
 export interface JobView {
   id: number;
   libraryId: number;
-  source: 'upload' | 'folder';
+  source: JobSource;
   status: JobStatus;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  /** Small JSON document: a metadata preview, a rescan count, or `{ error }` . */
+  result: unknown;
   summary: JobSummary;
   items: JobItemView[];
 }
@@ -112,6 +121,37 @@ export function createImportJob(
   return view;
 }
 
+/** Queues lookup, apply, refresh, or rescan. The worker performs the work. */
+export function createBackgroundJob(
+  db: AppDatabase,
+  input: {
+    libraryId: number;
+    userId: number;
+    source: 'lookup' | 'apply' | 'refresh' | 'rescan';
+    payload: unknown;
+  },
+  now = new Date(),
+): JobView {
+  const stamp = now.toISOString();
+  const inserted = db
+    .insert(jobs)
+    .values({
+      libraryId: input.libraryId,
+      createdBy: input.userId,
+      source: input.source,
+      status: 'queued',
+      payload: JSON.stringify(input.payload),
+      createdAt: stamp,
+      updatedAt: stamp,
+    })
+    .returning({ id: jobs.id })
+    .get();
+  if (!inserted) throw new Error('job insert failed');
+  const view = getJobById(db, inserted.id);
+  if (!view) throw new Error('job missing');
+  return view;
+}
+
 export function listVisibleJobs(db: AppDatabase, user: AuthUser): JobView[] {
   const allowed = libraryIds(db, user);
   if (allowed.size === 0) return [];
@@ -121,7 +161,7 @@ export function listVisibleJobs(db: AppDatabase, user: AuthUser): JobView[] {
     .orderBy(desc(jobs.id))
     .limit(50)
     .all()
-    .filter((row) => allowed.has(row.libraryId))
+    .filter((row) => allowed.has(row.libraryId) && IMPORT_SOURCES.has(row.source))
     .slice(0, 20)
     .map((row) => toView(db, row));
 }
@@ -133,15 +173,30 @@ export function getVisibleJob(db: AppDatabase, user: AuthUser, jobId: number): J
   return toView(db, row);
 }
 
-export function startJobWorker(options: { db: AppDatabase; dataDir: string; log?: JobLogger }): { stop: () => void } {
+export function startJobWorker(options: {
+  db: AppDatabase;
+  dataDir: string;
+  openLibrary: OpenLibraryTransport;
+  log?: JobLogger;
+}): { stop: () => void } {
   let stopped = false;
   let active = false;
   const timer = setInterval(() => {
     if (stopped || active) return;
     active = true;
+    // One job at a time. Lookup and apply await Open Library; do not claim the next row until that finishes.
+    void workNext().finally(() => {
+      active = false;
+    });
+  }, POLL_MS);
+  timer.unref();
+
+  async function workNext(): Promise<void> {
     try {
       const jobId = claimNextJob(options.db);
-      if (jobId !== null) runJob(options.db, options.dataDir, jobId, options.log);
+      if (jobId !== null) {
+        await runJob(options.db, options.dataDir, options.openLibrary, jobId, options.log);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (/closed|not open/i.test(message)) {
@@ -150,11 +205,9 @@ export function startJobWorker(options: { db: AppDatabase; dataDir: string; log?
         return;
       }
       options.log?.error({ name: error instanceof Error ? error.name : 'Error' }, 'job worker failed');
-    } finally {
-      active = false;
     }
-  }, POLL_MS);
-  timer.unref();
+  }
+
   return {
     stop() {
       stopped = true;
@@ -183,38 +236,160 @@ function claimNextJob(db: AppDatabase, now = new Date()): number | null {
   }, { behavior: 'immediate' });
 }
 
-function runJob(db: AppDatabase, dataDir: string, jobId: number, log?: JobLogger): void {
+async function runJob(
+  db: AppDatabase,
+  dataDir: string,
+  openLibrary: OpenLibraryTransport,
+  jobId: number,
+  log?: JobLogger,
+): Promise<void> {
   const job = db.select().from(jobs).where(eq(jobs.id, jobId)).get();
   if (!job || job.status !== 'running') return;
-  const items = db
-    .select()
-    .from(jobItems)
-    .where(and(eq(jobItems.jobId, jobId), or(eq(jobItems.status, 'queued'), eq(jobItems.status, 'running'))))
-    .orderBy(asc(jobItems.position))
-    .all();
   try {
-    for (const item of items) {
-      processItem(db, dataDir, job, item, log);
-    }
-    const stamp = new Date().toISOString();
-    db.update(jobs)
-      .set({ status: 'succeeded', finishedAt: stamp, updatedAt: stamp })
-      .where(eq(jobs.id, jobId))
-      .run();
+    const result = await performJob(db, dataDir, openLibrary, job, log);
+    finishJob(db, jobId, 'succeeded', result);
   } catch (error) {
-    const stamp = new Date().toISOString();
-    db.update(jobs)
-      .set({ status: 'failed', finishedAt: stamp, updatedAt: stamp })
-      .where(eq(jobs.id, jobId))
-      .run();
-    log?.error({ jobId, name: error instanceof Error ? error.name : 'Error' }, 'import job failed');
+    const code = jobFailureCode(error);
+    finishJob(db, jobId, 'failed', { error: code });
+    log?.error({ jobId, code }, 'job failed');
   } finally {
-    const finished = db.select({ source: jobs.source }).from(jobs).where(eq(jobs.id, jobId)).get();
-    if (finished?.source === 'upload') {
+    if (job.source === 'upload') {
       const stored = db.select({ sourcePath: jobItems.sourcePath }).from(jobItems).where(eq(jobItems.jobId, jobId)).all();
       cleanupUploads(dataDir, stored.map((row) => row.sourcePath));
     }
   }
+}
+
+async function performJob(
+  db: AppDatabase,
+  dataDir: string,
+  openLibrary: OpenLibraryTransport,
+  job: typeof jobs.$inferSelect,
+  log?: JobLogger,
+): Promise<unknown> {
+  if (job.source === 'upload' || job.source === 'folder') {
+    const items = db
+      .select()
+      .from(jobItems)
+      .where(and(eq(jobItems.jobId, job.id), or(eq(jobItems.status, 'queued'), eq(jobItems.status, 'running'))))
+      .orderBy(asc(jobItems.position))
+      .all();
+    for (const item of items) {
+      processItem(db, dataDir, { id: job.id, libraryId: job.libraryId, source: job.source }, item, log);
+    }
+    return undefined;
+  }
+  if (job.source === 'lookup') return runLookup(db, openLibrary, job);
+  if (job.source === 'apply') return runApply(db, dataDir, openLibrary, job);
+  if (job.source === 'refresh') return runRefresh(db, dataDir, job);
+  if (job.source === 'rescan') return runRescan(db, dataDir, job);
+  throw new CatalogError('invalid_request');
+}
+
+async function runLookup(
+  db: AppDatabase,
+  transport: OpenLibraryTransport,
+  job: typeof jobs.$inferSelect,
+): Promise<{ preview: { previewId: number; fields: unknown[] } | null }> {
+  const editionId = readEditionId(readPayload(job.payload));
+  assertEdition(db, job.libraryId, editionId);
+  const preview = await createMetadataPreview(db, transport, editionId);
+  return { preview: preview ?? null };
+}
+
+async function runApply(
+  db: AppDatabase,
+  dataDir: string,
+  transport: OpenLibraryTransport,
+  job: typeof jobs.$inferSelect,
+): Promise<{ applied: true }> {
+  const payload = readPayload(job.payload);
+  const editionId = readEditionId(payload);
+  const previewId = readPositiveInt(payload.previewId);
+  if (!previewId) throw new CatalogError('invalid_request');
+  const confirm = readConfirm(payload);
+  assertEdition(db, job.libraryId, editionId);
+  await applyMetadataPreview(db, dataDir, transport, { editionId, previewId, confirm });
+  return { applied: true };
+}
+
+function runRefresh(db: AppDatabase, dataDir: string, job: typeof jobs.$inferSelect): { changed: boolean } {
+  const editionId = readEditionId(readPayload(job.payload));
+  assertEdition(db, job.libraryId, editionId);
+  return { changed: refreshEditionMetadata(db, dataDir, editionId) };
+}
+
+function runRescan(
+  db: AppDatabase,
+  dataDir: string,
+  job: typeof jobs.$inferSelect,
+): { checked: number; present: number; missing: number; refreshed: number } {
+  const checked = checkIndexedLibrary(db, job.libraryId);
+  const refreshed = refreshLibraryMetadata(db, dataDir, job.libraryId);
+  return { ...checked, refreshed: refreshed.refreshed };
+}
+
+function finishJob(db: AppDatabase, jobId: number, status: 'succeeded' | 'failed', result: unknown): void {
+  const stamp = new Date().toISOString();
+  db.update(jobs)
+    .set({
+      status,
+      result: result === undefined ? null : JSON.stringify(result),
+      finishedAt: stamp,
+      updatedAt: stamp,
+    })
+    .where(eq(jobs.id, jobId))
+    .run();
+}
+
+function readPayload(value: string | null): Record<string, unknown> {
+  if (!value) throw new CatalogError('invalid_request');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new CatalogError('invalid_request');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new CatalogError('invalid_request');
+  return parsed as Record<string, unknown>;
+}
+
+function readEditionId(payload: Record<string, unknown>): number {
+  const editionId = readPositiveInt(payload.editionId);
+  if (!editionId) throw new CatalogError('invalid_request');
+  return editionId;
+}
+
+function readPositiveInt(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return null;
+  return value;
+}
+
+function readConfirm(payload: Record<string, unknown>): PreviewField[] {
+  if (!Array.isArray(payload.confirm)) throw new CatalogError('invalid_request');
+  const fields: PreviewField[] = [];
+  for (const item of payload.confirm) {
+    if (typeof item !== 'string' || !PREVIEW_FIELD_SET.has(item)) throw new CatalogError('invalid_request');
+    fields.push(item as PreviewField);
+  }
+  return fields;
+}
+
+function assertEdition(db: AppDatabase, libraryId: number, editionId: number): void {
+  const edition = db
+    .select({ libraryId: editions.libraryId, trashedAt: editions.trashedAt })
+    .from(editions)
+    .where(eq(editions.id, editionId))
+    .get();
+  if (!edition || edition.trashedAt || edition.libraryId !== libraryId) throw new CatalogError('not_found');
+}
+
+function jobFailureCode(error: unknown): string {
+  if (error instanceof OpenLibraryError) return error.code;
+  if (error instanceof CatalogError) return error.code;
+  if (error instanceof BookError) return error.code;
+  if (error instanceof ZipError) return 'malformed';
+  return 'internal';
 }
 
 function processItem(
@@ -352,7 +527,17 @@ function toView(db: AppDatabase, row: typeof jobs.$inferSelect): JobView {
     updatedAt: row.updatedAt,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
+    result: decodeJson(row.result),
     summary,
     items: views,
   };
+}
+
+function decodeJson(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }

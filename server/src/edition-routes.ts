@@ -18,9 +18,8 @@ import {
   cleanPublishedDate,
   cleanPublisher,
 } from './editions.js';
-import { OpenLibraryError, type OpenLibraryTransport } from './metadata/openLibrary.js';
-import { PREVIEW_FIELDS, type PreviewField, applyMetadataPreview, createMetadataPreview } from './metadata/apply.js';
-import { refreshEditionMetadata } from './refresh.js';
+import { createBackgroundJob } from './jobs.js';
+import { PREVIEW_FIELDS, type PreviewField } from './metadata/apply.js';
 import type { AuthUser } from './sessions.js';
 import { presentLibraryEdition } from './library.js';
 import { dismissSuggestion, findSuggestion } from './suggestions.js';
@@ -33,7 +32,6 @@ const PREVIEW_FIELD_SET = new Set<string>(PREVIEW_FIELDS);
 export interface EditionRouteDeps {
   db: AppDatabase;
   dataDir: string;
-  openLibrary: OpenLibraryTransport;
 }
 
 export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDeps): void {
@@ -131,9 +129,14 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
     const user = currentUser(request);
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
-      refreshEditionMetadata(deps.db, deps.dataDir, edition.id);
+      const job = createBackgroundJob(deps.db, {
+        libraryId: edition.libraryId,
+        userId: user.id,
+        source: 'refresh',
+        payload: { editionId: edition.id },
+      });
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, user.id, edition.id) };
+      return reply.code(202).send({ job });
     } catch (error) {
       return sendError(reply, error);
     }
@@ -144,10 +147,14 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
     if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
-      const preview = await createMetadataPreview(deps.db, deps.openLibrary, edition.id);
-      if (!preview) return reply.code(404).send({ error: 'not_found' });
+      const job = createBackgroundJob(deps.db, {
+        libraryId: edition.libraryId,
+        userId: user.id,
+        source: 'lookup',
+        payload: { editionId: edition.id },
+      });
       reply.header('cache-control', 'no-store');
-      return preview;
+      return reply.code(202).send({ job });
     } catch (error) {
       return sendError(reply, error);
     }
@@ -164,13 +171,14 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       if (!previewId || !Number.isInteger(previewId) || previewId < 1 || !confirm) {
         return reply.code(400).send({ error: 'invalid_request' });
       }
-      await applyMetadataPreview(deps.db, deps.dataDir, deps.openLibrary, {
-        editionId: edition.id,
-        previewId,
-        confirm,
+      const job = createBackgroundJob(deps.db, {
+        libraryId: edition.libraryId,
+        userId: user.id,
+        source: 'apply',
+        payload: { editionId: edition.id, previewId, confirm },
       });
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, user.id, edition.id) };
+      return reply.code(202).send({ job });
     } catch (error) {
       return sendError(reply, error);
     }
@@ -390,7 +398,6 @@ function parseId(value: string | undefined): number | null {
 
 function sendError(reply: FastifyReply, error: unknown) {
   if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.code });
-  if (error instanceof OpenLibraryError) return reply.code(502).send({ error: 'metadata_unavailable' });
   if (error instanceof CatalogError) {
     const status = error.code === 'not_found' ? 404 : error.code === 'conflict' ? 409 : 400;
     return reply.code(status).send({ error: error.code });

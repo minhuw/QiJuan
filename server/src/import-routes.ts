@@ -4,11 +4,10 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiError, requireLibraryAccess } from './accounts.js';
-import { CatalogError, checkIndexedLibrary } from './catalog.js';
+import { CatalogError } from './catalog.js';
 import type { AppDatabase } from './db.js';
-import { createImportJob, getVisibleJob, listVisibleJobs } from './jobs.js';
+import { createBackgroundJob, createImportJob, getVisibleJob, listVisibleJobs } from './jobs.js';
 import { listLibraryFiles } from './library-files.js';
-import { refreshLibraryMetadata } from './refresh.js';
 import type { AuthUser } from './sessions.js';
 
 const MAX_IMPORT_FILES = 20;
@@ -138,10 +137,14 @@ export function registerImportRoutes(app: FastifyInstance, deps: ImportRouteDeps
     try {
       const library = requireLibraryAccess(deps.db, user, libraryId);
       if (library.mode !== 'indexed') return reply.code(400).send({ error: 'library_mode' });
-      const result = checkIndexedLibrary(deps.db, library.id);
-      const refreshed = refreshLibraryMetadata(deps.db, deps.dataDir, library.id);
+      const job = createBackgroundJob(deps.db, {
+        libraryId: library.id,
+        userId: user.id,
+        source: 'rescan',
+        payload: {},
+      });
       reply.header('cache-control', 'no-store');
-      return { ...result, refreshed: refreshed.refreshed };
+      return reply.code(202).send({ job });
     } catch (error) {
       return sendError(reply, error);
     }

@@ -1,6 +1,6 @@
 # Development
 
-QiJuan is one Node.js process. Fastify serves the API and, after a production build, the client. The client is Vite and React. The catalog is SQLite through better-sqlite3 and Drizzle. Background import and backup jobs run in that same process. There is no Redis, Postgres, or second service.
+QiJuan is one Node.js process. Fastify serves the API and, after a production build, the client. The client is Vite and React. The catalog is SQLite through better-sqlite3 and Drizzle. Background import, metadata lookup, refresh, rescan, and backup jobs run in that same process. There is no Redis, Postgres, or second service.
 
 Docker is not required to develop, test, or run QiJuan.
 

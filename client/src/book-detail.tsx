@@ -1,6 +1,6 @@
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { api, apiForm, type EditionDetail, type MetadataPreview } from './api';
+import { api, apiForm, type EditionDetail, type ImportJob, type MetadataPreview } from './api';
 import { EpubReader } from './reader/epub-reader';
 import { PdfReader } from './reader/pdf-reader';
 import { ReadingActions } from './reading-actions';
@@ -19,6 +19,9 @@ const ERROR_CODES = new Set([
   'conflict',
 ]);
 
+/** Status poll for a metadata job. Open Library allows 10s for search, ISBN, and cover, and the worker runs one job at a time, so a lookup can stay queued much longer than a few seconds. */
+const METADATA_JOB_POLL_MS = 200;
+
 const FIELD_LABEL: Record<string, string> = {
   title: 'book.title',
   authors: 'book.authors',
@@ -29,6 +32,10 @@ const FIELD_LABEL: Record<string, string> = {
   identifiers: 'book.identifiers',
   cover: 'book.cover',
 };
+
+interface RetryWait {
+  cancel: () => void;
+}
 
 interface EditionForm {
   title: string;
@@ -98,7 +105,10 @@ export function BookDetail({
   const [preview, setPreview] = useState<MetadataPreview | null>(null);
   const [checked, setChecked] = useState<string[]>([]);
   const [lookupNote, setLookupNote] = useState<string | null>(null);
+  const [activity, setActivity] = useState<'lookup' | 'apply' | null>(null);
   const baseId = useId();
+  const requestId = useRef(0);
+  const retryWait = useRef<RetryWait | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -117,6 +127,18 @@ export function BookDetail({
       active = false;
     };
   }, [editionId, generation]);
+
+  useEffect(() => {
+    setActivity(null);
+    setPending(false);
+    setPreview(null);
+    setLookupNote(null);
+    setFormError(null);
+    return () => {
+      requestId.current += 1;
+      retryWait.current?.cancel();
+    };
+  }, [editionId]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -178,21 +200,41 @@ export function BookDetail({
 
   async function lookup() {
     if (!edition) return;
+    const editionId = edition.id;
+    const token = ++requestId.current;
     setPending(true);
+    setActivity('lookup');
     setLookupNote(null);
     setPreview(null);
-    const result = await api<MetadataPreview>(`/api/editions/${edition.id}/metadata/lookup`, { method: 'POST' });
-    setPending(false);
-    if (result.status === 404) {
-      setLookupNote('none');
-      return;
+    setSaved(false);
+    setFormError(null);
+    try {
+      const started = await api<{ job: { id: number } }>(`/api/editions/${editionId}/metadata/lookup`, { method: 'POST' });
+      if (requestId.current !== token) return;
+      if (started.error || !started.data?.job?.id) {
+        setFormError(started.error ?? 'internal');
+        return;
+      }
+      const job = await pollJob(started.data.job.id, token);
+      if (requestId.current !== token) return;
+      if (!job || job.status === 'failed') {
+        setFormError(job ? jobError(job) ?? 'internal' : 'internal');
+        return;
+      }
+      setFormError(null);
+      const next = jobPreview(job);
+      if (!next) {
+        setLookupNote('none');
+        return;
+      }
+      setPreview(next);
+      setChecked(next.fields.filter((field) => field.status === 'change').map((field) => field.field));
+    } finally {
+      if (requestId.current === token) {
+        setPending(false);
+        setActivity(null);
+      }
     }
-    if (result.error || !result.data) {
-      setFormError(result.error ?? 'internal');
-      return;
-    }
-    setPreview(result.data);
-    setChecked(result.data.fields.filter((field) => field.status === 'change').map((field) => field.field));
   }
 
   async function applyPreview(event: FormEvent) {
@@ -202,21 +244,90 @@ export function BookDetail({
       setFormError('required');
       return;
     }
+    const editionId = edition.id;
+    const previewId = preview.previewId;
+    const confirm = checked;
+    const token = ++requestId.current;
     setPending(true);
+    setActivity('apply');
     setFormError(null);
-    const result = await api<{ edition: EditionDetail }>(`/api/editions/${edition.id}/metadata/apply`, {
-      method: 'POST',
-      body: { previewId: preview.previewId, confirm: checked },
-    });
-    setPending(false);
-    if (result.error || !result.data) {
-      setFormError(result.error ?? 'internal');
-      return;
+    setSaved(false);
+    try {
+      const started = await api<{ job: { id: number } }>(`/api/editions/${editionId}/metadata/apply`, {
+        method: 'POST',
+        body: { previewId, confirm },
+      });
+      if (requestId.current !== token) return;
+      if (started.error || !started.data?.job?.id) {
+        setFormError(started.error ?? 'internal');
+        return;
+      }
+      const job = await pollJob(started.data.job.id, token);
+      if (requestId.current !== token) return;
+      if (!job || job.status !== 'succeeded') {
+        setFormError(job ? jobError(job) ?? 'internal' : 'internal');
+        return;
+      }
+      const next = await loadEdition(editionId, token);
+      if (requestId.current !== token || !next) return;
+      setFormError(null);
+      setEdition(next);
+      setForm(toForm(next));
+      setPreview(null);
+      setSaved(true);
+    } finally {
+      if (requestId.current === token) {
+        setPending(false);
+        setActivity(null);
+      }
     }
-    setEdition(result.data.edition);
-    setForm(toForm(result.data.edition));
-    setPreview(null);
-    setSaved(true);
+  }
+
+  function waitForRetry(token: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (requestId.current !== token) {
+        resolve(false);
+        return;
+      }
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (retryWait.current?.cancel === cancel) retryWait.current = null;
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(requestId.current === token), METADATA_JOB_POLL_MS);
+      function cancel() {
+        clearTimeout(timer);
+        finish(false);
+      }
+      retryWait.current = { cancel };
+    });
+  }
+
+  // Poll until the job itself finishes. Giving up while it is queued re-enables Save
+  // with the pre-apply form, which can overwrite fields the job already locked.
+  async function pollJob(jobId: number, token: number): Promise<ImportJob | null> {
+    while (requestId.current === token) {
+      const result = await api<{ job: ImportJob }>(`/api/jobs/${jobId}`);
+      if (requestId.current !== token) return null;
+      const job = result.error ? undefined : result.data?.job;
+      if (job && (job.status === 'succeeded' || job.status === 'failed')) return job;
+      const stillHere = await waitForRetry(token);
+      if (!stillHere) return null;
+    }
+    return null;
+  }
+
+  async function loadEdition(id: number, token: number): Promise<EditionDetail | null> {
+    while (requestId.current === token) {
+      const loaded = await api<{ edition: EditionDetail }>(`/api/editions/${id}`);
+      if (requestId.current !== token) return null;
+      if (!loaded.error && loaded.data?.edition) return loaded.data.edition;
+      const stillHere = await waitForRetry(token);
+      if (!stillHere) return null;
+    }
+    return null;
   }
 
   if (error) {
@@ -430,6 +541,8 @@ export function BookDetail({
           <button className="button" type="button" disabled={pending} onClick={() => void lookup()}>
             {t('book.lookup')}
           </button>
+          {activity === 'lookup' ? <p role="status">{t('book.lookupRunning')}</p> : null}
+          {activity === 'apply' ? <p role="status">{t('book.applyRunning')}</p> : null}
           {lookupNote === 'none' ? <p>{t('book.noSuggestion')}</p> : null}
           {preview ? (
             <form className="form" onSubmit={(event) => void applyPreview(event)}>
@@ -572,6 +685,23 @@ function Field({
       {hint ? <p className="hint">{hint}</p> : null}
     </div>
   );
+}
+
+function jobPreview(job: ImportJob): MetadataPreview | null {
+  const result = job.result;
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return null;
+  const preview = (result as { preview?: unknown }).preview;
+  if (typeof preview !== 'object' || preview === null || Array.isArray(preview)) return null;
+  const record = preview as { previewId?: unknown; fields?: unknown };
+  if (typeof record.previewId !== 'number' || !Array.isArray(record.fields)) return null;
+  return { previewId: record.previewId, fields: record.fields as MetadataPreview['fields'] };
+}
+
+function jobError(job: ImportJob): string | null {
+  const result = job.result;
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return null;
+  const error = (result as { error?: unknown }).error;
+  return typeof error === 'string' ? error : null;
 }
 
 function diffEdition(edition: EditionDetail, form: EditionForm): Record<string, unknown> | 'invalid' {

@@ -61,6 +61,7 @@ async function waitForJob(
   id: number,
 ): Promise<{
   status: string;
+  result: { checked?: number; missing?: number; present?: number; refreshed?: number } | null;
   summary: { total: number; queued: number; running: number; succeeded: number; failed: number; duplicate: number };
   items: Array<{ filename: string; status: string; error: string | null; editionId: number | null; assetId: number | null }>;
 }> {
@@ -306,8 +307,10 @@ describe('batch import', () => {
       url: `/api/libraries/${library.id}/rescan`,
       headers: { cookie },
     });
-    expect(rescan.statusCode).toBe(200);
-    expect(rescan.json()).toMatchObject({ checked: 3, missing: 3, present: 0 });
+    expect(rescan.statusCode).toBe(202);
+    const scan = await waitForJob(app, cookie, rescan.json().job.id as number);
+    expect(scan.status).toBe('succeeded');
+    expect(scan.result).toMatchObject({ checked: 3, missing: 3, present: 0 });
 
     const after = new Database(config.databasePath, { readonly: true });
     const kept = after.prepare('SELECT title, trashed_at FROM editions WHERE id = ?').get(edition.id) as {

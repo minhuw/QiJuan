@@ -54,12 +54,13 @@ export interface ImportSummary {
 export interface ImportJob {
   id: number;
   libraryId: number;
-  source: 'upload' | 'folder';
+  source: 'upload' | 'folder' | 'lookup' | 'apply' | 'refresh' | 'rescan';
   status: 'queued' | 'running' | 'succeeded' | 'failed';
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  result: unknown;
   summary: ImportSummary;
   items: ImportItem[];
 }

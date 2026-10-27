@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { absoluteBlobPath } from '../src/blobs.js';
@@ -17,7 +18,7 @@ import {
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { makeTempDir, tempConfig } from './helpers.js';
-import { COVER_PNG, buildTextPdf } from './fixtures.js';
+import { COVER_PNG, buildEpub, buildTextPdf } from './fixtures.js';
 
 const cleanups: Array<() => void> = [];
 const password = 'correct-horse-battery';
@@ -35,6 +36,47 @@ function cookieFrom(response: { headers: { 'set-cookie'?: string | string[] | un
   const raw = response.headers['set-cookie'];
   const header = Array.isArray(raw) ? raw[0] : raw;
   return header?.split(';')[0] ?? '';
+}
+
+async function waitForJob(app: Awaited<ReturnType<typeof buildApp>>, cookie: string, id: number) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await app.inject({ method: 'GET', url: `/api/jobs/${id}`, headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    const job = response.json().job as {
+      id: number;
+      status: string;
+      source: string;
+      result: {
+        preview?: {
+          previewId: number;
+          fields: Array<{ field: string; status: string; locked: boolean; current: string | null; proposed: string | null }>;
+        } | null;
+        error?: string;
+        applied?: boolean;
+        checked?: number;
+        missing?: number;
+        present?: number;
+      } | null;
+      items: Array<{ status: string; editionId: number | null }>;
+    };
+    if (job.status === 'succeeded' || job.status === 'failed') return job;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`job ${id} did not finish`);
+}
+
+async function editionOf(app: Awaited<ReturnType<typeof buildApp>>, cookie: string, editionId: number) {
+  const response = await app.inject({ method: 'GET', url: `/api/editions/${editionId}`, headers: { cookie } });
+  expect(response.statusCode).toBe(200);
+  return response.json().edition as {
+    title: string;
+    description: string | null;
+    publisher: string | null;
+    language: string | null;
+    identifiers: Array<{ scheme: string; value: string }>;
+    cover: { mediaType: string } | null;
+    locks: string[];
+  };
 }
 
 function stubTransport(): { transport: OpenLibraryTransport; calls: RecordedCall[] } {
@@ -203,24 +245,24 @@ describe('open library client', () => {
       headers: { cookie: readerCookie },
     });
     expect(forbidden.statusCode).toBe(403);
+    expect(calls).toEqual([]);
 
     const lookup = await app.inject({
       method: 'POST',
       url: `/api/editions/${editionId}/metadata/lookup`,
       headers: { cookie },
     });
-    expect(lookup.statusCode).toBe(200);
-    const preview = lookup.json() as {
-      previewId: number;
-      fields: Array<{ field: string; status: string; locked: boolean; current: string | null; proposed: string | null }>;
-    };
-    expect(preview.fields.find((field) => field.field === 'title')).toMatchObject({
+    expect(lookup.statusCode).toBe(202);
+    const lookupJob = await waitForJob(app, cookie, lookup.json().job.id as number);
+    expect(lookupJob.status).toBe('succeeded');
+    const preview = lookupJob.result?.preview;
+    expect(preview?.fields.find((field) => field.field === 'title')).toMatchObject({
       status: 'kept',
       locked: true,
       current: 'Kept Title',
       proposed: 'OL Title',
     });
-    expect(preview.fields.find((field) => field.field === 'description')).toMatchObject({
+    expect(preview?.fields.find((field) => field.field === 'description')).toMatchObject({
       status: 'change',
       locked: false,
       proposed: 'From the catalog.',
@@ -234,35 +276,43 @@ describe('open library client', () => {
       method: 'POST',
       url: `/api/editions/${editionId}/metadata/apply`,
       headers: { cookie },
-      payload: { previewId: preview.previewId, confirm: ['title', 'description'] },
+      payload: { previewId: preview?.previewId, confirm: ['title', 'description'] },
     });
-    expect(applied.statusCode).toBe(200);
-    expect(applied.json().edition.title).toBe('Kept Title');
-    expect(applied.json().edition.description).toBe('From the catalog.');
-    expect(applied.json().edition.publisher).toBeNull();
-    expect(applied.json().edition.language).toBe('en');
-    expect(applied.json().edition.identifiers).toEqual([{ scheme: 'isbn', value: 'urn:isbn:9780000000002' }]);
-    expect(applied.json().edition.cover).toBeNull();
-    expect(applied.json().edition.locks).toEqual(expect.arrayContaining(['title', 'description']));
-    expect(applied.json().edition.locks).not.toContain('publisher');
+    expect(applied.statusCode).toBe(202);
+    const applyJob = await waitForJob(app, cookie, applied.json().job.id as number);
+    expect(applyJob.status).toBe('succeeded');
+    const afterApply = await editionOf(app, cookie, editionId);
+    expect(afterApply.title).toBe('Kept Title');
+    expect(afterApply.description).toBe('From the catalog.');
+    expect(afterApply.publisher).toBeNull();
+    expect(afterApply.language).toBe('en');
+    expect(afterApply.identifiers).toEqual([{ scheme: 'isbn', value: 'urn:isbn:9780000000002' }]);
+    expect(afterApply.cover).toBeNull();
+    expect(afterApply.locks).toEqual(expect.arrayContaining(['title', 'description']));
+    expect(afterApply.locks).not.toContain('publisher');
 
     const again = await app.inject({
       method: 'POST',
       url: `/api/editions/${editionId}/metadata/lookup`,
       headers: { cookie },
     });
-    expect(again.statusCode).toBe(200);
+    expect(again.statusCode).toBe(202);
+    const againJob = await waitForJob(app, cookie, again.json().job.id as number);
+    expect(againJob.status).toBe('succeeded');
     const covered = await app.inject({
       method: 'POST',
       url: `/api/editions/${editionId}/metadata/apply`,
       headers: { cookie },
-      payload: { previewId: again.json().previewId as number, confirm: ['title', 'publisher', 'cover'] },
+      payload: { previewId: againJob.result?.preview?.previewId, confirm: ['title', 'publisher', 'cover'] },
     });
-    expect(covered.statusCode).toBe(200);
-    expect(covered.json().edition.title).toBe('Kept Title');
-    expect(covered.json().edition.description).toBe('From the catalog.');
-    expect(covered.json().edition.publisher).toBe('OL Press');
-    expect(covered.json().edition.cover).toEqual({ mediaType: 'image/png' });
+    expect(covered.statusCode).toBe(202);
+    const coverJob = await waitForJob(app, cookie, covered.json().job.id as number);
+    expect(coverJob.status).toBe('succeeded');
+    const afterCover = await editionOf(app, cookie, editionId);
+    expect(afterCover.title).toBe('Kept Title');
+    expect(afterCover.description).toBe('From the catalog.');
+    expect(afterCover.publisher).toBe('OL Press');
+    expect(afterCover.cover).toEqual({ mediaType: 'image/png' });
     expect(calls.some((call) => call.url.startsWith(`${OPEN_LIBRARY_COVERS_ORIGIN}/b/id/42-L.jpg`))).toBe(true);
     expect(statSync(blobPath).ino).toBe(before.ino);
     expect(createHash('sha256').update(readFileSync(blobPath)).digest('hex')).toBe(beforeHash);
@@ -272,4 +322,236 @@ describe('open library client', () => {
     db.close();
     expect(editions.count).toBe(1);
   });
+
+  it('succeeds with an empty preview when Open Library has no match', async () => {
+    const { transport, calls } = stubTransport();
+    transport.fetch = async (input, init) => {
+      const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const headers = new Headers(init?.headers);
+      calls.push({ url: href, userAgent: headers.get('user-agent') });
+      const url = new URL(href);
+      if (url.pathname === '/search.json') return Response.json({ docs: [] });
+      return new Response('missing', { status: 404 });
+    };
+    const { app, config, cookie, editionId } = await importedPdf(transport);
+    const before = await editionOf(app, cookie, editionId);
+    const lookup = await app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/lookup`,
+      headers: { cookie },
+    });
+    expect(lookup.statusCode).toBe(202);
+    const job = await waitForJob(app, cookie, lookup.json().job.id as number);
+    expect(job.status).toBe('succeeded');
+    expect(job.result).toEqual({ preview: null });
+    expect(calls.length).toBeGreaterThan(0);
+    expect(await editionOf(app, cookie, editionId)).toMatchObject({ title: before.title, description: before.description });
+    const db = new Database(config.databasePath, { readonly: true });
+    const previews = db.prepare('SELECT COUNT(*) AS count FROM metadata_previews').get() as { count: number };
+    db.close();
+    expect(previews.count).toBe(0);
+  });
+
+  it('fails the lookup job when the transport fails and leaves the edition unchanged', async () => {
+    const transport: OpenLibraryTransport = {
+      async fetch() {
+        return new Response('unavailable', { status: 503 });
+      },
+    };
+    const { app, config, cookie, editionId } = await importedPdf(transport);
+    const before = await editionOf(app, cookie, editionId);
+    const lookup = await app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/lookup`,
+      headers: { cookie },
+    });
+    expect(lookup.statusCode).toBe(202);
+    const job = await waitForJob(app, cookie, lookup.json().job.id as number);
+    expect(job.status).toBe('failed');
+    expect(job.result).toEqual({ error: 'metadata_unavailable' });
+    expect(await editionOf(app, cookie, editionId)).toMatchObject({
+      title: before.title,
+      description: before.description,
+      publisher: before.publisher,
+    });
+    const db = new Database(config.databasePath, { readonly: true });
+    const previews = db.prepare('SELECT COUNT(*) AS count FROM metadata_previews').get() as { count: number };
+    db.close();
+    expect(previews.count).toBe(0);
+  });
+
+  it('fails apply when the cover transport fails and does not write confirmed fields', async () => {
+    const { transport } = stubTransport();
+    const original = transport.fetch;
+    transport.fetch = async (input, init) => {
+      const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (new URL(href).pathname.startsWith('/b/')) return new Response('no', { status: 503 });
+      if (!original) throw new Error('missing fetch');
+      return original(input, init);
+    };
+    const { app, cookie, editionId } = await importedPdf(transport);
+    const before = await editionOf(app, cookie, editionId);
+    const lookup = await app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/lookup`,
+      headers: { cookie },
+    });
+    const lookupJob = await waitForJob(app, cookie, lookup.json().job.id as number);
+    expect(lookupJob.status).toBe('succeeded');
+    const applied = await app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/apply`,
+      headers: { cookie },
+      payload: { previewId: lookupJob.result?.preview?.previewId, confirm: ['publisher', 'cover'] },
+    });
+    expect(applied.statusCode).toBe(202);
+    const applyJob = await waitForJob(app, cookie, applied.json().job.id as number);
+    expect(applyJob.status).toBe('failed');
+    expect(applyJob.result).toEqual({ error: 'metadata_unavailable' });
+    const after = await editionOf(app, cookie, editionId);
+    expect(after.publisher).toBe(before.publisher);
+    expect(after.cover).toBeNull();
+    expect(after.title).toBe(before.title);
+  });
+
+  it('returns before Open Library answers and does not claim a second job or scan while one is in flight', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const transport: OpenLibraryTransport = {
+      async fetch() {
+        calls += 1;
+        await gate;
+        return Response.json({ docs: [] });
+      },
+    };
+    const { app, config, dir, cookie, libraryId, editionId } = await importedPdf(transport);
+    const root = path.join(dir, 'indexed');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(path.join(root, 'tale.epub'), buildEpub());
+    const inserted = new Database(config.databasePath);
+    const library = inserted
+      .prepare(`INSERT INTO libraries (name, mode, root_path, created_at) VALUES ('Shelf', 'indexed', ?, ?) RETURNING id`)
+      .get(root, new Date().toISOString()) as { id: number };
+    inserted.close();
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/api/imports/folder',
+      headers: { cookie },
+      payload: { libraryId: library.id, path: '.' },
+    });
+    expect(imported.statusCode).toBe(202);
+    const folderJob = await waitForJob(app, cookie, imported.json().job.id as number);
+    expect(folderJob.items[0]?.status).toBe('succeeded');
+    renameSync(root, path.join(dir, 'indexed-away'));
+
+    const lookupPromise = app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/lookup`,
+      headers: { cookie },
+    });
+    const lookup = await Promise.race([
+      lookupPromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('lookup waited on Open Library')), 1000)),
+    ]);
+    expect(lookup.statusCode).toBe(202);
+    const lookupId = lookup.json().job.id as number;
+    const started = Date.now();
+    let running = false;
+    while (Date.now() - started < 2000) {
+      const view = await app.inject({ method: 'GET', url: `/api/jobs/${lookupId}`, headers: { cookie } });
+      if (view.json().job.status === 'running' && calls >= 1) {
+        running = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(running).toBe(true);
+    expect(calls).toBe(1);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/lookup`,
+      headers: { cookie },
+    });
+    expect(second.statusCode).toBe(202);
+    const rescan = await app.inject({
+      method: 'POST',
+      url: `/api/libraries/${library.id}/rescan`,
+      headers: { cookie },
+    });
+    expect(rescan.statusCode).toBe(202);
+    expect(calls).toBe(1);
+    const queuedLookup = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${second.json().job.id as number}`,
+      headers: { cookie },
+    });
+    const queuedScan = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${rescan.json().job.id as number}`,
+      headers: { cookie },
+    });
+    expect(queuedLookup.json().job.status).toBe('queued');
+    expect(queuedScan.json().job.status).toBe('queued');
+    const during = new Database(config.databasePath, { readonly: true });
+    const availability = during.prepare(
+      `SELECT a.availability FROM file_assets a JOIN editions e ON e.id = a.edition_id WHERE e.library_id = ?`,
+    ).all(library.id) as Array<{ availability: string }>;
+    during.close();
+    expect(availability.every((row) => row.availability === 'present')).toBe(true);
+
+    release();
+    expect((await waitForJob(app, cookie, lookupId)).status).toBe('succeeded');
+    expect((await waitForJob(app, cookie, second.json().job.id as number)).status).toBe('succeeded');
+    const scan = await waitForJob(app, cookie, rescan.json().job.id as number);
+    expect(scan.status).toBe('succeeded');
+    expect(scan.result).toMatchObject({ checked: 1, missing: 1, present: 0 });
+    const after = new Database(config.databasePath, { readonly: true });
+    const missing = after.prepare(
+      `SELECT a.availability FROM file_assets a JOIN editions e ON e.id = a.edition_id WHERE e.library_id = ?`,
+    ).all(library.id) as Array<{ availability: string }>;
+    after.close();
+    expect(missing.every((row) => row.availability === 'missing')).toBe(true);
+    expect(libraryId).toBeGreaterThan(0);
+  });
 });
+
+async function importedPdf(transport: OpenLibraryTransport) {
+  const temp = makeTempDir();
+  cleanups.push(temp.cleanup);
+  const config = tempConfig(temp.dir);
+  migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
+  const app = await buildApp({ config, clientDist: null, logger: false, openLibrary: transport });
+  cleanups.push(() => {
+    void app.close();
+  });
+  const setup = await app.inject({
+    method: 'POST',
+    url: '/api/setup',
+    payload: { username: 'ada', password, libraryName: 'Home' },
+  });
+  expect(setup.statusCode).toBe(201);
+  const cookie = cookieFrom(setup);
+  const libraryId = setup.json().library.id as number;
+  const boundary = '----qijuanboundary';
+  const payload = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="notes.pdf"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+    ),
+    buildTextPdf(),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const created = await app.inject({
+    method: 'POST',
+    url: `/api/imports?libraryId=${libraryId}`,
+    headers: { cookie, 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  });
+  expect(created.statusCode).toBe(202);
+  const job = await waitForJob(app, cookie, created.json().job.id as number);
+  expect(job.items[0]?.status).toBe('succeeded');
+  return { app, config, dir: temp.dir, cookie, libraryId, editionId: job.items[0]?.editionId ?? 0 };
+}

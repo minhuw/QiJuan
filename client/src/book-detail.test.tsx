@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { EditionDetail, MetadataPreview } from './api';
@@ -48,7 +48,7 @@ const admin = {
   libraries: [{ id: 1, name: 'Home', mode: 'managed' as const }],
 };
 
-function installFetch(extra?: (url: string, init?: RequestInit) => Response | null) {
+function installFetch(extra?: (url: string, init?: RequestInit) => Response | Promise<Response> | null) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -115,7 +115,7 @@ describe('book detail', () => {
     expect(screen.queryByRole('button', { name: /删除|delete/i })).not.toBeInTheDocument();
   });
 
-  it('shows a locked Open Library field as kept', async () => {
+  it('polls a lookup job, then shows the preview and apply flow in both locales', async () => {
     const preview: MetadataPreview = {
       previewId: 7,
       fields: [
@@ -123,17 +123,228 @@ describe('book detail', () => {
         { field: 'description', locked: false, status: 'change', current: 'A short book.', proposed: 'A suggestion' },
       ],
     };
+    let releaseLookup: (response: Response) => void = () => {};
+    let releaseApply: (response: Response) => void = () => {};
+    const lookupJob = new Promise<Response>((resolve) => {
+      releaseLookup = resolve;
+    });
+    const applyJob = new Promise<Response>((resolve) => {
+      releaseApply = resolve;
+    });
+    const bodies: string[] = [];
+    let applied = false;
     installFetch((url, init) => {
-      if (url === '/api/editions/3/metadata/lookup' && init?.method === 'POST') return json(preview);
+      if (url === '/api/editions/3/metadata/lookup' && init?.method === 'POST') return json({ job: { id: 11 } }, 202);
+      if (url === '/api/editions/3/metadata/apply' && init?.method === 'POST') {
+        bodies.push(String(init.body));
+        return json({ job: { id: 12 } }, 202);
+      }
+      if (url === '/api/jobs/11') return lookupJob;
+      if (url === '/api/jobs/12') return applyJob;
+      if (url === '/api/editions/3' && (!init?.method || init.method === 'GET')) {
+        return json({ edition: applied ? { ...edition, description: 'A suggestion' } : edition });
+      }
       return null;
     });
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
     fireEvent.click(await screen.findByRole('button', { name: catalogs.en.book.lookup }));
-    expect(await screen.findByText(catalogs.en.book.kept)).toBeInTheDocument();
+    expect(await screen.findByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
+      target: { value: 'zh-Hans' },
+    });
+    expect(screen.getByText(catalogs['zh-Hans'].book.lookupRunning)).toBeInTheDocument();
+    releaseLookup(json({ job: { id: 11, status: 'succeeded', result: { preview } } }));
+    expect(await screen.findByText(catalogs['zh-Hans'].book.kept)).toBeInTheDocument();
     expect(screen.getByText('A suggestion')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: catalogs.en.book.description })).toBeChecked();
-    expect(screen.queryByRole('button', { name: /merge|delete/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: catalogs['zh-Hans'].book.description })).toBeChecked();
+    expect(screen.queryByRole('button', { name: /合并|merge|删除|delete/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: catalogs['zh-Hans'].book.confirm }));
+    expect(await screen.findByText(catalogs['zh-Hans'].book.applyRunning)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs['zh-Hans'].shell.language }), {
+      target: { value: 'en' },
+    });
+    expect(screen.getByText(catalogs.en.book.applyRunning)).toBeInTheDocument();
+    expect(bodies[0]).toContain('"previewId":7');
+    expect(bodies[0]).toContain('description');
+    applied = true;
+    releaseApply(
+      json({
+        job: { id: 12, status: 'succeeded', result: { applied: true } },
+      }),
+    );
+    expect(await screen.findByText(catalogs.en.book.saved)).toBeInTheDocument();
+    expect(screen.getByLabelText(catalogs.en.book.description)).toHaveValue('A suggestion');
+    expect(screen.queryByText(catalogs.en.book.kept)).not.toBeInTheDocument();
+  });
+
+  it('polls a queued metadata job past the Open Library timeouts and retries failed reads', async () => {
+    const preview: MetadataPreview = {
+      previewId: 7,
+      fields: [
+        { field: 'title', locked: true, status: 'kept', current: 'The Tale', proposed: 'Remote' },
+        { field: 'description', locked: false, status: 'change', current: 'A short book.', proposed: 'A suggestion' },
+      ],
+    };
+    let lookupPolls = 0;
+    let applyPolls = 0;
+    let applied = false;
+    let editionReloads = 0;
+    const saves: string[] = [];
+    installFetch((url, init) => {
+      if (url === '/api/editions/3/metadata/lookup' && init?.method === 'POST') return json({ job: { id: 11 } }, 202);
+      if (url === '/api/editions/3/metadata/apply' && init?.method === 'POST') return json({ job: { id: 12 } }, 202);
+      if (url === '/api/jobs/11') {
+        lookupPolls += 1;
+        if (lookupPolls === 1) return json({ error: 'internal' }, 500);
+        if (lookupPolls < 40) return json({ job: { id: 11, status: 'queued', result: null } });
+        return json({ job: { id: 11, status: 'succeeded', result: { preview } } });
+      }
+      if (url === '/api/jobs/12') {
+        applyPolls += 1;
+        if (applyPolls === 1) return Promise.reject(new Error('offline'));
+        if (applyPolls < 40) return json({ job: { id: 12, status: 'running', result: null } });
+        applied = true;
+        return json({ job: { id: 12, status: 'succeeded', result: { applied: true } } });
+      }
+      if (url === '/api/editions/3' && init?.method === 'PATCH') {
+        saves.push(String(init.body));
+        return json({
+          edition: { ...edition, title: 'Renamed', sortTitle: 'Renamed', description: 'A suggestion' },
+        });
+      }
+      if (url === '/api/editions/3' && (!init?.method || init.method === 'GET')) {
+        if (!applied) return json({ edition });
+        editionReloads += 1;
+        if (editionReloads === 1) return json({ error: 'network' }, 503);
+        return json({ edition: { ...edition, description: 'A suggestion', locks: ['title', 'description'] } });
+      }
+      return null;
+    });
+    window.history.pushState({}, '', '/books/3');
+    render(<App locale="en" />);
+    const title = await screen.findByLabelText(catalogs.en.book.title);
+    fireEvent.change(title, { target: { value: ' ' } });
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.save }));
+    expect(screen.getByRole('alert')).toHaveTextContent(catalogs.en.errors.invalid_request);
+    fireEvent.change(screen.getByLabelText(catalogs.en.book.title), { target: { value: 'The Tale' } });
+    fireEvent.change(screen.getByRole('textbox', { name: catalogs.en.book.description }), {
+      target: { value: 'Unsaved note' },
+    });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      async function pump(times: number) {
+        for (let i = 0; i < times; i += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(200);
+          });
+        }
+      }
+
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.lookup }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: catalogs.en.book.lookup })).toBeDisabled();
+
+      await pump(34);
+      expect(lookupPolls).toBeGreaterThan(30);
+      expect(screen.getByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
+      expect(screen.queryByText(catalogs.en.errors.internal)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: catalogs.en.book.save })).toBeDisabled();
+
+      await pump(10);
+      expect(screen.getByText(catalogs.en.book.kept)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: catalogs.en.book.description })).toHaveValue('Unsaved note');
+      expect(screen.getByRole('button', { name: catalogs.en.book.lookup })).toBeEnabled();
+
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.confirm }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText(catalogs.en.book.applyRunning)).toBeInTheDocument();
+      await pump(34);
+      expect(applyPolls).toBeGreaterThan(30);
+      expect(screen.getByText(catalogs.en.book.applyRunning)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: catalogs.en.book.save })).toBeDisabled();
+      expect(screen.getByRole('textbox', { name: catalogs.en.book.description })).toHaveValue('Unsaved note');
+
+      await pump(10);
+      expect(editionReloads).toBeGreaterThan(1);
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByText(catalogs.en.book.saved)).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: catalogs.en.book.description })).toHaveValue('A suggestion');
+      expect(screen.queryByText(catalogs.en.book.kept)).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(catalogs.en.book.title), { target: { value: 'Renamed' } });
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.save }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(saves).toHaveLength(1);
+      expect(saves[0]).toContain('"title":"Renamed"');
+      expect(saves[0]).not.toContain('description');
+      expect(saves[0]).not.toContain('Unsaved note');
+      expect(saves[0]).not.toContain('A short book');
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fail a lookup that is still queued when the book screen is left', async () => {
+    let polls = 0;
+    installFetch((url, init) => {
+      if (url === '/api/editions/3/metadata/lookup' && init?.method === 'POST') return json({ job: { id: 11 } }, 202);
+      if (url === '/api/jobs/11') {
+        polls += 1;
+        if (polls % 5 === 0) return json({ error: 'internal' }, 500);
+        return json({ job: { id: 11, status: 'queued', result: null } });
+      }
+      if (url === '/api/home') return json({ continueReading: [], recent: [], shelves: [] });
+      if (url.startsWith('/api/library')) {
+        return json({ editions: [], total: 0, limit: 24, offset: 0, languages: [], shelves: [] });
+      }
+      if (url === '/api/editions') return json({ editions: [] });
+      return null;
+    });
+    window.history.pushState({}, '', '/books/3');
+    render(<App locale="en" />);
+    const lookup = await screen.findByRole('button', { name: catalogs.en.book.lookup });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      fireEvent.click(lookup);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      for (let i = 0; i < 40; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(200);
+        });
+      }
+      expect(polls).toBeGreaterThan(30);
+      expect(screen.getByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
+      expect(screen.queryByText(catalogs.en.errors.internal)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: catalogs.en.book.save })).toBeDisabled();
+
+      const beforeLeave = polls;
+      fireEvent.click(screen.getByRole('link', { name: catalogs.en.book.back }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(screen.queryByText(catalogs.en.book.lookupRunning)).not.toBeInTheDocument();
+      expect(polls).toBe(beforeLeave);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it('shows metadata, formats, series neighbors, and reading actions in both locales', async () => {

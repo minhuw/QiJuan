@@ -106,6 +106,10 @@ export async function buildApp(options: BuildAppOptions) {
     });
 
     registerAccessRoutes(app, live);
+    const openLibrary = {
+      origin: options.config.openLibraryOrigin,
+      ...options.openLibrary,
+    };
     registerImportRoutes(app, {
       get db() {
         return state.db;
@@ -118,10 +122,6 @@ export async function buildApp(options: BuildAppOptions) {
         return state.db;
       },
       dataDir: options.config.dataDir,
-      openLibrary: {
-        origin: options.config.openLibraryOrigin,
-        ...options.openLibrary,
-      },
     });
     registerLibraryRoutes(app, {
       get db() {
@@ -195,6 +195,7 @@ export async function buildApp(options: BuildAppOptions) {
         return state.db;
       },
       dataDir: options.config.dataDir,
+      openLibrary,
       log: {
         error(context, message) {
           app.log.error(context, message);

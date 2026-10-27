@@ -116,6 +116,8 @@
     "suggestionNote": "这些版本各自保留。这里不会合并或删除。",
     "dismiss": "忽略",
     "lookup": "查找书目",
+    "lookupRunning": "正在查找书目…",
+    "applyRunning": "正在应用所选字段…",
     "preview": "建议的修改",
     "kept": "保留",
     "unchanged": "没有变化",
