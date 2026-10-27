@@ -84,6 +84,12 @@ npm run test:acceptance
 
 QiJuan runs as one Node.js process. The catalog lives in SQLite on the data volume, and background jobs run in-process (no separate queue or cache). Backup to restic comes later. Open Library is an optional metadata source, not required to keep or read a library.
 
+## Library
+
+Search matches title, alternate titles, authors, translators, series, tags, and ISBN. An ISBN matches with or without hyphens. Queries of three characters or more use an FTS5 trigram index that is rebuilt when those fields change. Shorter queries match the same fields with a substring comparison. A Chinese query is also searched in the other of Simplified or Traditional Chinese. Stored metadata is left in the script it was saved in.
+
+The home screen shows continue reading from that user's position, recently added books, and that user's shelves. The same search can be shown as a cover grid or a compact list. Reading status, rating, favorite, shelves, and the queue belong to the signed-in user.
+
 ## Import
 
 Upload EPUB and PDF files into a managed library, or import a directory that stays inside an indexed library root. The request only stores the uploads and enqueues a job. A loop in the same process claims the job. If the process stops while a job is running, that job is queued again on the next startup.

@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { api, apiForm, type EditionDetail, type MetadataPreview } from './api';
+import { ReadingActions } from './reading-actions';
 import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -13,6 +14,7 @@ const ERROR_CODES = new Set([
   'internal',
   'payload_too_large',
   'metadata_unavailable',
+  'conflict',
 ]);
 
 const FIELD_LABEL: Record<string, string> = {
@@ -247,6 +249,18 @@ export function BookDetail({
         </button>
       </div>
       <h1>{edition.title}</h1>
+      {edition.authors.length > 0 ? <p className="byline">{edition.authors.join(', ')}</p> : null}
+      {edition.translators.length > 0 ? (
+        <p className="byline">{edition.translators.join(', ')}</p>
+      ) : null}
+      {edition.description ? <p>{edition.description}</p> : null}
+      <ReadingActions
+        edition={edition}
+        onEdition={(next) => {
+          setEdition(next);
+          setForm(toForm(next));
+        }}
+      />
       {formError ? (
         <p className="alert" role="alert">
           {errorText(t, formError)}
@@ -285,6 +299,33 @@ export function BookDetail({
           ))}
         </ul>
       </section>
+
+      {edition.series ? (
+        <section className="import-block">
+          <h2>{t('reading.neighbors')}</h2>
+          <p>
+            {edition.series.name}
+            {edition.seriesOrder == null ? '' : ` · ${edition.seriesOrder}`}
+          </p>
+          {edition.neighbors?.previous ? (
+            <p>
+              <Link className="text-link" to={`/books/${edition.neighbors.previous.id}`}>
+                {t('reading.previous')}: {edition.neighbors.previous.title}
+              </Link>
+            </p>
+          ) : null}
+          {edition.neighbors?.next ? (
+            <p>
+              <Link className="text-link" to={`/books/${edition.neighbors.next.id}`}>
+                {t('reading.next')}: {edition.neighbors.next.title}
+              </Link>
+            </p>
+          ) : null}
+          {!edition.neighbors?.previous && !edition.neighbors?.next ? (
+            <p className="placeholder">{t('reading.noNeighbors')}</p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="import-block">
         <h2>{t('book.suggestions')}</h2>

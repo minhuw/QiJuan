@@ -9,7 +9,6 @@ import {
   type EditionPatch,
   batchEditEditions,
   cleanPatchText,
-  getEditionDetail,
   listEditionSummaries,
   replaceEditionCover,
   requireLiveEdition,
@@ -23,7 +22,8 @@ import { OpenLibraryError, type OpenLibraryTransport } from './metadata/openLibr
 import { PREVIEW_FIELDS, type PreviewField, applyMetadataPreview, createMetadataPreview } from './metadata/apply.js';
 import { refreshEditionMetadata } from './refresh.js';
 import type { AuthUser } from './sessions.js';
-import { dismissSuggestion, findSuggestion, listOpenSuggestions } from './suggestions.js';
+import { presentLibraryEdition } from './library.js';
+import { dismissSuggestion, findSuggestion } from './suggestions.js';
 
 const MAX_COVER_BYTES = 8 * 1024 * 1024;
 const MAX_BATCH = 100;
@@ -77,7 +77,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, edition.id) };
+      return { edition: presentEdition(deps.db, user.id, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -91,7 +91,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'invalid_request' });
       updateEdition(deps.db, edition.id, patch);
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, edition.id) };
+      return { edition: presentEdition(deps.db, user.id, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -106,7 +106,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       if (!upload.bytes) return reply.code(400).send({ error: 'invalid_request' });
       replaceEditionCover(deps.db, { dataDir: deps.dataDir, editionId: edition.id, bytes: upload.bytes });
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, edition.id) };
+      return { edition: presentEdition(deps.db, user.id, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -133,7 +133,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
       refreshEditionMetadata(deps.db, deps.dataDir, edition.id);
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, edition.id) };
+      return { edition: presentEdition(deps.db, user.id, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -170,7 +170,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
         confirm,
       });
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, edition.id) };
+      return { edition: presentEdition(deps.db, user.id, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -193,8 +193,8 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
   });
 }
 
-function presentEdition(db: AppDatabase, editionId: number) {
-  return getEditionDetail(db, editionId, listOpenSuggestions(db, editionId));
+function presentEdition(db: AppDatabase, userId: number, editionId: number) {
+  return presentLibraryEdition(db, userId, editionId);
 }
 
 async function accessEdition(deps: EditionRouteDeps, user: AuthUser, raw: string | undefined) {

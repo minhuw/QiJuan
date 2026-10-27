@@ -4,6 +4,7 @@ import { api, type Account, type LibraryInfo, type ListedUser, type Me, type Set
 import { BookDetail, ReaderPage } from './book-detail';
 import { CatalogHome } from './catalog-home';
 import { ImportScreen } from './import-screen';
+import { LibraryBrowser } from './library';
 import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -150,6 +151,7 @@ export function Gate() {
           ))}
         </ul>
       )}
+      <LibraryBrowser />
       <CatalogHome />
       <div className="toolbar">
         <p className="signed-in">

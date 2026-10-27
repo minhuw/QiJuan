@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { EditionDetail, MetadataPreview } from './api';
@@ -129,5 +129,59 @@ describe('book detail', () => {
     expect(screen.getByText('A suggestion')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: catalogs.en.book.description })).toBeChecked();
     expect(screen.queryByRole('button', { name: /merge|delete/i })).not.toBeInTheDocument();
+  });
+
+  it('shows metadata, formats, series neighbors, and reading actions in both locales', async () => {
+    const rich = {
+      ...edition,
+      cover: null,
+      reading: {
+        status: null,
+        rating: null,
+        favorite: false,
+        queued: false,
+        shelves: [{ id: 4, name: 'Weekend', included: false }],
+      },
+      neighbors: {
+        previous: { id: 2, title: 'Earlier', seriesOrder: 1 },
+        next: { id: 8, title: 'Later', seriesOrder: 3 },
+        series: [],
+      },
+    };
+    const bodies: string[] = [];
+    installFetch((url, init) => {
+      if (url === '/api/editions/3' && (!init?.method || init.method === 'GET')) return json({ edition: rich });
+      if (url === '/api/editions/3/reading' && init?.method === 'PATCH') {
+        bodies.push(String(init.body));
+        return json({ edition: { ...rich, reading: { ...rich.reading, status: 'want' } } });
+      }
+      return null;
+    });
+    window.history.pushState({}, '', '/books/3');
+    const view = render(<App locale="en" />);
+    expect(await screen.findByRole('heading', { name: 'The Tale' })).toBeInTheDocument();
+    expect(screen.getAllByText('Lin Qi').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('A short book.').length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: catalogs.en.book.formats })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: `${catalogs.en.book.read} EPUB` })).toBeInTheDocument();
+    expect(document.querySelector('img')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Previous: Earlier' })).toHaveAttribute('href', '/books/2');
+    expect(screen.getByRole('link', { name: 'Next: Later' })).toHaveAttribute('href', '/books/8');
+    expect(screen.getByRole('button', { name: 'Add Weekend' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: catalogs.en.reading.favorite })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `${catalogs.en.reading.rating} 5` })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reading.want }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: catalogs.en.reading.want })).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(bodies[0]).toContain('"status":"want"');
+
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
+      target: { value: 'zh-Hans' },
+    });
+    expect(screen.getByRole('button', { name: catalogs['zh-Hans'].reading.want })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: `${catalogs['zh-Hans'].reading.next}: Later` })).toBeInTheDocument();
+    view.unmount();
   });
 });

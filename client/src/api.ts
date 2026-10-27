@@ -94,6 +94,62 @@ export interface EditionSummary {
   formats: Array<'epub' | 'pdf'>;
 }
 
+export type ReadingStatus = 'want' | 'reading' | 'finished' | 'on_hold';
+
+export interface LibraryEdition {
+  id: number;
+  libraryId: number;
+  title: string;
+  authors: string[];
+  language: string | null;
+  formats: Array<'epub' | 'pdf'>;
+  hasCover: boolean;
+  status: ReadingStatus | null;
+  rating: number | null;
+  favorite: boolean;
+}
+
+export interface LibraryShelf {
+  id: number;
+  name: string;
+  count: number;
+}
+
+export interface HomePayload {
+  continueReading: Array<LibraryEdition & { updatedAt: string }>;
+  recent: LibraryEdition[];
+  shelves: LibraryShelf[];
+}
+
+export interface LibraryPage {
+  editions: LibraryEdition[];
+  total: number;
+  limit: number;
+  offset: number;
+  languages: string[];
+  shelves: LibraryShelf[];
+}
+
+export interface ReadingShelf {
+  id: number;
+  name: string;
+  included: boolean;
+}
+
+export interface ReadingState {
+  status: ReadingStatus | null;
+  rating: number | null;
+  favorite: boolean;
+  queued: boolean;
+  shelves: ReadingShelf[];
+}
+
+export interface SeriesNeighbor {
+  id: number;
+  title: string;
+  seriesOrder: number | null;
+}
+
 export interface EditionAsset {
   id: number;
   format: 'epub' | 'pdf';
@@ -122,6 +178,12 @@ export interface EditionDetail {
   cover: { mediaType: string } | null;
   assets: EditionAsset[];
   suggestions: Array<{ id: number; otherEditionId: number; otherTitle: string }>;
+  reading?: ReadingState;
+  neighbors?: {
+    previous: SeriesNeighbor | null;
+    next: SeriesNeighbor | null;
+    series: SeriesNeighbor[];
+  };
 }
 
 export interface FieldPreview {
