@@ -1,4 +1,5 @@
-import { readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
@@ -340,6 +341,178 @@ describe('backup jobs', () => {
     const missingRoot = await waitJob(started.app, started.cookie, 'failed');
     expect(missingRoot.job.reason).toMatch(/no folder/);
     expect(calls.some((args) => args.includes('backup'))).toBe(false);
+  });
+
+  it('fails when a managed blob or included indexed file changed and keeps the previous snapshot', async () => {
+    const calls: string[][] = [];
+    const forgotten: string[] = [];
+    let snapshotSeq = 0;
+    const runner: ResticRunner = {
+      async run(args) {
+        calls.push(args);
+        if (args.includes('forget')) {
+          const id = args.find((arg) => /^[a-f0-9]{64}$/.test(arg));
+          if (id) forgotten.push(id);
+        }
+        if (args.includes('backup')) {
+          snapshotSeq += 1;
+          const snapshotId = snapshotSeq.toString(16).padStart(64, '0');
+          return result({
+            code: 0,
+            stdout: `{"message_type":"summary","snapshot_id":"${snapshotId}"}` + '\n',
+          });
+        }
+        if (args.includes('snapshots')) return result({ code: 0, stdout: '[]' });
+        return result({ code: 0 });
+      },
+    };
+    const started = await startApp(runner);
+    await configure(started.app, started.cookie);
+    const bookBytes = Buffer.from('book-bytes');
+    const blob = writeImmutableBlob(started.config.dataDir, bookBytes);
+    const indexedRoot = path.join(started.config.dataDir, 'indexed-shelf');
+    const indexedRelative = 'nested/tale.epub';
+    const indexedAbsolute = path.join(indexedRoot, 'nested', 'tale.epub');
+    const indexedBytes = Buffer.from('indexed-bytes');
+    mkdirSync(path.dirname(indexedAbsolute), { recursive: true });
+    writeFileSync(indexedAbsolute, indexedBytes);
+    writeFileSync(path.join(indexedRoot, 'notes.txt'), 'not a catalog file');
+    const indexedSha = createHash('sha256').update(indexedBytes).digest('hex');
+    const missingAbsolute = path.join(indexedRoot, 'gone.epub');
+    writeFileSync(missingAbsolute, 'different-bytes');
+    const missingListedHash = createHash('sha256').update(Buffer.from('original-missing-bytes')).digest('hex');
+    const sqlite = openDatabase(started.config.databasePath);
+    const now = '2026-04-01T00:00:00.000Z';
+    const editionId = Number(
+      sqlite.sqlite
+        .prepare(
+          `INSERT INTO editions (library_id, title, sort_title, created_at, updated_at)
+           VALUES (?, 'Tale', 'Tale', ?, ?)`,
+        )
+        .run(started.libraryId, now, now).lastInsertRowid,
+    );
+    const managedAssetId = Number(
+      sqlite.sqlite
+        .prepare(
+          `INSERT INTO file_assets (
+            edition_id, format, sha256, bytes, original_filename, storage, relative_path, availability, created_at
+          ) VALUES (?, 'epub', ?, ?, 'tale.epub', 'managed', ?, 'present', ?)`,
+        )
+        .run(editionId, blob.sha256, blob.bytes, blob.relativePath, now).lastInsertRowid,
+    );
+    const indexedId = Number(
+      sqlite.sqlite
+        .prepare(`INSERT INTO libraries (name, mode, root_path, created_at) VALUES ('Shelf', 'indexed', ?, ?)`)
+        .run(indexedRoot, now).lastInsertRowid,
+    );
+    const indexedEditionId = Number(
+      sqlite.sqlite
+        .prepare(
+          `INSERT INTO editions (library_id, title, sort_title, created_at, updated_at)
+           VALUES (?, 'Shelf tale', 'Shelf tale', ?, ?)`,
+        )
+        .run(indexedId, now, now).lastInsertRowid,
+    );
+    const indexedAssetId = Number(
+      sqlite.sqlite
+        .prepare(
+          `INSERT INTO file_assets (
+            edition_id, format, sha256, bytes, original_filename, storage, relative_path, availability, created_at
+          ) VALUES (?, 'epub', ?, ?, 'tale.epub', 'indexed', ?, 'present', ?)`,
+        )
+        .run(indexedEditionId, indexedSha, indexedBytes.length, indexedRelative, now).lastInsertRowid,
+    );
+    sqlite.sqlite
+      .prepare(
+        `INSERT INTO file_assets (
+          edition_id, format, sha256, bytes, original_filename, storage, relative_path, availability, created_at
+        ) VALUES (?, 'epub', ?, ?, 'gone.epub', 'indexed', 'gone.epub', 'missing', ?)`,
+      )
+      .run(indexedEditionId, missingListedHash, Buffer.byteLength('original-missing-bytes'), now);
+    sqlite.sqlite.close();
+
+    const payload = { scope: 'managed', indexedLibraryIds: [indexedId] };
+    const backupRuns = () => calls.filter((args) => args.includes('backup')).length;
+    const expectCatalogUnchanged = () => {
+      const check = openDatabase(started.config.databasePath);
+      try {
+        const managed = check.sqlite.prepare('SELECT sha256 FROM file_assets WHERE id = ?').get(managedAssetId) as {
+          sha256: string;
+        };
+        const indexed = check.sqlite.prepare('SELECT sha256 FROM file_assets WHERE id = ?').get(indexedAssetId) as {
+          sha256: string;
+        };
+        expect(managed.sha256).toBe(blob.sha256);
+        expect(indexed.sha256).toBe(indexedSha);
+      } finally {
+        check.sqlite.close();
+      }
+    };
+
+    const startedOk = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/jobs',
+      headers: { cookie: started.cookie },
+      payload,
+    });
+    expect(startedOk.statusCode).toBe(202);
+    const success = await waitJob(started.app, started.cookie, 'succeeded');
+    const keptSnapshot = success.body.lastSuccess.snapshotId as string;
+    expect(keptSnapshot).toMatch(/^[a-f0-9]{64}$/);
+    expect(backupRuns()).toBe(1);
+
+    writeFileSync(blob.absolutePath, Buffer.from('tampered-book-bytes'));
+    const changedBlob = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/jobs',
+      headers: { cookie: started.cookie },
+      payload,
+    });
+    expect(changedBlob.statusCode).toBe(202);
+    const blobFailed = await waitJob(started.app, started.cookie, 'failed');
+    expect(blobFailed.job.reason).toMatch(/changed/i);
+    expect(blobFailed.job.reason).toContain(blob.absolutePath);
+    expect(blobFailed.job.reason).toMatch(/last successful snapshot/i);
+    expect(blobFailed.body.job.snapshotId).toBeNull();
+    expect(blobFailed.body.job.status).toBe('failed');
+    expect(blobFailed.body.lastSuccess.snapshotId).toBe(keptSnapshot);
+    expect(backupRuns()).toBe(1);
+    expect(forgotten).not.toContain(keptSnapshot);
+    expectCatalogUnchanged();
+
+    writeFileSync(blob.absolutePath, bookBytes);
+    writeFileSync(indexedAbsolute, Buffer.from('tampered-indexed-bytes'));
+    const changedIndexed = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/jobs',
+      headers: { cookie: started.cookie },
+      payload,
+    });
+    expect(changedIndexed.statusCode).toBe(202);
+    const indexedFailed = await waitJob(started.app, started.cookie, 'failed');
+    expect(indexedFailed.job.reason).toMatch(/changed/i);
+    expect(indexedFailed.job.reason).toContain(indexedAbsolute);
+    expect(indexedFailed.job.reason).toMatch(/last successful snapshot/i);
+    expect(indexedFailed.body.job.status).toBe('failed');
+    expect(indexedFailed.body.lastSuccess.snapshotId).toBe(keptSnapshot);
+    expect(backupRuns()).toBe(1);
+    expect(forgotten).not.toContain(keptSnapshot);
+    expectCatalogUnchanged();
+
+    writeFileSync(indexedAbsolute, indexedBytes);
+    const unchanged = await started.app.inject({
+      method: 'POST',
+      url: '/api/backup/jobs',
+      headers: { cookie: started.cookie },
+      payload,
+    });
+    expect(unchanged.statusCode).toBe(202);
+    const again = await waitJob(started.app, started.cookie, 'succeeded');
+    expect(again.body.lastSuccess.snapshotId).toMatch(/^[a-f0-9]{64}$/);
+    expect(again.body.lastSuccess.snapshotId).not.toBe(keptSnapshot);
+    expect(backupRuns()).toBe(2);
+    expect(forgotten).toEqual([]);
+    expectCatalogUnchanged();
   });
 
   it('runs one scheduled backup when the next time is already due', async () => {

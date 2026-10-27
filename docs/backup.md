@@ -53,8 +53,9 @@ Retention defaults to 7 daily, 4 weekly, and 6 monthly snapshots. Those counts a
 The job is failed, with a reason, when:
 
 - a selected managed file or indexed file cannot be read
+- a managed blob, custom cover, or included indexed file no longer matches its catalog hash
 - a selected indexed library root is missing
 - the destination cannot be reached
 - the restic process is killed or exits with an error
 
-The reason says what to fix and that a retry is safe. Starting another backup after the failure can succeed. A retry unlocks a stale restic lock left by an interrupted process.
+The reason says what to fix and that a retry is safe. When a file's bytes changed, the reason names that file. QiJuan does not update the catalog hash during backup. Starting another backup after the failure can succeed. A retry unlocks a stale restic lock left by an interrupted process.

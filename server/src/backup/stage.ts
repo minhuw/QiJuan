@@ -10,6 +10,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -33,6 +34,7 @@ import {
   latestSchemaVersion,
   migrationNames,
   scopeLabel,
+  sha256File,
 } from './model.js';
 
 const SECRET_NAME = 'session.secret';
@@ -59,7 +61,7 @@ export async function stageBackup(input: StageRequest): Promise<{ root: string; 
     const libraryRows = listLibraries(input.db);
     const included = new Set(input.indexedLibraryIds);
     if (!metadataOnly) copyManagedBlobs(input.sqlite, input.dataDir, root);
-    if (included.size > 0) copyIndexedLibraries(libraryRows, included, root);
+    if (included.size > 0) copyIndexedLibraries(input.sqlite, libraryRows, included, root);
     const storageLibraries = libraryRows.map((library) => ({
       id: library.id,
       name: library.name,
@@ -302,12 +304,19 @@ function listLibraries(db: AppDatabase): LibraryMapEntry[] {
 function copyManagedBlobs(sqlite: Database.Database, dataDir: string, root: string): void {
   const files = sqlite
     .prepare(
-      `SELECT sha256 AS sha256, relative_path AS relativePath, bytes AS bytes
+      `SELECT sha256 AS sha256, relative_path AS relativePath, bytes AS bytes,
+              original_filename AS originalFilename, availability AS availability
        FROM file_assets WHERE storage = 'managed'
        UNION
-       SELECT sha256, relative_path, bytes FROM covers`,
+       SELECT sha256, relative_path, bytes, relative_path, 'present' FROM covers`,
     )
-    .all() as Array<{ sha256: string; relativePath: string; bytes: number }>;
+    .all() as Array<{
+      sha256: string;
+      relativePath: string;
+      bytes: number;
+      originalFilename: string;
+      availability: string;
+    }>;
   for (const file of files) {
     let expected = '';
     try {
@@ -327,13 +336,15 @@ function copyManagedBlobs(sqlite: Database.Database, dataDir: string, root: stri
       throw new BackupJobError(keptSnapshotReason(`Cannot read the selected file ${file.relativePath}`));
     }
     assertReadableFile(absolute);
+    // Missing managed rows are not a present asset. Covers are always checked.
+    if (file.availability === 'present') assertStoredHash(absolute, file.sha256, file.originalFilename);
     const dest = path.join(root, expected);
     mkdirSync(path.dirname(dest), { recursive: true });
     copyFileSync(absolute, dest);
   }
 }
 
-function copyIndexedLibraries(rows: LibraryMapEntry[], included: Set<number>, root: string): void {
+function copyIndexedLibraries(sqlite: Database.Database, rows: LibraryMapEntry[], included: Set<number>, root: string): void {
   for (const id of included) {
     const library = rows.find((row) => row.id === id);
     if (!library || library.mode !== 'indexed') {
@@ -354,10 +365,145 @@ function copyIndexedLibraries(rows: LibraryMapEntry[], included: Set<number>, ro
         ),
       );
     }
+    assertIndexedCatalog(sqlite, library);
     const target = path.join(root, 'indexed', String(library.id));
     mkdirSync(target, { recursive: true });
     copyReadableTree(library.rootPath, library.rootPath, target);
   }
+}
+
+type IndexedCatalogFile = {
+  sha256: string;
+  relativePath: string;
+  originalFilename: string;
+  kind: string;
+};
+
+function assertIndexedCatalog(sqlite: Database.Database, library: LibraryMapEntry): void {
+  const rows = sqlite
+    .prepare(
+      `SELECT fa.sha256 AS sha256, fa.relative_path AS relativePath,
+              fa.original_filename AS originalFilename, 'asset' AS kind
+       FROM file_assets fa
+       INNER JOIN editions e ON e.id = fa.edition_id
+       WHERE e.library_id = ?
+         AND fa.storage = 'indexed'
+         AND fa.availability = 'present'
+       UNION ALL
+       SELECT c.sha256, c.relative_path, c.relative_path, 'cover'
+       FROM covers c
+       INNER JOIN editions e ON e.id = c.edition_id
+       WHERE e.library_id = ?`,
+    )
+    .all(library.id, library.id) as IndexedCatalogFile[];
+  for (const row of rows) {
+    if (row.kind === 'cover' && isManagedBlobRecord(row.relativePath, row.sha256)) continue;
+    const absolute = resolveIndexedPath(library.rootPath, row.relativePath);
+    if (!absolute) {
+      throw new BackupJobError(
+        keptSnapshotReason(`Cannot read the selected file ${row.relativePath}. It is outside the indexed library`),
+      );
+    }
+    let info: ReturnType<typeof lstatSync>;
+    try {
+      info = lstatSync(absolute);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') continue;
+      throw new BackupJobError(
+        keptSnapshotReason(`Cannot read the selected file ${absolute}. QiJuan cannot read it. Restore the file and its permissions`),
+      );
+    }
+    // Missing paths stay a soft miss. Hash a symlink only when it resolves to a
+    // regular file inside the library; a directory, fifo, or other non-file fails.
+    let source = absolute;
+    if (info.isSymbolicLink()) {
+      const resolved = resolvedIndexedFile(library.rootPath, absolute);
+      if (!resolved) throwChangedCatalogFile(absolute, row.originalFilename);
+      source = resolved;
+    } else if (!info.isFile()) {
+      throwChangedCatalogFile(absolute, row.originalFilename);
+    }
+    assertReadableFile(source);
+    assertStoredHash(absolute, row.sha256, row.originalFilename, source);
+  }
+}
+
+function isManagedBlobRecord(relativePath: string, sha256: string): boolean {
+  try {
+    return relativePath === managedBlobRelativePath(sha256);
+  } catch {
+    return false;
+  }
+}
+
+function resolveIndexedPath(libraryRoot: string, relativePath: string): string | null {
+  if (!relativePath || relativePath.includes('\0') || relativePath.includes('\\') || path.isAbsolute(relativePath)) return null;
+  const parts = relativePath.split('/');
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) return null;
+  const root = path.resolve(libraryRoot);
+  const absolute = path.resolve(root, ...parts);
+  const rel = path.relative(root, absolute);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return absolute;
+}
+
+/** Real file for a catalog symlink, using the same containment rule as indexed import. */
+function resolvedIndexedFile(libraryRoot: string, absolute: string): string | null {
+  let rootReal: string;
+  try {
+    if (!statSync(libraryRoot).isDirectory()) return null;
+    rootReal = realpathSync(libraryRoot);
+  } catch {
+    return null;
+  }
+  let fileReal: string;
+  try {
+    fileReal = realpathSync(absolute);
+  } catch {
+    return null;
+  }
+  const rel = path.relative(rootReal, fileReal);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  try {
+    if (!statSync(fileReal).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return fileReal;
+}
+
+function assertStoredHash(
+  absolute: string,
+  expectedSha256: string,
+  originalFilename: string,
+  source = absolute,
+): void {
+  let actual = '';
+  try {
+    actual = sha256File(source);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const why = code === 'ENOENT' ? 'It is missing' : 'QiJuan cannot read it';
+    throw new BackupJobError(
+      keptSnapshotReason(`Cannot read the selected file ${absolute}. ${why}. Restore the file and its permissions`),
+    );
+  }
+  if (actual === expectedSha256.toLowerCase()) return;
+  throwChangedCatalogFile(absolute, originalFilename);
+}
+
+function throwChangedCatalogFile(absolute: string, originalFilename: string): never {
+  const base = path.basename(absolute);
+  const named =
+    originalFilename && originalFilename !== base && originalFilename !== absolute
+      ? `${originalFilename} at ${absolute}`
+      : absolute;
+  throw new BackupJobError(
+    keptSnapshotReason(
+      `The selected file ${named} changed and no longer matches its catalog hash. Restore the original file`,
+    ),
+  );
 }
 
 function copyReadableTree(libraryRoot: string, current: string, targetRoot: string): void {
