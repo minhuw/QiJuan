@@ -208,6 +208,7 @@ export async function buildApp(options: BuildAppOptions) {
       },
       dataDir: options.config.dataDir,
       openLibrary,
+      assistant: options.assistant ?? {},
       log: {
         error(context, message) {
           app.log.error(context, message);

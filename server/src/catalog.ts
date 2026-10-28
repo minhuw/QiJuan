@@ -99,6 +99,20 @@ export function createSeries(db: AppDatabase, input: CreateSeriesInput, now = ne
   }
 }
 
+/** Finds a series by name within one library, ignoring ASCII case, or creates it. */
+export function findOrCreateSeries(db: AppDatabase, input: CreateSeriesInput, now = new Date()): SeriesRow {
+  const libraryId = requireId(input.libraryId);
+  const name = requireText(input.name, NAME_MAX);
+  const existing = db
+    .select()
+    .from(series)
+    .where(and(eq(series.libraryId, libraryId), sql`lower(${series.name}) = lower(${name})`))
+    .orderBy(asc(series.id))
+    .get();
+  if (existing) return existing;
+  return createSeries(db, { ...input, libraryId, name }, now);
+}
+
 export function createEdition(db: AppDatabase, input: CreateEditionInput, now = new Date()): EditionRow {
   const libraryId = requireId(input.libraryId);
   const library = db.select({ id: libraries.id }).from(libraries).where(eq(libraries.id, libraryId)).get();

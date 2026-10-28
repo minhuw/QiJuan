@@ -4,11 +4,24 @@ import { and, asc, desc, eq, or } from 'drizzle-orm';
 import { listLibraries } from './accounts.js';
 import { CatalogError, checkIndexedLibrary } from './catalog.js';
 import type { AppDatabase } from './db.js';
-import { commitImportedFile } from './ingest.js';
+import { commitPreparedImport, prepareImportedFile, type ImportMetadata } from './ingest.js';
 import { resolveInsideRoot } from './library-files.js';
-import { BookError } from './metadata.js';
+import { BookError, type BookMetadata } from './metadata.js';
 import { PREVIEW_FIELDS, type PreviewField, applyMetadataPreview, createMetadataPreview } from './metadata/apply.js';
-import { OpenLibraryError, type OpenLibraryTransport } from './metadata/openLibrary.js';
+import { runMetadataAgent } from './metadata/assistant/agent.js';
+import {
+  AssistantError,
+  type AssistantConfig,
+  type AssistantTransport,
+} from './metadata/assistant/client.js';
+import type { MetadataPromptFields } from './metadata/assistant/prompt.js';
+import type { AssistantProposal } from './metadata/assistant/submit.js';
+import { readAssistantSettings } from './metadata/assistant-settings.js';
+import {
+  fetchOpenLibraryCover,
+  OpenLibraryError,
+  type OpenLibraryTransport,
+} from './metadata/openLibrary.js';
 import { refreshEditionMetadata, refreshLibraryMetadata } from './refresh.js';
 import { editions, jobItems, jobs, libraries } from './schema.js';
 import type { AuthUser } from './sessions.js';
@@ -178,6 +191,7 @@ export function startJobWorker(options: {
   db: AppDatabase;
   dataDir: string;
   openLibrary: OpenLibraryTransport;
+  assistant?: AssistantTransport;
   log?: JobLogger;
 }): { stop: () => void } {
   let stopped = false;
@@ -197,7 +211,7 @@ export function startJobWorker(options: {
     try {
       const jobId = claimNextJob(options.db);
       if (jobId !== null) {
-        await runJob(options.db, options.dataDir, options.openLibrary, jobId, options.log);
+        await runJob(options.db, options.dataDir, options.openLibrary, options.assistant ?? {}, jobId, options.log);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
@@ -244,13 +258,14 @@ async function runJob(
   db: AppDatabase,
   dataDir: string,
   openLibrary: OpenLibraryTransport,
+  assistant: AssistantTransport,
   jobId: number,
   log?: JobLogger,
 ): Promise<void> {
   const job = db.select().from(jobs).where(eq(jobs.id, jobId)).get();
   if (!job || job.status !== 'running') return;
   try {
-    const result = await performJob(db, dataDir, openLibrary, job, log);
+    const result = await performJob(db, dataDir, openLibrary, assistant, job, log);
     finishJob(db, jobId, 'succeeded', result);
   } catch (error) {
     const code = jobFailureCode(error);
@@ -268,6 +283,7 @@ async function performJob(
   db: AppDatabase,
   dataDir: string,
   openLibrary: OpenLibraryTransport,
+  assistant: AssistantTransport,
   job: typeof jobs.$inferSelect,
   log?: JobLogger,
 ): Promise<unknown> {
@@ -278,8 +294,16 @@ async function performJob(
       .where(and(eq(jobItems.jobId, job.id), or(eq(jobItems.status, 'queued'), eq(jobItems.status, 'running'))))
       .orderBy(asc(jobItems.position))
       .all();
+    const assistantConfig = job.source === 'upload' ? readAssistantSettings(dataDir) : null;
     for (const item of items) {
-      processItem(db, dataDir, { id: job.id, libraryId: job.libraryId, source: job.source }, item, log);
+      await processItem(
+        db,
+        dataDir,
+        { id: job.id, libraryId: job.libraryId, source: job.source },
+        item,
+        { openLibrary, assistant, assistantConfig },
+        log,
+      );
     }
     return undefined;
   }
@@ -396,13 +420,20 @@ function jobFailureCode(error: unknown): string {
   return 'internal';
 }
 
-function processItem(
+interface ImportJobContext {
+  openLibrary: OpenLibraryTransport;
+  assistant: AssistantTransport;
+  assistantConfig: AssistantConfig | null;
+}
+
+async function processItem(
   db: AppDatabase,
   dataDir: string,
   job: { id: number; libraryId: number; source: 'upload' | 'folder' },
   item: { id: number; filename: string; sourcePath: string },
+  context: ImportJobContext,
   log?: JobLogger,
-): void {
+): Promise<void> {
   const stamp = new Date().toISOString();
   db.update(jobItems).set({ status: 'running', updatedAt: stamp }).where(eq(jobItems.id, item.id)).run();
   try {
@@ -415,7 +446,7 @@ function processItem(
     if (job.source === 'upload') {
       const absolute = resolveUploadPath(dataDir, item.sourcePath);
       if (!absolute) throw new BookError('missing');
-      commitImportedFile(db, {
+      const prepared = prepareImportedFile(db, {
         dataDir,
         libraryId: job.libraryId,
         storage: 'managed',
@@ -425,12 +456,32 @@ function processItem(
         itemId: item.id,
         maxBytes: null,
       });
+      if (prepared.duplicate) {
+        commitPreparedImport(db, prepared, null);
+        return;
+      }
+      const config = context.assistantConfig;
+      if (!config) throw new AssistantError('metadata_assistant_unconfigured');
+      const embedded = prepared.metadata;
+      if (!embedded) throw new BookError('malformed');
+      const result = await runMetadataAgent({
+        transport: context.assistant,
+        openLibrary: context.openLibrary,
+        config,
+        input: {
+          filename: item.filename,
+          format: prepared.kind,
+          fields: promptFields(embedded),
+        },
+      });
+      const metadata = await proposalMetadata(result.proposal, context.openLibrary);
+      commitPreparedImport(db, prepared, metadata);
       return;
     }
     if (library.mode !== 'indexed') throw new BookError('malformed');
     const absolute = resolveInsideRoot(library.rootPath, item.sourcePath);
     if (!absolute) throw new BookError('missing');
-    commitImportedFile(db, {
+    const prepared = prepareImportedFile(db, {
       dataDir,
       libraryId: job.libraryId,
       storage: 'indexed',
@@ -440,6 +491,7 @@ function processItem(
       itemId: item.id,
       maxBytes: null,
     });
+    commitPreparedImport(db, prepared, prepared.metadata);
   } catch (error) {
     const code = failureCode(error);
     db.update(jobItems)
@@ -447,6 +499,66 @@ function processItem(
       .where(eq(jobItems.id, item.id))
       .run();
     log?.error({ jobId: job.id, itemId: item.id, code }, 'import file failed');
+  }
+}
+
+function promptFields(metadata: BookMetadata): MetadataPromptFields {
+  return {
+    title: metadata.title,
+    authors: metadata.creators.filter((creator) => creator.role === 'author').map((creator) => creator.name),
+    translators: metadata.creators.filter((creator) => creator.role === 'translator').map((creator) => creator.name),
+    description: metadata.description,
+    publisher: metadata.publisher,
+    publishedDate: null,
+    language: metadata.language,
+    identifiers: metadata.identifiers.map((identifier) => ({ ...identifier })),
+    series: null,
+    seriesOrder: null,
+  };
+}
+
+async function proposalMetadata(
+  proposal: AssistantProposal,
+  openLibrary: OpenLibraryTransport,
+): Promise<ImportMetadata> {
+  assertCompleteProposal(proposal);
+  let cover: { bytes: Buffer; mediaType: string } | null = null;
+  if (proposal.coverId !== null || proposal.isbn !== null) {
+    try {
+      cover = await fetchOpenLibraryCover(openLibrary, { coverId: proposal.coverId, isbn: proposal.isbn });
+    } catch {
+      // A selected cover is optional. The completed metadata still creates the edition.
+      cover = null;
+    }
+  }
+  return {
+    title: proposal.title,
+    language: proposal.language,
+    publisher: proposal.publisher,
+    publishedDate: proposal.publishedDate,
+    description: proposal.description,
+    creators: [
+      ...proposal.authors.map((name) => ({ name, role: 'author' as const })),
+      ...proposal.translators.map((name) => ({ name, role: 'translator' as const })),
+    ],
+    identifiers: proposal.identifiers,
+    cover,
+    series: proposal.series,
+    seriesOrder: proposal.seriesOrder,
+  };
+}
+
+function assertCompleteProposal(proposal: AssistantProposal): void {
+  if (
+    !proposal.title ||
+    proposal.authors.length === 0 ||
+    !proposal.language ||
+    !proposal.description ||
+    !proposal.publisher ||
+    !proposal.publishedDate ||
+    proposal.identifiers.length === 0
+  ) {
+    throw new AssistantError('metadata_incomplete' as never);
   }
 }
 
@@ -482,6 +594,7 @@ function cleanupUploads(dataDir: string, sourcePaths: string[]): void {
 }
 
 function failureCode(error: unknown): string {
+  if (error instanceof AssistantError) return error.code;
   if (error instanceof BookError) return error.code;
   if (error instanceof ZipError) return 'malformed';
   if (error instanceof CatalogError) {

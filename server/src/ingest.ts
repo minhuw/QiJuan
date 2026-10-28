@@ -3,16 +3,23 @@ import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { and, asc, eq } from 'drizzle-orm';
 import { hashFile, writeImmutableBlob } from './blobs.js';
-import { addIndexedAsset, addManagedAsset, createEdition } from './catalog.js';
+import { addIndexedAsset, addManagedAsset, createEdition, findOrCreateSeries } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { fileKind, parseBookFile } from './books.js';
 import { BookError, type BookMetadata } from './metadata.js';
 import { upsertPerson } from './persons.js';
 import { covers, editionContributors, editions, fileAssets, identifiers, jobItems } from './schema.js';
 import { recordEditionSuggestions } from './suggestions.js';
-import { cleanDescription, cleanLanguage, cleanName, cleanPublisher, cleanTitle } from './text.js';
+import {
+  cleanDescription,
+  cleanLanguage,
+  cleanName,
+  cleanPublishedDate,
+  cleanPublisher,
+  cleanTitle,
+} from './text.js';
 
-export interface ImportCommitInput {
+export interface ImportFileInput {
   dataDir: string;
   libraryId: number;
   storage: 'managed' | 'indexed';
@@ -23,12 +30,26 @@ export interface ImportCommitInput {
   maxBytes: number | null;
 }
 
+export type ImportMetadata = BookMetadata & {
+  publishedDate?: string | null;
+  series?: string | null;
+  seriesOrder?: number | null;
+};
+
+export interface PreparedImport extends ImportFileInput {
+  kind: 'epub' | 'pdf';
+  sha256: string;
+  bytes: Buffer | null;
+  metadata: BookMetadata | null;
+  duplicate: { id: number; editionId: number } | null;
+}
+
 /**
- * Hashes the original bytes, reuses an existing asset when the hash is already
- * in this library, and otherwise creates a new edition. A similar title with
- * different bytes is not merged.
+ * Reads and hashes the original bytes, checks the format and size, looks for an
+ * existing asset in this library, and parses embedded metadata when the file is
+ * new. Nothing is written here, so a failed metadata step leaves no book blob.
  */
-export function commitImportedFile(db: AppDatabase, input: ImportCommitInput, now = new Date()): void {
+export function prepareImportedFile(db: AppDatabase, input: ImportFileInput): PreparedImport {
   let stat: ReturnType<typeof statSync>;
   try {
     stat = statSync(input.absolutePath);
@@ -44,13 +65,26 @@ export function commitImportedFile(db: AppDatabase, input: ImportCommitInput, no
   if (input.storage === 'managed' && !bytes) throw new BookError('malformed');
   const sha256 =
     bytes === null ? hashFile(input.absolutePath).sha256 : createHash('sha256').update(bytes).digest('hex');
-  const preliminary = findByHash(db, input.libraryId, sha256);
-  const metadata = preliminary ? null : parseBookFile(input.originalFilename, input.absolutePath);
-  const stamp = now.toISOString();
+  const duplicate = findByHash(db, input.libraryId, sha256);
+  const metadata = duplicate ? null : parseBookFile(input.originalFilename, input.absolutePath);
+  return { ...input, kind, sha256, bytes, metadata, duplicate };
+}
 
+/**
+ * Commits a prepared file from the supplied metadata. A duplicate is recorded
+ * without creating an edition. Folder imports pass their embedded metadata here;
+ * uploads pass only the metadata agent's proposal.
+ */
+export function commitPreparedImport(
+  db: AppDatabase,
+  prepared: PreparedImport,
+  metadata: ImportMetadata | null,
+  now = new Date(),
+): void {
+  const stamp = now.toISOString();
   db.transaction((tx) => {
     const query = tx as unknown as AppDatabase;
-    const existing = findByHash(query, input.libraryId, sha256);
+    const existing = findByHash(query, prepared.libraryId, prepared.sha256);
     if (existing) {
       query
         .update(jobItems)
@@ -59,41 +93,49 @@ export function commitImportedFile(db: AppDatabase, input: ImportCommitInput, no
           error: null,
           editionId: existing.editionId,
           assetId: existing.id,
-          sha256,
+          sha256: prepared.sha256,
           updatedAt: stamp,
         })
-        .where(eq(jobItems.id, input.itemId))
+        .where(eq(jobItems.id, prepared.itemId))
         .run();
       return;
     }
     if (!metadata) throw new BookError('malformed');
+    const seriesName = cleanName(metadata.series);
+    const seriesOrder = seriesName ? metadata.seriesOrder ?? null : null;
+    const seriesId = seriesName
+      ? findOrCreateSeries(query, { libraryId: prepared.libraryId, name: seriesName }, now).id
+      : null;
     const edition = createEdition(query, {
-      libraryId: input.libraryId,
-      title: displayTitle(metadata, input.originalFilename),
+      libraryId: prepared.libraryId,
+      title: displayTitle(metadata, prepared.originalFilename),
       language: cleanLanguage(metadata.language),
       publisher: cleanPublisher(metadata.publisher),
+      publishedDate: cleanPublishedDate(metadata.publishedDate),
       description: cleanDescription(metadata.description),
+      seriesId,
+      seriesOrder,
     }, now);
     linkCreators(query, edition.id, metadata, stamp);
     linkIdentifiers(query, edition.id, metadata);
     recordEditionSuggestions(query, edition.id, stamp);
     const asset =
-      input.storage === 'managed'
+      prepared.storage === 'managed'
         ? addManagedAsset(query, {
-            dataDir: input.dataDir,
+            dataDir: prepared.dataDir,
             editionId: edition.id,
-            bytes: bytes ?? Buffer.alloc(0),
-            format: kind,
-            originalFilename: input.originalFilename,
+            bytes: prepared.bytes ?? Buffer.alloc(0),
+            format: prepared.kind,
+            originalFilename: prepared.originalFilename,
           }, now)
         : addIndexedAsset(query, {
             editionId: edition.id,
-            relativePath: input.relativePath ?? '',
-            format: kind,
-            originalFilename: input.originalFilename,
+            relativePath: prepared.relativePath ?? '',
+            format: prepared.kind,
+            originalFilename: prepared.originalFilename,
           }, now);
     if (metadata.cover) {
-      const blob = writeImmutableBlob(input.dataDir, metadata.cover.bytes);
+      const blob = writeImmutableBlob(prepared.dataDir, metadata.cover.bytes);
       query
         .insert(covers)
         .values({
@@ -116,7 +158,7 @@ export function commitImportedFile(db: AppDatabase, input: ImportCommitInput, no
         sha256: asset.sha256,
         updatedAt: stamp,
       })
-      .where(eq(jobItems.id, input.itemId))
+      .where(eq(jobItems.id, prepared.itemId))
       .run();
   }, { behavior: 'immediate' });
 }
@@ -171,5 +213,3 @@ function fileStem(filename: string): string {
   const stem = base.replace(/\.[^.]+$/, '');
   return stem || base;
 }
-
-

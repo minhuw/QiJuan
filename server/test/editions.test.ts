@@ -7,7 +7,7 @@ import { buildApp } from '../src/app.js';
 import { absoluteBlobPath } from '../src/blobs.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
-import { makeTempDir, tempConfig } from './helpers.js';
+import { configureTestAssistant, embeddedMetadataAssistant, makeTempDir, tempConfig } from './helpers.js';
 import { COVER_PNG, buildEpub } from './fixtures.js';
 
 const cleanups: Array<() => void> = [];
@@ -50,10 +50,12 @@ async function startApp() {
   cleanups.push(temp.cleanup);
   const config = tempConfig(temp.dir);
   migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
+  configureTestAssistant(config.dataDir);
   const app = await buildApp({
     config,
     clientDist: null,
     logger: false,
+    assistant: embeddedMetadataAssistant(),
     openLibrary: {
       fetch: async () => {
         throw new Error('network disabled in test');

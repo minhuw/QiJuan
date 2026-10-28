@@ -17,7 +17,7 @@ import {
 } from '../src/metadata/openLibrary.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
-import { makeTempDir, tempConfig } from './helpers.js';
+import { configureTestAssistant, embeddedMetadataAssistant, makeTempDir, tempConfig } from './helpers.js';
 import { COVER_PNG, buildEpub, buildTextPdf } from './fixtures.js';
 
 const cleanups: Array<() => void> = [];
@@ -159,8 +159,15 @@ describe('open library client', () => {
     cleanups.push(temp.cleanup);
     const config = tempConfig(temp.dir);
     migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
+    configureTestAssistant(config.dataDir);
     const { transport, calls } = stubTransport();
-    const app = await buildApp({ config, clientDist: null, logger: false, openLibrary: transport });
+    const app = await buildApp({
+      config,
+      clientDist: null,
+      logger: false,
+      openLibrary: transport,
+      assistant: embeddedMetadataAssistant(),
+    });
     cleanups.push(() => {
       void app.close();
     });
@@ -210,6 +217,7 @@ describe('open library client', () => {
     const blobPath = absoluteBlobPath(config.dataDir, sha);
     const before = statSync(blobPath);
     const beforeHash = createHash('sha256').update(readFileSync(blobPath)).digest('hex');
+    calls.length = 0;
 
     const renamed = await app.inject({
       method: 'PATCH',
@@ -284,10 +292,10 @@ describe('open library client', () => {
     const afterApply = await editionOf(app, cookie, editionId);
     expect(afterApply.title).toBe('Kept Title');
     expect(afterApply.description).toBe('From the catalog.');
-    expect(afterApply.publisher).toBeNull();
+    expect(afterApply.publisher).toBe('QiJuan Test Press');
     expect(afterApply.language).toBe('en');
-    expect(afterApply.identifiers).toEqual([{ scheme: 'isbn', value: 'urn:isbn:9780000000002' }]);
-    expect(afterApply.cover).toBeNull();
+    expect(afterApply.identifiers).toEqual([{ scheme: 'isbn', value: '9780000000002' }]);
+    expect(afterApply.cover).toEqual({ mediaType: 'image/png' });
     expect(afterApply.locks).toEqual(expect.arrayContaining(['title', 'description']));
     expect(afterApply.locks).not.toContain('publisher');
 
@@ -524,7 +532,14 @@ async function importedPdf(transport: OpenLibraryTransport) {
   cleanups.push(temp.cleanup);
   const config = tempConfig(temp.dir);
   migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
-  const app = await buildApp({ config, clientDist: null, logger: false, openLibrary: transport });
+  configureTestAssistant(config.dataDir);
+  const app = await buildApp({
+    config,
+    clientDist: null,
+    logger: false,
+    openLibrary: transport,
+    assistant: embeddedMetadataAssistant({ avoidIsbn: true }),
+  });
   cleanups.push(() => {
     void app.close();
   });

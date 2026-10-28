@@ -5,7 +5,7 @@ import { writeImmutableBlob } from '../src/blobs.js';
 import { openDatabase } from '../src/db.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
-import { makeTempDir, tempConfig } from './helpers.js';
+import { configureTestAssistant, embeddedMetadataAssistant, makeTempDir, tempConfig } from './helpers.js';
 import {
   buildEpub,
   CHINESE_PARAGRAPH,
@@ -36,7 +36,13 @@ async function startApp(env: NodeJS.ProcessEnv = {}) {
   cleanups.push(temp.cleanup);
   const config = tempConfig(temp.dir, env);
   migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
-  const app = await buildApp({ config, clientDist: null, logger: false });
+  configureTestAssistant(config.dataDir);
+  const app = await buildApp({
+    config,
+    clientDist: null,
+    logger: false,
+    assistant: embeddedMetadataAssistant(),
+  });
   cleanups.push(() => {
     void app.close();
   });
