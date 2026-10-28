@@ -13,8 +13,10 @@ import { openDatabase } from './db.js';
 import { registerEditionRoutes } from './edition-routes.js';
 import { registerImportRoutes } from './import-routes.js';
 import { registerLibraryRoutes } from './library-routes.js';
+import { registerMetadataRoutes } from './metadata-routes.js';
 import { registerOpdsRoutes } from './opds-routes.js';
 import { registerReaderRoutes } from './reader-routes.js';
+import type { AssistantTransport } from './metadata/assistant/client.js';
 import type { OpenLibraryTransport } from './metadata/openLibrary.js';
 import { requeueInterruptedJobs, startJobWorker } from './jobs.js';
 import { redactOptions } from './logger.js';
@@ -28,6 +30,8 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions['logger'];
   /** Defaults to the public Open Library endpoints. Tests pass a stub `fetch`. */
   openLibrary?: OpenLibraryTransport;
+  /** Tests pass a stub `fetch` for the OpenAI-compatible metadata assistant. */
+  assistant?: AssistantTransport;
   /** Tests pass a fake restic. Production spawns the pinned binary. */
   restic?: ResticRunner;
   resticBin?: string;
@@ -131,6 +135,10 @@ export async function buildApp(options: BuildAppOptions) {
       get db() {
         return state.db;
       },
+    });
+    registerMetadataRoutes(app, {
+      dataDir: options.config.dataDir,
+      transport: options.assistant,
     });
     registerReaderRoutes(app, {
       get db() {

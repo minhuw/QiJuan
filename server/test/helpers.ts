@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadConfig, type AppConfig } from '../src/config.js';
 
+export { buildApp } from '../src/app.js';
+
 export function makeTempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'qijuan-'));
   return {
