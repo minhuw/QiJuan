@@ -32,10 +32,12 @@ const ERROR_CODES = new Set([
   'internal',
   'payload_too_large',
   'metadata_unavailable',
+  'metadata_incomplete',
+  'metadata_assistant_unconfigured',
   'conflict',
 ]);
 
-/** Status poll for a metadata job. Open Library allows 10s for search, ISBN, and cover, and the worker runs one job at a time, so a lookup can stay queued much longer than a few seconds. */
+/** Status poll for a metadata job. The agent allows up to 90 seconds and the worker runs one job at a time, so a lookup can stay queued much longer than a few seconds. */
 const METADATA_JOB_POLL_MS = 200;
 
 const FIELD_LABEL: Record<string, string> = {
@@ -46,11 +48,19 @@ const FIELD_LABEL: Record<string, string> = {
   publishedDate: 'book.publishedDate',
   language: 'book.language',
   identifiers: 'book.identifiers',
+  series: 'book.series',
+  seriesOrder: 'book.seriesOrder',
+  translators: 'book.translators',
   cover: 'book.cover',
 };
 
 interface RetryWait {
   cancel: () => void;
+}
+
+interface LookupPreview extends MetadataPreview {
+  source: string | null;
+  model: string | null;
 }
 
 interface EditionForm {
@@ -116,7 +126,7 @@ export function BookDetail({
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const [preview, setPreview] = useState<MetadataPreview | null>(null);
+  const [preview, setPreview] = useState<LookupPreview | null>(null);
   const [checked, setChecked] = useState<string[]>([]);
   const [lookupNote, setLookupNote] = useState<string | null>(null);
   const [activity, setActivity] = useState<'lookup' | 'apply' | null>(null);
@@ -770,11 +780,11 @@ export function BookDetail({
               <div className="panel-head">
                 <div>
                   <p className="section-kicker">{t('book.adminTools')}</p>
-                  <h2>{t('book.lookup')}</h2>
+                  <h2>{t('book.metadataAgent')}</h2>
                 </div>
                 <button className="btn btn-secondary" type="button" disabled={pending} onClick={() => void lookup()}>
                   <Wand2 size={15} aria-hidden="true" />
-                  {t('book.lookup')}
+                  {t('book.runAgent')}
                 </button>
               </div>
               {activity === 'lookup' ? (
@@ -793,6 +803,14 @@ export function BookDetail({
               {preview ? (
                 <form className="form preview-form" onSubmit={(event) => void applyPreview(event)}>
                   <h3>{t('book.preview')}</h3>
+                  {preview.source || preview.model ? (
+                    <p className="hint">
+                      {preview.source && preview.source !== 'assistant'
+                        ? preview.source
+                        : t('book.previewSource')}
+                      {preview.model ? ` · ${preview.model}` : ''}
+                    </p>
+                  ) : null}
                   <ul className="preview-list">
                     {preview.fields.map((field) => (
                       <li key={field.field} className="preview-row">
@@ -817,7 +835,11 @@ export function BookDetail({
                         <span className="preview-field">{t(FIELD_LABEL[field.field] ?? 'book.title')}</span>
                         {field.status === 'kept' ? <span className="chip chip-warn">{t('book.kept')}</span> : null}
                         {field.status === 'unchanged' ? <span className="hint-inline">{t('book.unchanged')}</span> : null}
-                        {field.proposed ? <span className="preview-proposed">{field.proposed}</span> : null}
+                        {field.proposed ? (
+                          <span className="preview-proposed">
+                            {field.field === 'cover' ? t('book.coverProposed') : field.proposed}
+                          </span>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -942,14 +964,19 @@ function Field({
   );
 }
 
-function jobPreview(job: ImportJob): MetadataPreview | null {
+function jobPreview(job: ImportJob): LookupPreview | null {
   const result = job.result;
   if (typeof result !== 'object' || result === null || Array.isArray(result)) return null;
   const preview = (result as { preview?: unknown }).preview;
   if (typeof preview !== 'object' || preview === null || Array.isArray(preview)) return null;
-  const record = preview as { previewId?: unknown; fields?: unknown };
+  const record = preview as { previewId?: unknown; fields?: unknown; source?: unknown; model?: unknown };
   if (typeof record.previewId !== 'number' || !Array.isArray(record.fields)) return null;
-  return { previewId: record.previewId, fields: record.fields as MetadataPreview['fields'] };
+  return {
+    previewId: record.previewId,
+    fields: record.fields as MetadataPreview['fields'],
+    source: typeof record.source === 'string' ? record.source : null,
+    model: typeof record.model === 'string' ? record.model : null,
+  };
 }
 
 function jobError(job: ImportJob): string | null {

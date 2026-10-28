@@ -17,9 +17,17 @@ const ERROR_CODES = new Set([
   'payload_too_large',
   'invalid_path',
   'library_mode',
+  'metadata_incomplete',
+  'metadata_assistant_unconfigured',
 ]);
 
-const FILE_ERRORS = new Set(['unsupported', 'malformed', 'missing']);
+const ITEM_ERRORS = new Set([
+  'unsupported',
+  'malformed',
+  'missing',
+  'metadata_incomplete',
+  'metadata_assistant_unconfigured',
+]);
 const ITEM_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'duplicate'] as const;
 
 function errorText(t: (key: string) => string, code: string | null): string {
@@ -290,7 +298,7 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
                       <span className="import-name">{item.filename}</span>
                       <span className={`import-status status-${item.status}`}>
                         {t(`import.status.${item.status}`)}
-                        {item.error && FILE_ERRORS.has(item.error) ? ` · ${t(`import.fileError.${item.error}`)}` : ''}
+                        {item.error && ITEM_ERRORS.has(item.error) ? ` · ${t(`import.fileError.${item.error}`)}` : ''}
                       </span>
                     </li>
                   ))}

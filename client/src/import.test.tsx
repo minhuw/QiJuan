@@ -97,6 +97,59 @@ describe('import screen', () => {
     }
   });
 
+  it('shows metadata agent failures on each item in English and Simplified Chinese', async () => {
+    const job: ImportJob = {
+      id: 5,
+      libraryId: 1,
+      source: 'upload',
+      status: 'failed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:02.000Z',
+      startedAt: '2026-01-01T00:00:01.000Z',
+      finishedAt: '2026-01-01T00:00:02.000Z',
+      result: null,
+      summary: { total: 2, queued: 0, running: 0, succeeded: 0, failed: 2, duplicate: 0 },
+      items: [
+        {
+          id: 6,
+          position: 0,
+          filename: 'incomplete.epub',
+          status: 'failed',
+          error: 'metadata_incomplete',
+          editionId: null,
+          assetId: null,
+          sha256: null,
+        },
+        {
+          id: 7,
+          position: 1,
+          filename: 'unconfigured.pdf',
+          status: 'failed',
+          error: 'metadata_assistant_unconfigured',
+          editionId: null,
+          assetId: null,
+          sha256: null,
+        },
+      ],
+    };
+    installFetch(() => json({ jobs: [job] }));
+    renderImport('en');
+    expect(
+      await screen.findByText(new RegExp(catalogs.en.import.fileError.metadata_incomplete)),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(catalogs.en.import.fileError.metadata_assistant_unconfigured)),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(catalogs.en.shell.language), { target: { value: 'zh-Hans' } });
+    expect(
+      screen.getByText(new RegExp(catalogs['zh-Hans'].import.fileError.metadata_incomplete)),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(catalogs['zh-Hans'].import.fileError.metadata_assistant_unconfigured)),
+    ).toBeInTheDocument();
+  });
+
   it('shows an error state when the job list cannot be loaded', async () => {
     installFetch(() => json({ error: 'internal' }, 500));
     renderImport('zh-Hans');

@@ -122,7 +122,11 @@ describe('book detail', () => {
       previewId: 7,
       fields: [
         { field: 'title', locked: true, status: 'kept', current: 'The Tale', proposed: 'Remote' },
+        { field: 'translators', locked: false, status: 'change', current: 'Wang', proposed: 'Wang Wei' },
         { field: 'description', locked: false, status: 'change', current: 'A short book.', proposed: 'A suggestion' },
+        { field: 'series', locked: false, status: 'change', current: 'Letters', proposed: 'Letters II' },
+        { field: 'seriesOrder', locked: false, status: 'change', current: '1', proposed: '2' },
+        { field: 'cover', locked: false, status: 'change', current: null, proposed: 'present' },
       ],
     };
     let releaseLookup: (response: Response) => void = () => {};
@@ -150,16 +154,34 @@ describe('book detail', () => {
     });
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
-    fireEvent.click(await screen.findByRole('button', { name: catalogs.en.book.lookup }));
+    fireEvent.click(await screen.findByRole('button', { name: catalogs.en.book.runAgent }));
     expect(await screen.findByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
       target: { value: 'zh-Hans' },
     });
     expect(screen.getByText(catalogs['zh-Hans'].book.lookupRunning)).toBeInTheDocument();
-    releaseLookup(json({ job: { id: 11, status: 'succeeded', result: { preview } } }));
+    releaseLookup(
+      json({
+        job: {
+          id: 11,
+          status: 'succeeded',
+          result: { preview: { ...preview, source: 'assistant', model: 'deepseek-chat' } },
+        },
+      }),
+    );
     expect(await screen.findByText(catalogs['zh-Hans'].book.kept)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(catalogs['zh-Hans'].book.previewSource))).toHaveTextContent(
+      'deepseek-chat',
+    );
     expect(screen.getByText('A suggestion')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: catalogs['zh-Hans'].book.description })).toBeChecked();
+    expect(screen.getByText('Wang Wei')).toBeInTheDocument();
+    expect(screen.getByText('Letters II')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText(catalogs['zh-Hans'].book.coverProposed)).toBeInTheDocument();
+    for (const field of ['translators', 'description', 'series', 'seriesOrder', 'cover'] as const) {
+      expect(screen.getByRole('checkbox', { name: catalogs['zh-Hans'].book[field] })).toBeChecked();
+    }
+    expect(screen.queryByRole('checkbox', { name: catalogs['zh-Hans'].book.title })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /合并|merge|删除|delete/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: catalogs['zh-Hans'].book.confirm }));
@@ -168,8 +190,13 @@ describe('book detail', () => {
       target: { value: 'en' },
     });
     expect(screen.getByText(catalogs.en.book.applyRunning)).toBeInTheDocument();
-    expect(bodies[0]).toContain('"previewId":7');
-    expect(bodies[0]).toContain('description');
+    expect(screen.getByText(new RegExp(catalogs.en.book.previewSource))).toHaveTextContent('deepseek-chat');
+    const payload = JSON.parse(bodies[0]) as { previewId: number; confirm: string[] };
+    expect(payload.previewId).toBe(7);
+    expect(payload.confirm).toEqual(
+      expect.arrayContaining(['translators', 'description', 'series', 'seriesOrder', 'cover']),
+    );
+    expect(payload.confirm).not.toContain('title');
     applied = true;
     releaseApply(
       json({
@@ -181,7 +208,7 @@ describe('book detail', () => {
     expect(screen.queryByText(catalogs.en.book.kept)).not.toBeInTheDocument();
   });
 
-  it('polls a queued metadata job past the Open Library timeouts and retries failed reads', async () => {
+  it('polls a queued metadata job past the agent budget and retries failed reads', async () => {
     const preview: MetadataPreview = {
       previewId: 7,
       fields: [
@@ -245,13 +272,13 @@ describe('book detail', () => {
         }
       }
 
-      fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.lookup }));
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.runAgent }));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(screen.getByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: catalogs.en.book.lookup })).toBeDisabled();
+      expect(screen.getByRole('button', { name: catalogs.en.book.runAgent })).toBeDisabled();
 
       await pump(34);
       expect(lookupPolls).toBeGreaterThan(30);
@@ -263,7 +290,7 @@ describe('book detail', () => {
       expect(screen.getByText(catalogs.en.book.kept)).toBeInTheDocument();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(screen.getByRole('textbox', { name: catalogs.en.book.description })).toHaveValue('Unsaved note');
-      expect(screen.getByRole('button', { name: catalogs.en.book.lookup })).toBeEnabled();
+      expect(screen.getByRole('button', { name: catalogs.en.book.runAgent })).toBeEnabled();
 
       fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.confirm }));
       await act(async () => {
@@ -318,7 +345,7 @@ describe('book detail', () => {
     });
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
-    const lookup = await screen.findByRole('button', { name: catalogs.en.book.lookup });
+    const lookup = await screen.findByRole('button', { name: catalogs.en.book.runAgent });
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     try {
