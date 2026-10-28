@@ -119,8 +119,11 @@ export async function lookupOpenLibrary(
 ): Promise<OpenLibraryProposal | null> {
   const isbn = query.isbn ? normalizeIsbn(query.isbn) : null;
   const origin = transport.origin ?? OPEN_LIBRARY_ORIGIN;
-  const search = await fetchJson(transport, buildSearchUrl({ title: query.title, author: query.author, isbn }, origin));
-  const isbnRecord = isbn ? await fetchJson(transport, buildIsbnUrl(isbn, origin)) : null;
+  const search = await fetchOpenLibraryJson(
+    transport,
+    buildSearchUrl({ title: query.title, author: query.author, isbn }, origin),
+  );
+  const isbnRecord = isbn ? await fetchOpenLibraryJson(transport, buildIsbnUrl(isbn, origin)) : null;
   const proposal = mergeProposal(search, isbnRecord, isbn);
   return proposal && hasSignal(proposal) ? proposal : null;
 }
@@ -148,7 +151,7 @@ export async function fetchOpenLibraryCover(
   return null;
 }
 
-async function fetchJson(transport: OpenLibraryTransport, url: URL): Promise<unknown | null> {
+export async function fetchOpenLibraryJson(transport: OpenLibraryTransport, url: URL): Promise<unknown | null> {
   const response = await request(transport, url, 'application/json');
   if (response.status === 404) return null;
   if (!response.ok) throw new OpenLibraryError();
