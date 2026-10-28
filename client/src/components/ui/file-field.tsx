@@ -1,6 +1,5 @@
-import { Upload } from 'lucide-react';
-import { useRef, useState, type ChangeEvent } from 'react';
-import { Button } from './button';
+import { UploadCloud } from 'lucide-react';
+import { useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 
 export function FileField({
   id,
@@ -21,28 +20,58 @@ export function FileField({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [summary, setSummary] = useState(emptyLabel);
+  const [dragging, setDragging] = useState(false);
+
+  function describe(files: FileList | null) {
+    const list = Array.from(files ?? []);
+    setSummary(list.length > 0 ? list.map((file) => file.name).join(', ') : emptyLabel);
+  }
 
   function onChange(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    setSummary(files.length > 0 ? files.map((file) => file.name).join(', ') : emptyLabel);
+    describe(event.target.files);
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragging(false);
+    const input = inputRef.current;
+    if (!input || !event.dataTransfer.files.length) return;
+    try {
+      input.files = event.dataTransfer.files;
+      describe(input.files);
+    } catch {
+      // Browsers that do not allow assigning FileList still offer the picker.
+    }
   }
 
   return (
-    <div className="grid gap-2">
-      <label htmlFor={id} className="text-sm font-medium text-foreground">
+    <div className="file-field">
+      <label className="field-label" htmlFor={id}>
         {label}
       </label>
-      <div className="flex min-h-24 flex-col items-start justify-center gap-2 rounded-lg border border-dashed border-input bg-card px-4 py-4 sm:flex-row sm:items-center">
-        <Button type="button" variant="outline" onClick={() => inputRef.current?.click()}>
-          <Upload className="size-4" aria-hidden="true" />
-          {chooseLabel}
-        </Button>
-        <span className="min-w-0 truncate text-sm text-muted-foreground">{summary}</span>
+      <div
+        className={dragging ? 'file-drop file-drop-active' : 'file-drop'}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+      >
+        <span className="file-drop-icon" aria-hidden="true">
+          <UploadCloud size={22} />
+        </span>
+        <div className="file-drop-copy">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => inputRef.current?.click()}>
+            {chooseLabel}
+          </button>
+          <span className="file-drop-name">{summary}</span>
+        </div>
       </div>
       <input
         ref={inputRef}
         id={id}
-        className="sr-only"
+        className="visually-hidden"
         type="file"
         name={name}
         accept={accept}

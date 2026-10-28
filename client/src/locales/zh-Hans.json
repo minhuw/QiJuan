@@ -11,26 +11,40 @@
     "language": "语言",
     "skip": "跳到内容",
     "navigation": "导航",
-    "version": "版本"
+    "version": "版本",
+    "workspace": "工作台",
+    "admin": "管理",
+    "openMenu": "打开导航",
+    "closeMenu": "关闭导航"
   },
   "home": {
     "title": "书库",
     "placeholder": "这里还没有书。",
     "libraries": "你的书库",
-    "noAccess": "还没有获得书库权限。"
+    "noAccess": "还没有获得书库权限。",
+    "subtitle": "你的私人书架，一目了然。",
+    "books": "藏书",
+    "inProgress": "在读",
+    "shelvesCount": "书架",
+    "addBooks": "添加书籍",
+    "allBooks": "全部书籍"
   },
   "setup": {
     "title": "初次设置",
     "username": "用户名",
     "password": "密码",
     "libraryName": "书库名称",
-    "submit": "创建管理员"
+    "submit": "创建管理员",
+    "eyebrow": "初次使用",
+    "description": "创建管理员账户和第一个书库。"
   },
   "login": {
     "title": "登录",
     "username": "用户名",
     "password": "密码",
-    "submit": "登录"
+    "submit": "登录",
+    "description": "欢迎回来，继续上次的阅读。",
+    "foot": "书库数据只保存在你的服务器上。"
   },
   "account": {
     "signedIn": "当前用户",
@@ -48,7 +62,14 @@
     "create": "创建读者",
     "grant": "授予",
     "revoke": "收回",
-    "empty": "还没有读者。"
+    "empty": "还没有读者。",
+    "eyebrow": "家庭",
+    "subtitle": "读者账户与书库权限。",
+    "accounts": "账户",
+    "newReader": "新建读者",
+    "readerHint": "读者可以浏览、阅读，并保有自己的阅读进度。",
+    "access": "书库权限",
+    "allReaders": "所有读者"
   },
   "import": {
     "open": "导入",
@@ -78,7 +99,16 @@
       "unsupported": "不支持的文件",
       "malformed": "文件损坏",
       "missing": "文件不存在"
-    }
+    },
+    "eyebrow": "书库入库",
+    "subtitle": "添加 EPUB 与 PDF 文件，并跟踪每次导入。",
+    "newImport": "新建导入",
+    "managedHint": "文件会复制到受管理的书库中。",
+    "indexedHint": "文件保留在原处，并从该文件夹建立索引。",
+    "progress": "动态",
+    "history": "导入记录",
+    "emptyHint": "上传与文件夹导入会显示在这里。",
+    "source": "来源"
   },
   "catalog": {
     "edit": "批量修改",
@@ -89,7 +119,8 @@
     "tags": "标签",
     "tagsHint": "用逗号分隔标签。",
     "series": "丛书",
-    "apply": "应用到所选"
+    "apply": "应用到所选",
+    "editHint": "选中多本书，批量应用同一个值。"
   },
   "book": {
     "back": "返回书库",
@@ -132,7 +163,14 @@
     "readPlaceholder": "阅读器尚未提供。",
     "missing": "缺失",
     "exportMarkdown": "导出划线与笔记（Markdown）",
-    "exportJson": "导出划线与笔记（JSON）"
+    "exportJson": "导出划线与笔记（JSON）",
+    "details": "书目记录",
+    "metadata": "元数据",
+    "adminTools": "管理工具",
+    "media": "媒体",
+    "files": "文件",
+    "related": "相关",
+    "readNow": "开始阅读"
   },
   "library": {
     "search": "搜索",
@@ -159,7 +197,11 @@
     "shelves": "书架",
     "shelvesEmpty": "还没有书架。",
     "previous": "上一页",
-    "next": "下一页"
+    "next": "下一页",
+    "resume": "继续阅读",
+    "filters": "筛选",
+    "clearFilters": "清除筛选",
+    "of": "共"
   },
   "reading": {
     "title": "阅读",
@@ -180,7 +222,8 @@
     "neighbors": "这套书",
     "previous": "上一本",
     "next": "下一本",
-    "noNeighbors": "这套书里没有其他书。"
+    "noNeighbors": "这套书里没有其他书。",
+    "status": "状态"
   },
   "reader": {
     "backToBook": "返回这本书",
@@ -224,7 +267,8 @@
     "thumbnails": "缩略图",
     "outline": "大纲",
     "scanNoText": "这份扫描版 PDF 没有可搜索的文字。",
-    "newerKept": "已保留较新的修改。"
+    "newerKept": "已保留较新的修改。",
+    "display": "显示"
   },
   "backup": {
     "open": "备份",
@@ -292,7 +336,7 @@
     "incompatible": "这份快照不能启用。",
     "usage": "存储",
     "repositorySize": "仓库大小",
-    "transferred": "上次传输，新增 / 已处理",
+    "transferred": "上次传输",
     "unavailable": "没有报告。",
     "history": "快照历史",
     "noSnapshots": "还没有快照。",
@@ -304,7 +348,23 @@
     "checkNow": "检查仓库",
     "restoreTest": "测试恢复",
     "restoreTestHint": "恢复测试会把最新快照复制到临时目录并检查。它不会替换当前书库。这和完整性检查不是一回事。",
-    "lastRestoreTest": "上次恢复测试"
+    "lastRestoreTest": "上次恢复测试",
+    "eyebrow": "数据保护",
+    "subtitle": "加密快照，存入你自己掌控的存储。",
+    "overview": "概览",
+    "configured": "已配置",
+    "notConfigured": "未配置",
+    "active": "启用",
+    "paused": "暂停",
+    "kicker": {
+      "storage": "存储",
+      "status": "状态",
+      "secrets": "密钥",
+      "automation": "自动化",
+      "snapshots": "快照",
+      "health": "健康",
+      "recovery": "恢复"
+    }
   },
   "errors": {
     "invalid_request": "请检查填写内容后再试。",
@@ -331,5 +391,8 @@
   "status": {
     "loading": "正在加载…",
     "retry": "重试"
+  },
+  "auth": {
+    "media": "EPUB · PDF · 私人书架"
   }
 }

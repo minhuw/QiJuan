@@ -1,5 +1,21 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
+import {
+  AlertCircle,
+  ArrowLeft,
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  LayoutPanelLeft,
+  ListTree,
+  Loader2,
+  MoveHorizontal,
+  RefreshCw,
+  ScanText,
+  Search,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { api, type ApiResult } from '../api';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
@@ -518,42 +534,55 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
   const showThumbs = thumbnailPages.length > 0;
 
   return (
-    <div className="reader-page">
-      <div className="toolbar">
-        <Link className="text-link" to={`/books/${editionId}`} onClick={() => saverRef.current?.flush()}>
-          {t('reader.backToBook')}
-        </Link>
-        <Link className="text-link" to="/" onClick={() => saverRef.current?.flush()}>
-          {t('reader.library')}
-        </Link>
-      </div>
-      <h1>{title}</h1>
-      {error ? (
-        <p className="alert" role="alert">
-          {errorText(t, error)}
-        </p>
-      ) : null}
-      {searchable === false ? (
-        <p className="notice" role="status">
-          {t('reader.scanNoText')}
-        </p>
-      ) : null}
-      {keptNewer ? (
-        <p className="notice" role="status">
-          {t('reader.newerKept')}
-        </p>
-      ) : null}
-      <div className="reader-controls">
+    <div className="reader-page reader-page-pdf">
+      <header className="reader-header">
+        <div className="reader-header-top">
+          <div className="reader-breadcrumb">
+            <Link className="back-link" to={`/books/${editionId}`} onClick={() => saverRef.current?.flush()}>
+              <ArrowLeft size={15} aria-hidden="true" />
+              {t('reader.backToBook')}
+            </Link>
+            <span className="reader-separator" aria-hidden="true">
+              /
+            </span>
+            <Link className="text-link" to="/" onClick={() => saverRef.current?.flush()}>
+              {t('reader.library')}
+            </Link>
+          </div>
+          <span className="reader-format-chip">{t('library.formatPdf')}</span>
+        </div>
+        <h1 className="reader-title">{title}</h1>
+        {error ? (
+          <div className="alert alert-error" role="alert">
+            <AlertCircle size={16} aria-hidden="true" />
+            {errorText(t, error)}
+          </div>
+        ) : null}
+        {searchable === false ? (
+          <p className="notice" role="status">
+            <ScanText size={15} aria-hidden="true" />
+            {t('reader.scanNoText')}
+          </p>
+        ) : null}
+        {keptNewer ? (
+          <p className="notice" role="status">
+            <RefreshCw size={15} aria-hidden="true" />
+            {t('reader.newerKept')}
+          </p>
+        ) : null}
+      </header>
+
+      <div className="reader-toolbar">
         <form
-          className="reader-search"
+          className="reader-page-form"
           onSubmit={(event) => {
             event.preventDefault();
             const parsed = Number(pageDraft);
             if (Number.isInteger(parsed)) void goTo(parsed);
           }}
         >
-          <label>
-            {t('reader.page')}
+          <label className="reader-page-input">
+            <span>{t('reader.page')}</span>
             <input
               inputMode="numeric"
               value={pageDraft}
@@ -561,72 +590,133 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
               onChange={(event) => setPageDraft(event.target.value)}
             />
           </label>
-          <span>
-            {view?.page ?? '–'} / {pageCount || '–'}
+          <span className="reader-page-count">
+            {view?.page ?? '–'} <span aria-hidden="true">/</span> {pageCount || '–'}
           </span>
         </form>
-        <button type="button" className="button" disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, -1))}>
-          {t('reader.zoomOut')}
-        </button>
-        <button type="button" className="button" disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, 1))}>
-          {t('reader.zoomIn')}
-        </button>
-        <button
-          type="button"
-          className="button"
-          aria-pressed={view?.zoom === 'width'}
-          disabled={!ready}
-          onClick={() => setZoom('width')}
-        >
-          {t('reader.fitWidth')}
-        </button>
-        <span className="hint">
-          {t('reader.zoom')}
-          {scaleLabel == null ? '' : ` ${scaleLabel.toFixed(2)}`}
-        </span>
-        <button type="button" className="button" disabled={!ready} onClick={() => void addBookmark()}>
-          {t('reader.bookmark')}
-        </button>
-      </div>
-      <div className="toolbar" role="toolbar" aria-label={title}>
-        {showOutline ? (
-          <button type="button" className="button button-secondary" aria-pressed={panel === 'outline'} onClick={() => toggle('outline')}>
-            {t('reader.outline')}
+
+        <div className="reader-group">
+          <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomOut')} title={t('reader.zoomOut')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, -1))}>
+            <ZoomOut size={16} aria-hidden="true" />
           </button>
-        ) : null}
-        {showThumbs ? (
+          <span className="reader-zoom-label">
+            {t('reader.zoom')}
+            {scaleLabel == null ? '' : ` ${scaleLabel.toFixed(2)}`}
+          </span>
+          <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomIn')} title={t('reader.zoomIn')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, 1))}>
+            <ZoomIn size={16} aria-hidden="true" />
+          </button>
           <button
             type="button"
-            className="button button-secondary"
-            aria-pressed={panel === 'thumbnails'}
-            onClick={() => toggle('thumbnails')}
+            className="reader-tool"
+            aria-pressed={view?.zoom === 'width'}
+            disabled={!ready}
+            onClick={() => setZoom('width')}
           >
-            {t('reader.thumbnails')}
+            <MoveHorizontal size={15} aria-hidden="true" />
+            {t('reader.fitWidth')}
           </button>
-        ) : null}
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'search'} onClick={() => toggle('search')}>
-          {t('reader.search')}
-        </button>
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'bookmarks'} onClick={() => toggle('bookmarks')}>
-          {t('reader.bookmarks')}
-        </button>
-        <button type="button" className="button" disabled={!ready || (view?.page ?? 1) <= 1} onClick={() => void goTo((view?.page ?? 1) - 1)}>
-          {t('reader.previousPage')}
-        </button>
-        <button
-          type="button"
-          className="button"
-          disabled={!ready || !view || view.page >= pageCount}
-          onClick={() => {
-            if (view) void goTo(view.page + 1);
-          }}
-        >
-          {t('reader.nextPage')}
-        </button>
+        </div>
+
+        <div className="reader-toolbar-end">
+          <button type="button" className="reader-tool" disabled={!ready} onClick={() => void addBookmark()}>
+            <Bookmark size={15} aria-hidden="true" />
+            {t('reader.bookmark')}
+          </button>
+        </div>
       </div>
+
+      <div className="reader-panel-bar" role="toolbar" aria-label={title}>
+        <div className="reader-group">
+          {showOutline ? (
+            <button
+              type="button"
+              className="reader-tool"
+              aria-pressed={panel === 'outline'}
+              onClick={() => toggle('outline')}
+            >
+              <ListTree size={15} aria-hidden="true" />
+              {t('reader.outline')}
+            </button>
+          ) : null}
+          {showThumbs ? (
+            <button
+              type="button"
+              className="reader-tool"
+              aria-pressed={panel === 'thumbnails'}
+              onClick={() => toggle('thumbnails')}
+            >
+              <LayoutPanelLeft size={15} aria-hidden="true" />
+              {t('reader.thumbnails')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'search'}
+            onClick={() => toggle('search')}
+          >
+            <Search size={15} aria-hidden="true" />
+            {t('reader.search')}
+          </button>
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'bookmarks'}
+            onClick={() => toggle('bookmarks')}
+          >
+            <Bookmark size={15} aria-hidden="true" />
+            {t('reader.bookmarks')}
+          </button>
+        </div>
+        <div className="reader-group reader-page-turn">
+          <button
+            type="button"
+            className="reader-tool"
+            disabled={!ready || (view?.page ?? 1) <= 1}
+            onClick={() => void goTo((view?.page ?? 1) - 1)}
+          >
+            <ChevronLeft size={15} aria-hidden="true" />
+            {t('reader.previousPage')}
+          </button>
+          <button
+            type="button"
+            className="reader-tool"
+            disabled={!ready || !view || view.page >= pageCount}
+            onClick={() => {
+              if (view) void goTo(view.page + 1);
+            }}
+          >
+            {t('reader.nextPage')}
+            <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
       <div className={panel ? 'reader-layout' : 'reader-layout reader-layout-solo'}>
         {panel ? (
-          <aside className="reader-panel" aria-label={panel === 'outline' ? t('reader.outline') : panel === 'thumbnails' ? t('reader.thumbnails') : t(`reader.${panel}`)}>
+          <aside
+            className="reader-panel"
+            aria-label={
+              panel === 'outline'
+                ? t('reader.outline')
+                : panel === 'thumbnails'
+                  ? t('reader.thumbnails')
+                  : t(`reader.${panel}`)
+            }
+          >
+            <div className="reader-panel-head">
+              <h2>
+                {panel === 'outline'
+                  ? t('reader.outline')
+                  : panel === 'thumbnails'
+                    ? t('reader.thumbnails')
+                    : t(`reader.${panel}`)}
+              </h2>
+              <span className="section-count">
+                {panel === 'bookmarks' ? bookmarks.length : panel === 'thumbnails' ? nearby.length : panel === 'search' ? hits.length : outline.length}
+              </span>
+            </div>
             {(panel === 'outline' || panel === 'thumbnails') && showOutline ? (
               <OutlineTree items={outline} onOpen={(item) => void goTo(item.page ?? 1, item)} />
             ) : null}
@@ -656,9 +746,22 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
             {panel === 'search' ? (
               <>
                 <form className="reader-search" onSubmit={(event) => void runSearch(event)}>
-                  <label htmlFor={searchId}>{t('reader.search')}</label>
-                  <input id={searchId} value={query} onChange={(event) => setQuery(event.target.value)} />
-                  <button type="submit" className="button" disabled={!ready || searching}>
+                  <label className="visually-hidden" htmlFor={searchId}>
+                    {t('reader.search')}
+                  </label>
+                  <div className="input-with-icon">
+                    <span className="input-icon" aria-hidden="true">
+                      <Search size={15} />
+                    </span>
+                    <input
+                      id={searchId}
+                      value={query}
+                      placeholder={t('reader.search')}
+                      onChange={(event) => setQuery(event.target.value)}
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={!ready || searching}>
+                    {searching ? <Loader2 className="spin" size={14} aria-hidden="true" /> : null}
                     {t('reader.searchSubmit')}
                   </button>
                 </form>
@@ -667,9 +770,11 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
                     {t('reader.scanNoText')}
                   </p>
                 ) : null}
-                {searchState === 'empty' && searchable !== false ? <p className="placeholder">{t('reader.searchEmpty')}</p> : null}
+                {searchState === 'empty' && searchable !== false ? (
+                  <p className="placeholder">{t('reader.searchEmpty')}</p>
+                ) : null}
                 {searchState === 'hits' ? (
-                  <ul className="plain-list">
+                  <ul className="reader-list">
                     {hits.map((hit, index) => (
                       <li key={`${hit.page}:${hit.x}:${hit.y}:${index}`}>
                         <button type="button" className="reader-toc-button" onClick={() => void goTo(hit.page, hit)}>
@@ -685,7 +790,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
               bookmarks.length === 0 ? (
                 <p className="placeholder">{t('reader.noBookmarks')}</p>
               ) : (
-                <ul className="plain-list">
+                <ul className="reader-list">
                   {bookmarks.map((item) => {
                     const place = parsePdfPlace(item.locator);
                     const label = place ? `${t('reader.page')} ${place.page}` : item.label || item.locator;
@@ -700,7 +805,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
                         >
                           {label}
                         </button>
-                        <button type="button" className="button button-secondary" onClick={() => void removeBookmark(item)}>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void removeBookmark(item)}>
                           {t('reader.remove')}
                         </button>
                       </li>
@@ -711,14 +816,21 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
             ) : null}
           </aside>
         ) : null}
-        <div className="reader-stage pdf-stage" aria-busy={!ready}>
-          <div ref={scrollerRef} className="pdf-scroller">
-            <div ref={pageRef} className="pdf-page">
-              <canvas ref={canvasRef} />
-              <div ref={textRef} className="textLayer" />
+        <div className="reader-stage-wrap">
+          <div className="reader-stage pdf-stage" aria-busy={!ready}>
+            <div ref={scrollerRef} className="pdf-scroller">
+              <div ref={pageRef} className="pdf-page">
+                <canvas ref={canvasRef} />
+                <div ref={textRef} className="textLayer" />
+              </div>
             </div>
+            {ready ? null : (
+              <div className="reader-stage-loading" role="status">
+                <Loader2 className="spin" size={20} aria-hidden="true" />
+                {t('status.loading')}
+              </div>
+            )}
           </div>
-          {ready ? null : <p role="status">{t('status.loading')}</p>}
         </div>
       </div>
     </div>

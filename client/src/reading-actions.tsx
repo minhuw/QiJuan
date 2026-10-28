@@ -1,4 +1,5 @@
 import { useId, useState, type FormEvent } from 'react';
+import { BookMarked, Heart, ListPlus, Plus, Star } from 'lucide-react';
 import { api, type EditionDetail, type ReadingShelf, type ReadingStatus } from './api';
 import { useLocale } from './shell';
 
@@ -94,85 +95,119 @@ export function ReadingActions({
   }
 
   return (
-    <section className="import-block">
-      <h2>{t('reading.title')}</h2>
+    <section className="panel reading-panel">
+      <div className="panel-head">
+        <div>
+          <p className="section-kicker">{t('reading.status')}</p>
+          <h2>{t('reading.title')}</h2>
+        </div>
+        {reading.rating ? (
+          <span className="rating-summary" aria-hidden="true">
+            <Star size={14} fill="currentColor" />
+            {reading.rating}/5
+          </span>
+        ) : null}
+      </div>
       {error ? (
-        <p className="alert" role="alert">
+        <div className="alert alert-error" role="alert">
           {errorText(t, error)}
-        </p>
+        </div>
       ) : null}
-      <div className="toolbar" role="group" aria-label={t('reading.title')}>
+
+      <div className="status-segments" role="group" aria-label={t('reading.title')}>
         {STATUSES.map((status) => (
           <button
             key={status}
             type="button"
-            className="button"
+            className={`segment segment-${status}`}
             aria-pressed={reading.status === status}
             disabled={pending}
             onClick={() => void save({ status: reading.status === status ? null : status })}
           >
+            <span className="status-dot" aria-hidden="true" />
             {t(`reading.${status}`)}
           </button>
         ))}
       </div>
-      <div className="toolbar">
+
+      <div className="reading-actions">
         <button
           type="button"
-          className="button"
+          className={reading.favorite ? 'btn btn-secondary is-on' : 'btn btn-secondary'}
           aria-pressed={reading.favorite}
           disabled={pending}
           onClick={() => void save({ favorite: !reading.favorite })}
         >
+          <Heart size={16} fill={reading.favorite ? 'currentColor' : 'none'} aria-hidden="true" />
           {reading.favorite ? t('reading.unfavorite') : t('reading.favorite')}
         </button>
         <button
           type="button"
-          className="button"
+          className={reading.queued ? 'btn btn-secondary is-on' : 'btn btn-secondary'}
           aria-pressed={reading.queued}
           disabled={pending}
           onClick={() => void save({ queued: !reading.queued })}
         >
+          <ListPlus size={16} aria-hidden="true" />
           {reading.queued ? t('reading.removeQueue') : t('reading.addQueue')}
         </button>
-      </div>
-      <div className="toolbar" role="group" aria-label={t('reading.rating')}>
-        {[1, 2, 3, 4, 5].map((score) => (
-          <button
-            key={score}
-            type="button"
-            className="button"
-            aria-label={`${t('reading.rating')} ${score}`}
-            aria-pressed={reading.rating === score}
-            disabled={pending}
-            onClick={() => void save({ rating: reading.rating === score ? null : score })}
-          >
-            {score}
-          </button>
-        ))}
-      </div>
-      <h3>{t('reading.shelves')}</h3>
-      {reading.shelves.length === 0 ? <p className="placeholder">{t('library.shelvesEmpty')}</p> : null}
-      {reading.shelves.length > 0 ? (
-        <ul className="plain-list">
-          {reading.shelves.map((shelf) => (
-            <li key={shelf.id} className="book-row">
-              <span>{shelf.name}</span>
-              <button type="button" className="button button-secondary" disabled={pending} onClick={() => void toggleShelf(shelf)}>
-                {shelf.included ? t('reading.remove') : t('reading.add')} {shelf.name}
-              </button>
-            </li>
+        <div className="rating-control" role="group" aria-label={t('reading.rating')}>
+          {[1, 2, 3, 4, 5].map((score) => (
+            <button
+              key={score}
+              type="button"
+              className={reading.rating && score <= reading.rating ? 'rating-star rating-star-on' : 'rating-star'}
+              aria-label={`${t('reading.rating')} ${score}`}
+              aria-pressed={reading.rating === score}
+              disabled={pending}
+              onClick={() => void save({ rating: reading.rating === score ? null : score })}
+            >
+              <Star size={17} fill={reading.rating && score <= reading.rating ? 'currentColor' : 'none'} aria-hidden="true" />
+            </button>
           ))}
-        </ul>
-      ) : null}
-      <form className="form" onSubmit={(event) => void createShelf(event)}>
-        <label className="field" htmlFor={shelfId}>
-          {t('reading.newShelf')}
-          <input id={shelfId} value={shelfName} onChange={(event) => setShelfName(event.target.value)} />
-        </label>
-        <button className="button" type="submit" disabled={pending}>
-          {t('reading.createShelf')}
-        </button>
-      </form>
+        </div>
+      </div>
+
+      <div className="shelf-block">
+        <h3>{t('reading.shelves')}</h3>
+        {reading.shelves.length === 0 ? <p className="hint">{t('library.shelvesEmpty')}</p> : null}
+        {reading.shelves.length > 0 ? (
+          <ul className="reading-shelf-list">
+            {reading.shelves.map((shelf) => (
+              <li key={shelf.id} className="reading-shelf-row">
+                <span className="reading-shelf-name">
+                  <BookMarked size={14} aria-hidden="true" />
+                  {shelf.name}
+                </span>
+                <button
+                  type="button"
+                  className={shelf.included ? 'btn btn-secondary btn-sm is-on' : 'btn btn-ghost btn-sm'}
+                  aria-pressed={shelf.included}
+                  disabled={pending}
+                  onClick={() => void toggleShelf(shelf)}
+                >
+                  {shelf.included ? t('reading.remove') : t('reading.add')} {shelf.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <form className="inline-form" onSubmit={(event) => void createShelf(event)}>
+          <label className="visually-hidden" htmlFor={shelfId}>
+            {t('reading.newShelf')}
+          </label>
+          <input
+            id={shelfId}
+            value={shelfName}
+            placeholder={t('reading.newShelf')}
+            onChange={(event) => setShelfName(event.target.value)}
+          />
+          <button className="btn btn-secondary" type="submit" disabled={pending}>
+            <Plus size={15} aria-hidden="true" />
+            {t('reading.createShelf')}
+          </button>
+        </form>
+      </div>
     </section>
   );
 }

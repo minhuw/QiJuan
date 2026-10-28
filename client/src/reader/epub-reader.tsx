@@ -1,5 +1,21 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
+import {
+  AlertCircle,
+  AlignLeft,
+  ArrowLeft,
+  BookOpen,
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  Highlighter,
+  ListTree,
+  Loader2,
+  NotebookPen,
+  RefreshCw,
+  Search,
+  Type,
+} from 'lucide-react';
 import { api, type ApiResult } from '../api';
 import { isSavedEpubLocator } from './epub/cfi';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
@@ -97,6 +113,7 @@ function TocTree({ items, onOpen }: { items: TocItem[]; onOpen: (href: string) =
 export function EpubReader({ editionId, assetId, title }: { editionId: number; assetId: number; title: string }) {
   const { t } = useLocale();
   const noteId = useId();
+  const searchInputId = useId();
   const stageRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<EpubSession | null>(null);
   const cfiRef = useRef<string | null>(null);
@@ -117,7 +134,9 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
   const [lineHeight, setLineHeight] = useState(INITIAL_TYPE.lineHeight);
   const [margin, setMargin] = useState(INITIAL_TYPE.margin);
   const [theme, setTheme] = useState<ReaderTheme>(INITIAL_TYPE.theme);
-  const [panel, setPanel] = useState<'contents' | 'search' | 'bookmarks' | 'highlights' | 'notes' | null>('contents');
+  const [panel, setPanel] = useState<'contents' | 'search' | 'bookmarks' | 'highlights' | 'notes' | null>(null);
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const displayPanelId = useId();
   const [toc, setToc] = useState<TocItem[]>([]);
   const [facts, setFacts] = useState<BookFacts>({ language: null, direction: 'ltr' });
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -260,6 +279,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
         }
         sessionRef.current = session;
         setToc(session.toc);
+        setPanel(session.toc.length > 0 ? 'contents' : null);
         setFacts(session.facts);
         for (const mark of place.data?.highlights ?? []) {
           if (isSavedEpubLocator(mark.locator)) session.highlight(mark.locator);
@@ -438,30 +458,42 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
 
   return (
     <div className={`reader-page theme-${theme}`}>
-      <div className="toolbar">
-        <Link className="text-link" to={`/books/${editionId}`}>
-          {t('reader.backToBook')}
-        </Link>
-        <Link className="text-link" to="/">
-          {t('reader.library')}
-        </Link>
-      </div>
-      <h1>{title}</h1>
-      {error ? (
-        <p className="alert" role="alert">
-          {errorText(t, error)}
-        </p>
-      ) : null}
-      {keptNewer ? (
-        <p className="notice" role="status">
-          {t('reader.newerKept')}
-        </p>
-      ) : null}
-      <div className="reader-controls">
-        <div className="toolbar" role="group" aria-label={t('reader.paginated')}>
+      <header className="reader-header">
+        <div className="reader-header-top">
+          <div className="reader-breadcrumb">
+            <Link className="back-link" to={`/books/${editionId}`}>
+              <ArrowLeft size={15} aria-hidden="true" />
+              {t('reader.backToBook')}
+            </Link>
+            <span className="reader-separator" aria-hidden="true">
+              /
+            </span>
+            <Link className="text-link" to="/">
+              {t('reader.library')}
+            </Link>
+          </div>
+          <span className="reader-format-chip">{t('library.formatEpub')}</span>
+        </div>
+        <h1 className="reader-title">{title}</h1>
+        {error ? (
+          <div className="alert alert-error" role="alert">
+            <AlertCircle size={16} aria-hidden="true" />
+            {errorText(t, error)}
+          </div>
+        ) : null}
+        {keptNewer ? (
+          <p className="notice" role="status">
+            <RefreshCw size={15} aria-hidden="true" />
+            {t('reader.newerKept')}
+          </p>
+        ) : null}
+      </header>
+
+      <div className="reader-toolbar">
+        <div className="reader-group" role="group" aria-label={t('reader.paginated')}>
           <button
             type="button"
-            className="button"
+            className="reader-tool"
             aria-pressed={flow === 'paginated'}
             disabled={!ready}
             onClick={() => {
@@ -469,11 +501,12 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
               void sessionRef.current?.setFlow('paginated');
             }}
           >
+            <BookOpen size={15} aria-hidden="true" />
             {t('reader.paginated')}
           </button>
           <button
             type="button"
-            className="button"
+            className="reader-tool"
             aria-pressed={flow === 'continuous'}
             disabled={!ready}
             onClick={() => {
@@ -481,153 +514,239 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
               void sessionRef.current?.setFlow('continuous');
             }}
           >
+            <AlignLeft size={15} aria-hidden="true" />
             {t('reader.scrolled')}
           </button>
         </div>
-        <label>
-          {t('reader.font')}
-          <select
-            value={font}
-            disabled={!ready}
-            onChange={(event) => {
-              const next = event.target.value === 'sans' ? 'sans' : 'serif';
-              setFont(next);
-              paint({ ...typeRef.current, font: next });
-            }}
-          >
-            <option value="serif">{t('reader.fontSerif')}</option>
-            <option value="sans">{t('reader.fontSans')}</option>
-          </select>
-        </label>
-        <label>
-          {t('reader.fontSize')}
-          <select
-            value={fontSize}
-            disabled={!ready}
-            onChange={(event) => {
-              setFontSize(event.target.value);
-              paint({ ...typeRef.current, fontSize: event.target.value });
-            }}
-          >
-            {FONT_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('reader.lineHeight')}
-          <select
-            value={lineHeight}
-            disabled={!ready}
-            onChange={(event) => {
-              setLineHeight(event.target.value);
-              paint({ ...typeRef.current, lineHeight: event.target.value });
-            }}
-          >
-            {LINE_HEIGHTS.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('reader.margins')}
-          <select
-            value={margin}
-            disabled={!ready}
-            onChange={(event) => {
-              setMargin(event.target.value);
-              paint({ ...typeRef.current, margin: event.target.value });
-            }}
-          >
-            {MARGINS.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('reader.theme')}
-          <select
-            value={theme}
-            disabled={!ready}
-            onChange={(event) => {
-              const next = event.target.value === 'ink' ? 'ink' : 'paper';
-              setTheme(next);
-              paint({ ...typeRef.current, theme: next });
-            }}
-          >
-            <option value="paper">{t('reader.themePaper')}</option>
-            <option value="ink">{t('reader.themeInk')}</option>
-          </select>
-        </label>
-        <button type="button" className="button" disabled={!ready} onClick={() => void addBookmark()}>
-          {t('reader.bookmark')}
+
+        <button
+          type="button"
+          className="reader-tool reader-display-toggle"
+          aria-expanded={displayOpen}
+          aria-controls={displayPanelId}
+          onClick={() => setDisplayOpen((value) => !value)}
+        >
+          <Type size={15} aria-hidden="true" />
+          {t('reader.display')}
         </button>
+        <div id={displayPanelId} className={displayOpen ? 'reader-group reader-display-group is-open' : 'reader-group reader-display-group'}>
+          <span className="reader-group-label">
+            <Type size={14} aria-hidden="true" />
+            {t('reader.display')}
+          </span>
+          <label className="reader-select">
+            <span>{t('reader.font')}</span>
+            <select
+              value={font}
+              disabled={!ready}
+              onChange={(event) => {
+                const next = event.target.value === 'sans' ? 'sans' : 'serif';
+                setFont(next);
+                paint({ ...typeRef.current, font: next });
+              }}
+            >
+              <option value="serif">{t('reader.fontSerif')}</option>
+              <option value="sans">{t('reader.fontSans')}</option>
+            </select>
+          </label>
+          <label className="reader-select">
+            <span>{t('reader.fontSize')}</span>
+            <select
+              value={fontSize}
+              disabled={!ready}
+              onChange={(event) => {
+                setFontSize(event.target.value);
+                paint({ ...typeRef.current, fontSize: event.target.value });
+              }}
+            >
+              {FONT_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="reader-select">
+            <span>{t('reader.lineHeight')}</span>
+            <select
+              value={lineHeight}
+              disabled={!ready}
+              onChange={(event) => {
+                setLineHeight(event.target.value);
+                paint({ ...typeRef.current, lineHeight: event.target.value });
+              }}
+            >
+              {LINE_HEIGHTS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="reader-select">
+            <span>{t('reader.margins')}</span>
+            <select
+              value={margin}
+              disabled={!ready}
+              onChange={(event) => {
+                setMargin(event.target.value);
+                paint({ ...typeRef.current, margin: event.target.value });
+              }}
+            >
+              {MARGINS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="reader-select">
+            <span>{t('reader.theme')}</span>
+            <select
+              value={theme}
+              disabled={!ready}
+              onChange={(event) => {
+                const next = event.target.value === 'ink' ? 'ink' : 'paper';
+                setTheme(next);
+                paint({ ...typeRef.current, theme: next });
+              }}
+            >
+              <option value="paper">{t('reader.themePaper')}</option>
+              <option value="ink">{t('reader.themeInk')}</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="reader-toolbar-end">
+          <button type="button" className="reader-tool" disabled={!ready} onClick={() => void addBookmark()}>
+            <Bookmark size={15} aria-hidden="true" />
+            {t('reader.bookmark')}
+          </button>
+        </div>
       </div>
-      <div className="toolbar" role="toolbar" aria-label={t('reader.contents')}>
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'contents'} onClick={() => toggle('contents')}>
-          {t('reader.contents')}
-        </button>
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'search'} onClick={() => toggle('search')}>
-          {t('reader.search')}
-        </button>
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'bookmarks'} onClick={() => toggle('bookmarks')}>
-          {t('reader.bookmarks')}
-        </button>
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'highlights'} onClick={() => toggle('highlights')}>
-          {t('reader.highlights')}
-        </button>
-        <button type="button" className="button button-secondary" aria-pressed={panel === 'notes'} onClick={() => toggle('notes')}>
-          {t('reader.notes')}
-        </button>
+
+      <div className="reader-panel-bar" role="toolbar" aria-label={t('reader.contents')}>
+        <div className="reader-group">
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'contents'}
+            onClick={() => toggle('contents')}
+          >
+            <ListTree size={15} aria-hidden="true" />
+            {t('reader.contents')}
+          </button>
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'search'}
+            onClick={() => toggle('search')}
+          >
+            <Search size={15} aria-hidden="true" />
+            {t('reader.search')}
+          </button>
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'bookmarks'}
+            onClick={() => toggle('bookmarks')}
+          >
+            <Bookmark size={15} aria-hidden="true" />
+            {t('reader.bookmarks')}
+          </button>
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'highlights'}
+            onClick={() => toggle('highlights')}
+          >
+            <Highlighter size={15} aria-hidden="true" />
+            {t('reader.highlights')}
+          </button>
+          <button
+            type="button"
+            className="reader-tool"
+            aria-pressed={panel === 'notes'}
+            onClick={() => toggle('notes')}
+          >
+            <NotebookPen size={15} aria-hidden="true" />
+            {t('reader.notes')}
+          </button>
+        </div>
         {flow === 'paginated' ? (
-          <>
-            <button type="button" className="button" disabled={!ready} onClick={() => void sessionRef.current?.prev()}>
+          <div className="reader-group reader-page-turn">
+            <button type="button" className="reader-tool" disabled={!ready} onClick={() => void sessionRef.current?.prev()}>
+              <ChevronLeft size={15} aria-hidden="true" />
               {t('reader.previousPage')}
             </button>
-            <button type="button" className="button" disabled={!ready} onClick={() => void sessionRef.current?.next()}>
+            <button type="button" className="reader-tool" disabled={!ready} onClick={() => void sessionRef.current?.next()}>
               {t('reader.nextPage')}
+              <ChevronRight size={15} aria-hidden="true" />
             </button>
-          </>
+          </div>
         ) : null}
       </div>
+
       {selection ? (
-        <div className="toolbar" role="region" aria-label={t('reader.selection')}>
-          {selection.quote ? <p className="hint">{selection.quote}</p> : null}
-          <button type="button" className="button" onClick={() => void addHighlight()}>
-            {t('reader.highlight')}
-          </button>
-          <form className="reader-note-form" onSubmit={(event) => void saveNote(event)}>
-            <label htmlFor={noteId}>{t('reader.noteBody')}</label>
-            <textarea id={noteId} value={noteBody} onChange={(event) => setNoteBody(event.target.value)} />
-            <button type="submit" className="button">
-              {t('reader.saveNote')}
+        <div className="reader-selection" role="region" aria-label={t('reader.selection')}>
+          {selection.quote ? <p className="reader-selection-quote">{selection.quote}</p> : null}
+          <div className="reader-selection-actions">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void addHighlight()}>
+              <Highlighter size={15} aria-hidden="true" />
+              {t('reader.highlight')}
             </button>
-          </form>
+            <form className="reader-note-form" onSubmit={(event) => void saveNote(event)}>
+              <label className="visually-hidden" htmlFor={noteId}>
+                {t('reader.noteBody')}
+              </label>
+              <textarea
+                id={noteId}
+                value={noteBody}
+                placeholder={t('reader.noteBody')}
+                onChange={(event) => setNoteBody(event.target.value)}
+              />
+              <button type="submit" className="btn btn-primary btn-sm">
+                {t('reader.saveNote')}
+              </button>
+            </form>
+          </div>
         </div>
       ) : null}
+
       <div className={panel ? 'reader-layout' : 'reader-layout reader-layout-solo'}>
         {panel ? (
           <aside className="reader-panel" aria-label={t(`reader.${panel === 'contents' ? 'contents' : panel}`)}>
+            <div className="reader-panel-head">
+              <h2>{t(`reader.${panel === 'contents' ? 'contents' : panel}`)}</h2>
+              <span className="section-count">
+                {panel === 'contents' ? toc.length : panel === 'bookmarks' ? bookmarks.length : panel === 'highlights' ? highlights.length : panel === 'notes' ? notes.length : hits.length}
+              </span>
+            </div>
             {panel === 'contents' ? <TocTree items={toc} onOpen={go} /> : null}
             {panel === 'search' ? (
               <>
                 <form className="reader-search" onSubmit={(event) => void runSearch(event)}>
-                  <label>
+                  <label className="visually-hidden" htmlFor={searchInputId}>
                     {t('reader.search')}
-                    <input value={query} onChange={(event) => setQuery(event.target.value)} />
                   </label>
-                  <button type="submit" className="button" disabled={!ready || searching}>
+                  <div className="input-with-icon">
+                    <span className="input-icon" aria-hidden="true">
+                      <Search size={15} />
+                    </span>
+                    <input
+                      id={searchInputId}
+                      value={query}
+                      placeholder={t('reader.search')}
+                      onChange={(event) => setQuery(event.target.value)}
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={!ready || searching}>
+                    {searching ? <Loader2 className="spin" size={14} aria-hidden="true" /> : null}
                     {t('reader.searchSubmit')}
                   </button>
                 </form>
                 {hits.length === 0 ? <p className="placeholder">{t('reader.searchEmpty')}</p> : null}
-                <ul className="plain-list">
+                <ul className="reader-list">
                   {hits.map((hit, index) => (
                     <li key={`${hit.cfi}:${index}`}>
                       <button type="button" className="reader-toc-button" onClick={() => go(hit.cfi)}>
@@ -642,13 +761,13 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
               bookmarks.length === 0 ? (
                 <p className="placeholder">{t('reader.noBookmarks')}</p>
               ) : (
-                <ul className="plain-list">
+                <ul className="reader-list">
                   {bookmarks.map((item) => (
                     <li key={item.id} className="reader-row-line">
                       <button type="button" className="reader-toc-button" onClick={() => go(item.locator)}>
                         {item.label || item.locator}
                       </button>
-                      <button type="button" className="button button-secondary" onClick={() => void removeBookmark(item)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void removeBookmark(item)}>
                         {t('reader.remove')}
                       </button>
                     </li>
@@ -660,13 +779,13 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
               highlights.length === 0 ? (
                 <p className="placeholder">{t('reader.noHighlights')}</p>
               ) : (
-                <ul className="plain-list">
+                <ul className="reader-list">
                   {highlights.map((item) => (
                     <li key={item.id} className="reader-row-line">
                       <button type="button" className="reader-toc-button" onClick={() => go(item.locator)}>
                         {item.quote || item.locator}
                       </button>
-                      <button type="button" className="button button-secondary" onClick={() => void removeHighlight(item)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void removeHighlight(item)}>
                         {t('reader.remove')}
                       </button>
                     </li>
@@ -678,7 +797,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
               notes.length === 0 ? (
                 <p className="placeholder">{t('reader.noNotes')}</p>
               ) : (
-                <ul className="plain-list">
+                <ul className="reader-list">
                   {notes.map((item) => (
                     <li key={item.id} className="reader-row-line">
                       <button
@@ -690,7 +809,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
                       >
                         {item.body}
                       </button>
-                      <button type="button" className="button button-secondary" onClick={() => void removeNote(item)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void removeNote(item)}>
                         {t('reader.remove')}
                       </button>
                     </li>
@@ -700,13 +819,21 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
             ) : null}
           </aside>
         ) : null}
-        <div
-          ref={stageRef}
-          className="reader-stage"
-          lang={facts.language ?? undefined}
-          dir={facts.direction}
-          style={{ fontFamily: fontStack(font) }}
-        />
+        <div className="reader-stage-wrap">
+          {!ready && !error ? (
+            <div className="reader-stage-loading" role="status">
+              <Loader2 className="spin" size={20} aria-hidden="true" />
+              {t('status.loading')}
+            </div>
+          ) : null}
+          <div
+            ref={stageRef}
+            className="reader-stage"
+            lang={facts.language ?? undefined}
+            dir={facts.direction}
+            style={{ fontFamily: fontStack(font) }}
+          />
+        </div>
       </div>
     </div>
   );

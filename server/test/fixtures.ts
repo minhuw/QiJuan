@@ -59,7 +59,7 @@ export function buildEpub(options?: {
   if (publisher) metadata.push(`<dc:publisher>${xmlEscape(publisher)}</dc:publisher>`);
   metadata.push('<meta name="cover" content="cover-image"/>');
   const opf = `<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:opf="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     ${metadata.join('\n    ')}
   </metadata>

@@ -1,6 +1,21 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  Check,
+  Download,
+  FileText,
+  Loader2,
+  Lock,
+  Minus,
+  Sparkles,
+  Wand2,
+} from 'lucide-react';
 import { api, apiForm, type EditionDetail, type ImportJob, type MetadataPreview } from './api';
+import { CoverArt } from './components/ui/cover-art';
+import { ErrorNotice, LoadingState } from './components/ui/states';
 import { EpubReader } from './reader/epub-reader';
 import { PdfReader } from './reader/pdf-reader';
 import { FileField } from './components/ui/file-field';
@@ -331,17 +346,16 @@ export function BookDetail({
 
   if (error) {
     return (
-      <>
-        <p className="alert" role="alert">
-          {errorText(t, error)}
-        </p>
-        <Link className="text-link" to="/">
+      <div className="state-page">
+        <ErrorNotice message={errorText(t, error)} />
+        <Link className="back-link" to="/">
+          <ArrowLeft size={16} aria-hidden="true" />
           {t('book.back')}
         </Link>
-      </>
+      </div>
     );
   }
-  if (!edition || !form) return <p role="status">{t('status.loading')}</p>;
+  if (!edition || !form) return <LoadingState />;
 
   const locks = new Set(edition.locks);
   const set =
@@ -350,235 +364,477 @@ export function BookDetail({
       setForm((current) => (current ? { ...current, [key]: value } : current));
     };
 
+  const firstReadable = edition.assets.find((asset) => asset.availability === 'present');
+
   return (
     <div className="book-page">
-      <div className="toolbar">
-        <Link className="text-link" to="/">
+      <div className="book-topbar">
+        <Link className="back-link" to="/">
+          <ArrowLeft size={16} aria-hidden="true" />
           {t('book.back')}
         </Link>
+        {edition.tags.length > 0 ? (
+          <div className="book-topbar-tags">
+            {edition.tags.slice(0, 3).map((tag) => (
+              <span className="chip" key={tag}>
+                {tag}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
-      <div className="book-hero">
-        {edition.cover ? (
-          <img className="cover-preview" alt="" src={`/api/editions/${edition.id}/cover`} />
-        ) : (
-          <span className="cover-fallback">
-            <span className="cover-fallback-title">{edition.title}</span>
-            {edition.authors[0] ? <span className="cover-fallback-author">{edition.authors[0]}</span> : null}
-          </span>
-        )}
-        <div className="book-hero-copy">
-          <h1>{edition.title}</h1>
-          {edition.authors.length > 0 ? <p className="byline">{edition.authors.join(', ')}</p> : null}
-          {edition.translators.length > 0 ? (
-            <p className="byline">{edition.translators.join(', ')}</p>
-          ) : null}
-          {edition.description ? <p>{edition.description}</p> : null}
-        </div>
-      </div>
-      <ReadingActions
-        edition={edition}
-        onEdition={(next) => {
-          setEdition(next);
-          setForm(toForm(next));
-        }}
-      />
-      {formError ? (
-        <p className="alert" role="alert">
-          {errorText(t, formError)}
-        </p>
-      ) : null}
-      {saved ? <p role="status">{t('book.saved')}</p> : null}
 
-      <section className="import-block">
-        <h2>{t('book.cover')}</h2>
-        {locks.has('cover') ? <p className="hint">{t('book.locked')}</p> : null}
-        <form className="form" onSubmit={(event) => void replaceCover(event)}>
-          <FileField
-            id={`${baseId}-cover`}
-            label={t('book.replaceCover')}
-            chooseLabel={t('book.chooseCover')}
-            emptyLabel={t('import.none')}
-            accept="image/png,image/jpeg,image/gif,image/webp"
-          />
-          <button className="button" type="submit" disabled={pending}>
-            {t('book.replaceCover')}
-          </button>
-        </form>
-      </section>
-
-      <section className="import-block">
-        <h2>{t('book.formats')}</h2>
-        <ul className="plain-list">
-          {edition.assets.map((asset) => (
-            <li key={asset.id} className="book-row">
-              <span>{asset.originalFilename}</span>
-              <Link to={`/books/${edition.id}/read/${asset.id}`}>
-                {t('book.read')} {asset.format.toUpperCase()}
+      <div className="book-layout">
+        <aside className="book-rail">
+          <div className="book-cover-panel">
+            <div className="book-cover-large">
+              {edition.cover ? (
+                <img
+                  className="cover-preview"
+                  alt=""
+                  src={`/api/editions/${edition.id}/cover`}
+                  decoding="async"
+                />
+              ) : (
+                <CoverArt
+                  editionId={edition.id}
+                  title={edition.title}
+                  author={edition.authors[0]}
+                  hasCover={false}
+                  variant="detail"
+                  eager
+                />
+              )}
+            </div>
+            {firstReadable ? (
+              <Link className="btn btn-primary btn-block" to={`/books/${edition.id}/read/${firstReadable.id}`}>
+                <BookOpen size={16} aria-hidden="true" />
+                {t('book.readNow')} {firstReadable.format.toUpperCase()}
               </Link>
-              {asset.availability === 'missing' ? <span className="hint-inline">{t('book.missing')}</span> : null}
-            </li>
-          ))}
-        </ul>
-        <p>
-          <a href={`/api/editions/${edition.id}/annotations?format=markdown`}>{t('book.exportMarkdown')}</a>
-          {' · '}
-          <a href={`/api/editions/${edition.id}/annotations?format=json`}>{t('book.exportJson')}</a>
-        </p>
-      </section>
+            ) : null}
+            <dl className="cover-facts">
+              {edition.series ? (
+                <div>
+                  <dt>{t('book.series')}</dt>
+                  <dd>
+                    {edition.series.name}
+                    {edition.seriesOrder == null ? '' : ` · ${edition.seriesOrder}`}
+                  </dd>
+                </div>
+              ) : null}
+              {edition.publisher ? (
+                <div>
+                  <dt>{t('book.publisher')}</dt>
+                  <dd>{edition.publisher}</dd>
+                </div>
+              ) : null}
+              {edition.publishedDate ? (
+                <div>
+                  <dt>{t('book.publishedDate')}</dt>
+                  <dd>{edition.publishedDate}</dd>
+                </div>
+              ) : null}
+              {edition.language ? (
+                <div>
+                  <dt>{t('book.language')}</dt>
+                  <dd>{edition.language}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
 
-      {edition.series ? (
-        <section className="import-block">
-          <h2>{t('reading.neighbors')}</h2>
-          <p>
-            {edition.series.name}
-            {edition.seriesOrder == null ? '' : ` · ${edition.seriesOrder}`}
-          </p>
-          {edition.neighbors?.previous ? (
-            <p>
-              <Link className="text-link" to={`/books/${edition.neighbors.previous.id}`}>
-                {t('reading.previous')}: {edition.neighbors.previous.title}
-              </Link>
-            </p>
-          ) : null}
-          {edition.neighbors?.next ? (
-            <p>
-              <Link className="text-link" to={`/books/${edition.neighbors.next.id}`}>
-                {t('reading.next')}: {edition.neighbors.next.title}
-              </Link>
-            </p>
-          ) : null}
-          {!edition.neighbors?.previous && !edition.neighbors?.next ? (
-            <p className="placeholder">{t('reading.noNeighbors')}</p>
-          ) : null}
-        </section>
-      ) : null}
-
-      <section className="import-block">
-        <h2>{t('book.suggestions')}</h2>
-        <p className="hint">{t('book.suggestionNote')}</p>
-        {edition.suggestions.length === 0 ? <p className="placeholder">{t('book.noSuggestion')}</p> : null}
-        <ul className="plain-list">
-          {edition.suggestions.map((suggestion) => (
-            <li key={suggestion.id} className="book-row">
-              <Link to={`/books/${suggestion.otherEditionId}`}>{suggestion.otherTitle}</Link>
-              <button type="button" className="button button-secondary" onClick={() => void dismiss(suggestion.id)}>
-                {t('book.dismiss')}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <form className="form" onSubmit={(event) => void save(event)}>
-        <Field id={`${baseId}-title`} label={t('book.title')} locked={locks.has('title')}>
-          <input
-            id={`${baseId}-title`}
-            value={form.title}
-            onChange={(event) => {
-              const value = event.target.value;
-              setSaved(false);
-              setForm((current) =>
-                current
-                  ? { ...current, title: value, sortTitle: current.sortTitle === current.title ? value : current.sortTitle }
-                  : current,
-              );
-            }}
-          />
-        </Field>
-        <Field id={`${baseId}-sort`} label={t('book.sortTitle')} locked={locks.has('sortTitle')}>
-          <input id={`${baseId}-sort`} value={form.sortTitle} onChange={(event) => set('sortTitle')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-alt`} label={t('book.alternateTitles')} hint={t('book.alternateHint')} locked={locks.has('alternateTitles')}>
-          <textarea id={`${baseId}-alt`} value={form.alternateTitles} onChange={(event) => set('alternateTitles')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-authors`} label={t('book.authors')} hint={t('book.authorsHint')} locked={locks.has('authors')}>
-          <textarea id={`${baseId}-authors`} value={form.authors} onChange={(event) => set('authors')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-translators`} label={t('book.translators')} hint={t('book.authorsHint')} locked={locks.has('translators')}>
-          <textarea
-            id={`${baseId}-translators`}
-            value={form.translators}
-            onChange={(event) => set('translators')(event.target.value)}
-          />
-        </Field>
-        <Field id={`${baseId}-description`} label={t('book.description')} locked={locks.has('description')}>
-          <textarea
-            id={`${baseId}-description`}
-            value={form.description}
-            onChange={(event) => set('description')(event.target.value)}
-          />
-        </Field>
-        <Field id={`${baseId}-series`} label={t('book.series')} locked={locks.has('series')}>
-          <input id={`${baseId}-series`} value={form.series} onChange={(event) => set('series')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-order`} label={t('book.seriesOrder')} locked={locks.has('seriesOrder')}>
-          <input id={`${baseId}-order`} value={form.seriesOrder} inputMode="decimal" onChange={(event) => set('seriesOrder')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-publisher`} label={t('book.publisher')} locked={locks.has('publisher')}>
-          <input id={`${baseId}-publisher`} value={form.publisher} onChange={(event) => set('publisher')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-date`} label={t('book.publishedDate')} locked={locks.has('publishedDate')}>
-          <input id={`${baseId}-date`} value={form.publishedDate} onChange={(event) => set('publishedDate')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-language`} label={t('book.language')} locked={locks.has('language')}>
-          <input id={`${baseId}-language`} value={form.language} onChange={(event) => set('language')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-identifiers`} label={t('book.identifiers')} hint={t('book.identifiersHint')} locked={locks.has('identifiers')}>
-          <textarea id={`${baseId}-identifiers`} value={form.identifiers} onChange={(event) => set('identifiers')(event.target.value)} />
-        </Field>
-        <Field id={`${baseId}-tags`} label={t('book.tags')} hint={t('book.tagsHint')} locked={locks.has('tags')}>
-          <input id={`${baseId}-tags`} value={form.tags} onChange={(event) => set('tags')(event.target.value)} />
-        </Field>
-        <button className="button" type="submit" disabled={pending}>
-          {t('book.save')}
-        </button>
-      </form>
-
-      {role === 'admin' ? (
-        <section className="import-block">
-          <h2>{t('book.lookup')}</h2>
-          <button className="button" type="button" disabled={pending} onClick={() => void lookup()}>
-            {t('book.lookup')}
-          </button>
-          {activity === 'lookup' ? <p role="status">{t('book.lookupRunning')}</p> : null}
-          {activity === 'apply' ? <p role="status">{t('book.applyRunning')}</p> : null}
-          {lookupNote === 'none' ? <p>{t('book.noSuggestion')}</p> : null}
-          {preview ? (
-            <form className="form" onSubmit={(event) => void applyPreview(event)}>
-              <h3>{t('book.preview')}</h3>
-              <ul className="plain-list">
-                {preview.fields.map((field) => (
-                  <li key={field.field} className="book-row">
-                    {field.status === 'change' ? (
-                      <input
-                        type="checkbox"
-                        checked={checked.includes(field.field)}
-                        aria-label={t(FIELD_LABEL[field.field] ?? 'book.title')}
-                        onChange={() =>
-                          setChecked((current) =>
-                            current.includes(field.field)
-                              ? current.filter((item) => item !== field.field)
-                              : [...current, field.field],
-                          )
-                        }
-                      />
-                    ) : null}
-                    <span>{t(FIELD_LABEL[field.field] ?? 'book.title')}</span>
-                    {field.status === 'kept' ? <span>{t('book.kept')}</span> : null}
-                    {field.status === 'unchanged' ? <span className="hint-inline">{t('book.unchanged')}</span> : null}
-                    {field.proposed ? <span className="hint-inline">{field.proposed}</span> : null}
-                  </li>
-                ))}
-              </ul>
-              <button className="button" type="submit" disabled={pending}>
-                {t('book.confirm')}
+          <section className="panel rail-panel cover-edit-panel">
+            <div className="panel-head">
+              <div>
+                <p className="section-kicker">{t('book.media')}</p>
+                <h2>{t('book.cover')}</h2>
+              </div>
+            </div>
+            {locks.has('cover') ? <p className="hint">{t('book.locked')}</p> : null}
+            <form className="form" onSubmit={(event) => void replaceCover(event)}>
+              <FileField
+                id={`${baseId}-cover`}
+                label={t('book.replaceCover')}
+                chooseLabel={t('book.chooseCover')}
+                emptyLabel={t('import.none')}
+                accept="image/png,image/jpeg,image/gif,image/webp"
+              />
+              <button className="btn btn-secondary" type="submit" disabled={pending}>
+                {t('book.replaceCover')}
               </button>
             </form>
+          </section>
+
+          <section className="panel rail-panel book-formats-panel">
+            <div className="panel-head">
+              <div>
+                <p className="section-kicker">{t('book.files')}</p>
+                <h2>{t('book.formats')}</h2>
+              </div>
+            </div>
+            <ul className="format-list">
+              {edition.assets.map((asset) => (
+                <li key={asset.id} className="format-item">
+                  <span className="format-icon" aria-hidden="true">
+                    <FileText size={18} />
+                  </span>
+                  <span className="format-copy">
+                    <span className="format-name">{asset.originalFilename}</span>
+                    <span className="format-meta">
+                      <span className={`format-badge format-${asset.format}`}>{asset.format.toUpperCase()}</span>
+                      {asset.availability === 'missing' ? (
+                        <span className="hint-inline">{t('book.missing')}</span>
+                      ) : null}
+                    </span>
+                  </span>
+                  <Link className="btn btn-secondary btn-sm" to={`/books/${edition.id}/read/${asset.id}`}>
+                    {t('book.read')} {asset.format.toUpperCase()}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <div className="export-row">
+              <a className="text-link" href={`/api/editions/${edition.id}/annotations?format=markdown`}>
+                <Download size={14} aria-hidden="true" />
+                {t('book.exportMarkdown')}
+              </a>
+              <a className="text-link" href={`/api/editions/${edition.id}/annotations?format=json`}>
+                <Download size={14} aria-hidden="true" />
+                {t('book.exportJson')}
+              </a>
+            </div>
+          </section>
+        </aside>
+
+        <div className="book-main">
+          <header className="book-hero">
+            <div className="book-kicker">
+              {edition.series ? (
+                <span className="chip chip-accent">
+                  {edition.series.name}
+                  {edition.seriesOrder == null ? '' : ` · ${edition.seriesOrder}`}
+                </span>
+              ) : null}
+              {edition.language ? <span className="chip">{edition.language}</span> : null}
+              {Array.from(new Set(edition.assets.map((asset) => asset.format))).map((format) => (
+                <span key={format} className={`format-badge format-${format}`}>
+                  {format.toUpperCase()}
+                </span>
+              ))}
+            </div>
+            <h1>{edition.title}</h1>
+            {edition.authors.length > 0 ? <p className="book-byline">{edition.authors.join(', ')}</p> : null}
+            {edition.translators.length > 0 ? (
+              <p className="book-byline book-byline-muted">
+                {t('book.translators')}: {edition.translators.join(', ')}
+              </p>
+            ) : null}
+            {edition.description ? <p className="book-description">{edition.description}</p> : null}
+            <div className="book-chip-row">
+              {edition.identifiers.map((identifier) => (
+                <span className="chip chip-mono" key={`${identifier.scheme}:${identifier.value}`}>
+                  {identifier.scheme.toUpperCase()} {identifier.value}
+                </span>
+              ))}
+            </div>
+          </header>
+
+          <ReadingActions
+            edition={edition}
+            onEdition={(next) => {
+              setEdition(next);
+              setForm(toForm(next));
+            }}
+          />
+
+          {formError ? (
+            <div className="alert alert-error" role="alert">
+              {errorText(t, formError)}
+            </div>
           ) : null}
-        </section>
-      ) : null}
+          {saved ? (
+            <p className="alert alert-success" role="status">
+              <Check size={16} aria-hidden="true" />
+              {t('book.saved')}
+            </p>
+          ) : null}
+
+          <section className="panel book-metadata-panel">
+            <div className="panel-head">
+              <div>
+                <p className="section-kicker">{t('book.details')}</p>
+                <h2>{t('book.metadata')}</h2>
+              </div>
+              {pending ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+            </div>
+            <form className="form book-edit-form" onSubmit={(event) => void save(event)}>
+              <div className="field-grid">
+                <Field id={`${baseId}-title`} label={t('book.title')} locked={locks.has('title')}>
+                  <input
+                    id={`${baseId}-title`}
+                    value={form.title}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setSaved(false);
+                      setForm((current) =>
+                        current
+                          ? {
+                              ...current,
+                              title: value,
+                              sortTitle: current.sortTitle === current.title ? value : current.sortTitle,
+                            }
+                          : current,
+                      );
+                    }}
+                  />
+                </Field>
+                <Field id={`${baseId}-sort`} label={t('book.sortTitle')} locked={locks.has('sortTitle')}>
+                  <input id={`${baseId}-sort`} value={form.sortTitle} onChange={(event) => set('sortTitle')(event.target.value)} />
+                </Field>
+                <Field
+                  id={`${baseId}-series`}
+                  label={t('book.series')}
+                  locked={locks.has('series')}
+                >
+                  <input id={`${baseId}-series`} value={form.series} onChange={(event) => set('series')(event.target.value)} />
+                </Field>
+                <Field id={`${baseId}-order`} label={t('book.seriesOrder')} locked={locks.has('seriesOrder')}>
+                  <input
+                    id={`${baseId}-order`}
+                    value={form.seriesOrder}
+                    inputMode="decimal"
+                    onChange={(event) => set('seriesOrder')(event.target.value)}
+                  />
+                </Field>
+                <Field id={`${baseId}-publisher`} label={t('book.publisher')} locked={locks.has('publisher')}>
+                  <input
+                    id={`${baseId}-publisher`}
+                    value={form.publisher}
+                    onChange={(event) => set('publisher')(event.target.value)}
+                  />
+                </Field>
+                <Field id={`${baseId}-date`} label={t('book.publishedDate')} locked={locks.has('publishedDate')}>
+                  <input
+                    id={`${baseId}-date`}
+                    value={form.publishedDate}
+                    onChange={(event) => set('publishedDate')(event.target.value)}
+                  />
+                </Field>
+                <Field id={`${baseId}-language`} label={t('book.language')} locked={locks.has('language')}>
+                  <input
+                    id={`${baseId}-language`}
+                    value={form.language}
+                    onChange={(event) => set('language')(event.target.value)}
+                  />
+                </Field>
+                <Field id={`${baseId}-tags`} label={t('book.tags')} hint={t('book.tagsHint')} locked={locks.has('tags')}>
+                  <input id={`${baseId}-tags`} value={form.tags} onChange={(event) => set('tags')(event.target.value)} />
+                </Field>
+              </div>
+              <Field
+                id={`${baseId}-authors`}
+                label={t('book.authors')}
+                hint={t('book.authorsHint')}
+                locked={locks.has('authors')}
+              >
+                <textarea id={`${baseId}-authors`} value={form.authors} onChange={(event) => set('authors')(event.target.value)} />
+              </Field>
+              <Field
+                id={`${baseId}-translators`}
+                label={t('book.translators')}
+                hint={t('book.authorsHint')}
+                locked={locks.has('translators')}
+              >
+                <textarea
+                  id={`${baseId}-translators`}
+                  value={form.translators}
+                  onChange={(event) => set('translators')(event.target.value)}
+                />
+              </Field>
+              <Field
+                id={`${baseId}-description`}
+                label={t('book.description')}
+                locked={locks.has('description')}
+              >
+                <textarea
+                  id={`${baseId}-description`}
+                  value={form.description}
+                  onChange={(event) => set('description')(event.target.value)}
+                />
+              </Field>
+              <Field
+                id={`${baseId}-alt`}
+                label={t('book.alternateTitles')}
+                hint={t('book.alternateHint')}
+                locked={locks.has('alternateTitles')}
+              >
+                <textarea
+                  id={`${baseId}-alt`}
+                  value={form.alternateTitles}
+                  onChange={(event) => set('alternateTitles')(event.target.value)}
+                />
+              </Field>
+              <Field
+                id={`${baseId}-identifiers`}
+                label={t('book.identifiers')}
+                hint={t('book.identifiersHint')}
+                locked={locks.has('identifiers')}
+              >
+                <textarea
+                  id={`${baseId}-identifiers`}
+                  value={form.identifiers}
+                  onChange={(event) => set('identifiers')(event.target.value)}
+                />
+              </Field>
+              <div className="form-footer">
+                <button className="btn btn-primary" type="submit" disabled={pending}>
+                  {t('book.save')}
+                </button>
+              </div>
+            </form>
+          </section>
+
+          {edition.series ? (
+            <section className="panel book-series-panel">
+              <div className="panel-head">
+                <div>
+                  <p className="section-kicker">{edition.series.name}</p>
+                  <h2>{t('reading.neighbors')}</h2>
+                </div>
+                <span className="chip">
+                  {edition.series.name}
+                  {edition.seriesOrder == null ? '' : ` · ${edition.seriesOrder}`}
+                </span>
+              </div>
+              <div className="neighbor-grid">
+                {edition.neighbors?.previous ? (
+                  <Link
+                    className="neighbor-card"
+                    to={`/books/${edition.neighbors.previous.id}`}
+                    aria-label={`${t('reading.previous')}: ${edition.neighbors.previous.title}`}
+                  >
+                    <span className="neighbor-direction">
+                      <ArrowLeft size={14} aria-hidden="true" />
+                      {t('reading.previous')}
+                    </span>
+                    <span className="neighbor-title">{edition.neighbors.previous.title}</span>
+                  </Link>
+                ) : null}
+                {edition.neighbors?.next ? (
+                  <Link
+                    className="neighbor-card neighbor-next"
+                    to={`/books/${edition.neighbors.next.id}`}
+                    aria-label={`${t('reading.next')}: ${edition.neighbors.next.title}`}
+                  >
+                    <span className="neighbor-direction">
+                      {t('reading.next')}
+                      <ArrowRight size={14} aria-hidden="true" />
+                    </span>
+                    <span className="neighbor-title">{edition.neighbors.next.title}</span>
+                  </Link>
+                ) : null}
+              </div>
+              {!edition.neighbors?.previous && !edition.neighbors?.next ? (
+                <p className="hint">{t('reading.noNeighbors')}</p>
+              ) : null}
+            </section>
+          ) : null}
+
+          <section className="panel book-suggestions-panel">
+            <div className="panel-head">
+              <div>
+                <p className="section-kicker">{t('book.related')}</p>
+                <h2>{t('book.suggestions')}</h2>
+              </div>
+              <span className="section-count">{edition.suggestions.length}</span>
+            </div>
+            <p className="hint">{t('book.suggestionNote')}</p>
+            {edition.suggestions.length === 0 ? <p className="placeholder">{t('book.noSuggestion')}</p> : null}
+            <ul className="suggestion-list">
+              {edition.suggestions.map((suggestion) => (
+                <li key={suggestion.id} className="suggestion-row">
+                  <Link className="suggestion-link" to={`/books/${suggestion.otherEditionId}`}>
+                    <Sparkles size={15} aria-hidden="true" />
+                    {suggestion.otherTitle}
+                  </Link>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void dismiss(suggestion.id)}>
+                    {t('book.dismiss')}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {role === 'admin' ? (
+            <section className="panel book-lookup-panel">
+              <div className="panel-head">
+                <div>
+                  <p className="section-kicker">{t('book.adminTools')}</p>
+                  <h2>{t('book.lookup')}</h2>
+                </div>
+                <button className="btn btn-secondary" type="button" disabled={pending} onClick={() => void lookup()}>
+                  <Wand2 size={15} aria-hidden="true" />
+                  {t('book.lookup')}
+                </button>
+              </div>
+              {activity === 'lookup' ? (
+                <p className="alert alert-info" role="status">
+                  <Loader2 className="spin" size={16} aria-hidden="true" />
+                  {t('book.lookupRunning')}
+                </p>
+              ) : null}
+              {activity === 'apply' ? (
+                <p className="alert alert-info" role="status">
+                  <Loader2 className="spin" size={16} aria-hidden="true" />
+                  {t('book.applyRunning')}
+                </p>
+              ) : null}
+              {lookupNote === 'none' ? <p className="hint">{t('book.noSuggestion')}</p> : null}
+              {preview ? (
+                <form className="form preview-form" onSubmit={(event) => void applyPreview(event)}>
+                  <h3>{t('book.preview')}</h3>
+                  <ul className="preview-list">
+                    {preview.fields.map((field) => (
+                      <li key={field.field} className="preview-row">
+                        {field.status === 'change' ? (
+                          <input
+                            type="checkbox"
+                            checked={checked.includes(field.field)}
+                            aria-label={t(FIELD_LABEL[field.field] ?? 'book.title')}
+                            onChange={() =>
+                              setChecked((current) =>
+                                current.includes(field.field)
+                                  ? current.filter((item) => item !== field.field)
+                                  : [...current, field.field],
+                              )
+                            }
+                          />
+                        ) : (
+                          <span className="preview-check" aria-hidden="true">
+                            {field.status === 'kept' ? <Lock size={14} /> : <Minus size={14} />}
+                          </span>
+                        )}
+                        <span className="preview-field">{t(FIELD_LABEL[field.field] ?? 'book.title')}</span>
+                        {field.status === 'kept' ? <span className="chip chip-warn">{t('book.kept')}</span> : null}
+                        {field.status === 'unchanged' ? <span className="hint-inline">{t('book.unchanged')}</span> : null}
+                        {field.proposed ? <span className="preview-proposed">{field.proposed}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="form-footer">
+                    <button className="btn btn-primary" type="submit" disabled={pending}>
+                      {t('book.confirm')}
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+            </section>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
+
 }
 
 export function ReaderPage({
@@ -609,36 +865,46 @@ export function ReaderPage({
 
   if (error) {
     return (
-      <p className="alert" role="alert">
-        {errorText(t, error)}
-      </p>
+      <div className="state-page">
+        <ErrorNotice message={errorText(t, error)} />
+        <Link className="back-link" to="/">
+          <ArrowLeft size={16} aria-hidden="true" />
+          {t('book.back')}
+        </Link>
+      </div>
     );
   }
-  if (!edition) return <p role="status">{t('status.loading')}</p>;
+  if (!edition) return <LoadingState />;
   const asset = edition.assets.find((item) => item.id === assetId);
   if (!asset) {
     return (
-      <p className="alert" role="alert">
-        {t('errors.not_found')}
-      </p>
+      <div className="state-page">
+        <ErrorNotice message={t('errors.not_found')} />
+        <Link className="back-link" to="/">
+          <ArrowLeft size={16} aria-hidden="true" />
+          {t('book.back')}
+        </Link>
+      </div>
     );
   }
   if (asset.availability !== 'present' || (asset.format !== 'epub' && asset.format !== 'pdf')) {
     return (
-      <>
-        <div className="toolbar">
-          <Link className="text-link" to={`/books/${edition.id}`}>
-            {t('book.back')}
-          </Link>
+      <div className="reader-placeholder-page">
+        <Link className="back-link" to={`/books/${edition.id}`}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          {t('book.back')}
+        </Link>
+        <div className="reader-placeholder-card">
+          <p className="section-kicker">{t('book.formats')}</p>
+          <h1>{edition.title}</h1>
+          <p className="reader-placeholder-format">
+            {t('book.read')} {asset.format.toUpperCase()}
+          </p>
+          <p className="placeholder">
+            {asset.availability === 'missing' ? t('book.missing') : t('book.readPlaceholder')}
+          </p>
         </div>
-        <h1>{edition.title}</h1>
-        <p>
-          {t('book.read')} {asset.format.toUpperCase()}
-        </p>
-        <p className="placeholder">
-          {asset.availability === 'missing' ? t('book.missing') : t('book.readPlaceholder')}
-        </p>
-      </>
+      </div>
     );
   }
   return (

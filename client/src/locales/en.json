@@ -11,26 +11,40 @@
     "language": "Language",
     "skip": "Skip to content",
     "navigation": "Navigation",
-    "version": "Version"
+    "version": "Version",
+    "workspace": "Workspace",
+    "admin": "Administration",
+    "openMenu": "Open navigation",
+    "closeMenu": "Close navigation"
   },
   "home": {
     "title": "Library",
     "placeholder": "Nothing here yet.",
     "libraries": "Your libraries",
-    "noAccess": "No library has been granted yet."
+    "noAccess": "No library has been granted yet.",
+    "subtitle": "Your private shelf, at a glance.",
+    "books": "Books",
+    "inProgress": "In progress",
+    "shelvesCount": "Shelves",
+    "addBooks": "Add books",
+    "allBooks": "All books"
   },
   "setup": {
     "title": "Set up this library",
     "username": "Username",
     "password": "Password",
     "libraryName": "Library name",
-    "submit": "Create administrator"
+    "submit": "Create administrator",
+    "eyebrow": "First run",
+    "description": "Create the administrator account and the first library."
   },
   "login": {
     "title": "Sign in",
     "username": "Username",
     "password": "Password",
-    "submit": "Sign in"
+    "submit": "Sign in",
+    "description": "Welcome back. Pick up where you left off.",
+    "foot": "Your library stays on this server."
   },
   "account": {
     "signedIn": "Signed in as",
@@ -48,7 +62,14 @@
     "create": "Create reader",
     "grant": "Grant",
     "revoke": "Revoke",
-    "empty": "No readers yet."
+    "empty": "No readers yet.",
+    "eyebrow": "Household",
+    "subtitle": "Reader accounts and library access.",
+    "accounts": "Accounts",
+    "newReader": "New reader",
+    "readerHint": "Readers can browse, read, and keep their own place.",
+    "access": "Library access",
+    "allReaders": "All readers"
   },
   "import": {
     "open": "Import",
@@ -78,7 +99,16 @@
       "unsupported": "Unsupported file",
       "malformed": "Malformed file",
       "missing": "File is missing"
-    }
+    },
+    "eyebrow": "Library intake",
+    "subtitle": "Add EPUB and PDF files, then follow each import.",
+    "newImport": "New import",
+    "managedHint": "Files are copied into the managed library.",
+    "indexedHint": "Files stay in place and are indexed from the folder.",
+    "progress": "Activity",
+    "history": "Import history",
+    "emptyHint": "Uploads and folder imports will appear here.",
+    "source": "Source"
   },
   "catalog": {
     "edit": "Edit several books",
@@ -89,7 +119,8 @@
     "tags": "Tags",
     "tagsHint": "Separate tags with commas.",
     "series": "Series",
-    "apply": "Apply to selected"
+    "apply": "Apply to selected",
+    "editHint": "Select several books and apply the same value."
   },
   "book": {
     "back": "Back to library",
@@ -132,7 +163,14 @@
     "readPlaceholder": "The reader is not here yet.",
     "missing": "Missing",
     "exportMarkdown": "Export highlights and notes (Markdown)",
-    "exportJson": "Export highlights and notes (JSON)"
+    "exportJson": "Export highlights and notes (JSON)",
+    "details": "Catalog record",
+    "metadata": "Metadata",
+    "adminTools": "Admin tools",
+    "media": "Media",
+    "files": "Files",
+    "related": "Related",
+    "readNow": "Start reading"
   },
   "library": {
     "search": "Search",
@@ -159,7 +197,11 @@
     "shelves": "Shelves",
     "shelvesEmpty": "No shelves yet.",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "resume": "Resume",
+    "filters": "Filters",
+    "clearFilters": "Clear filters",
+    "of": "of"
   },
   "reading": {
     "title": "Reading",
@@ -180,7 +222,8 @@
     "neighbors": "In this series",
     "previous": "Previous",
     "next": "Next",
-    "noNeighbors": "No other books in this series."
+    "noNeighbors": "No other books in this series.",
+    "status": "Status"
   },
   "reader": {
     "backToBook": "Back to book",
@@ -224,7 +267,8 @@
     "thumbnails": "Thumbnails",
     "outline": "Outline",
     "scanNoText": "This scanned PDF has no searchable text.",
-    "newerKept": "A newer change was kept."
+    "newerKept": "A newer change was kept.",
+    "display": "Display"
   },
   "backup": {
     "open": "Backup",
@@ -292,7 +336,7 @@
     "incompatible": "This snapshot cannot be activated.",
     "usage": "Storage",
     "repositorySize": "Repository size",
-    "transferred": "Last transfer, added / processed",
+    "transferred": "Last transfer",
     "unavailable": "Not reported.",
     "history": "Snapshot history",
     "noSnapshots": "No snapshots yet.",
@@ -304,7 +348,23 @@
     "checkNow": "Check repository",
     "restoreTest": "Test restore",
     "restoreTestHint": "A restore test copies the newest snapshot into a temporary folder and checks it. It does not replace this library. That is separate from an integrity check.",
-    "lastRestoreTest": "Last restore test"
+    "lastRestoreTest": "Last restore test",
+    "eyebrow": "Protection",
+    "subtitle": "Encrypted snapshots to storage you control.",
+    "overview": "Overview",
+    "configured": "Configured",
+    "notConfigured": "Not configured",
+    "active": "Active",
+    "paused": "Paused",
+    "kicker": {
+      "storage": "Storage",
+      "status": "Status",
+      "secrets": "Secrets",
+      "automation": "Automation",
+      "snapshots": "Snapshots",
+      "health": "Health",
+      "recovery": "Recovery"
+    }
   },
   "errors": {
     "invalid_request": "Check the fields and try again.",
@@ -331,5 +391,8 @@
   "status": {
     "loading": "Loading…",
     "retry": "Try again"
+  },
+  "auth": {
+    "media": "EPUB · PDF · Private shelves"
   }
 }

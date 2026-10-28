@@ -1,6 +1,8 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
+import { BookCopy, CheckSquare, ChevronDown } from 'lucide-react';
 import { api, type EditionSummary } from './api';
+import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -85,65 +87,99 @@ export function CatalogHome() {
   }
 
   return (
-    <details className="quiet-tools">
-      <summary>{t('catalog.edit')}</summary>
-      <section className="import-block">
-      <h2>{t('catalog.books')}</h2>
-      {error ? (
-        <p className="alert" role="alert">
-          {errorText(t, error)}
-        </p>
-      ) : null}
-      {editions === null && !error ? <p role="status">{t('status.loading')}</p> : null}
-      {editions && editions.length === 0 ? <p className="placeholder">{t('home.placeholder')}</p> : null}
-      {editions && editions.length > 0 ? (
-        <ul className="plain-list">
-          {editions.map((edition) => (
-            <li key={edition.id} className="book-row">
-              <input
-                type="checkbox"
-                checked={selected.includes(edition.id)}
-                aria-label={`${t('catalog.select')} ${edition.title}`}
-                onChange={() => toggle(edition.id)}
-              />
-              <Link className="book-main" to={`/books/${edition.id}`}>
-                {edition.title}
-              </Link>
-              {edition.language ? <span className="hint-inline">{edition.language}</span> : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {editions && editions.length > 0 ? (
-        <form className="form" onSubmit={(event) => void apply(event)}>
-          {formError ? (
-            <p className="alert" role="alert">
-              {errorText(t, formError)}
-            </p>
+    <details className="batch-panel">
+      <summary>
+        <span className="batch-summary-icon" aria-hidden="true">
+          <CheckSquare size={17} />
+        </span>
+        <span className="batch-summary-copy">
+          <span className="batch-summary-title">{t('catalog.edit')}</span>
+          <span className="batch-summary-hint">{t('catalog.editHint')}</span>
+        </span>
+        <ChevronDown className="batch-chevron" size={17} aria-hidden="true" />
+      </summary>
+      <div className="batch-body">
+        <div className="batch-list">
+          <div className="panel-head">
+            <div>
+              <p className="section-kicker">{t('home.books')}</p>
+              <h2>{t('catalog.books')}</h2>
+            </div>
+            {editions && editions.length > 0 ? (
+              <span className="section-count">{selected.length}</span>
+            ) : null}
+          </div>
+          {error ? (
+            <ErrorNotice
+              message={errorText(t, error)}
+              onRetry={() => {
+                setError(null);
+                setGeneration((value) => value + 1);
+              }}
+            />
           ) : null}
-          <label className="field" htmlFor={`${baseId}-language`}>
-            {t('catalog.language')}
-            <input id={`${baseId}-language`} value={language} onChange={(event) => setLanguage(event.target.value)} />
-          </label>
-          <label className="field" htmlFor={`${baseId}-publisher`}>
-            {t('catalog.publisher')}
-            <input id={`${baseId}-publisher`} value={publisher} onChange={(event) => setPublisher(event.target.value)} />
-          </label>
-          <label className="field" htmlFor={`${baseId}-tags`}>
-            {t('catalog.tags')}
-            <input id={`${baseId}-tags`} value={tags} onChange={(event) => setTags(event.target.value)} />
-            <span className="hint">{t('catalog.tagsHint')}</span>
-          </label>
-          <label className="field" htmlFor={`${baseId}-series`}>
-            {t('catalog.series')}
-            <input id={`${baseId}-series`} value={series} onChange={(event) => setSeries(event.target.value)} />
-          </label>
-          <button className="button" type="submit" disabled={pending}>
-            {t('catalog.apply')}
-          </button>
-        </form>
-      ) : null}
-      </section>
+          {editions === null && !error ? <LoadingState /> : null}
+          {editions && editions.length === 0 ? (
+            <EmptyState compact icon={<BookCopy size={20} />} title={t('home.placeholder')} />
+          ) : null}
+          {editions && editions.length > 0 ? (
+            <ul className="batch-book-list">
+              {editions.map((edition) => (
+                <li key={edition.id} className="batch-book-row">
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(edition.id)}
+                      aria-label={`${t('catalog.select')} ${edition.title}`}
+                      onChange={() => toggle(edition.id)}
+                    />
+                    <span className="book-main">{edition.title}</span>
+                  </label>
+                  {edition.language ? <span className="hint-inline">{edition.language}</span> : null}
+                  <Link className="text-link" to={`/books/${edition.id}`}>
+                    {t('book.title')}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        {editions && editions.length > 0 ? (
+          <form className="form batch-form" onSubmit={(event) => void apply(event)}>
+            <div className="panel-head">
+              <div>
+                <p className="section-kicker">{t('catalog.edit')}</p>
+                <h2>{t('catalog.apply')}</h2>
+              </div>
+            </div>
+            {formError ? (
+              <div className="alert alert-error" role="alert">
+                {errorText(t, formError)}
+              </div>
+            ) : null}
+            <label className="field" htmlFor={`${baseId}-language`}>
+              {t('catalog.language')}
+              <input id={`${baseId}-language`} value={language} onChange={(event) => setLanguage(event.target.value)} />
+            </label>
+            <label className="field" htmlFor={`${baseId}-publisher`}>
+              {t('catalog.publisher')}
+              <input id={`${baseId}-publisher`} value={publisher} onChange={(event) => setPublisher(event.target.value)} />
+            </label>
+            <label className="field" htmlFor={`${baseId}-tags`}>
+              {t('catalog.tags')}
+              <input id={`${baseId}-tags`} value={tags} onChange={(event) => setTags(event.target.value)} />
+              <span className="hint">{t('catalog.tagsHint')}</span>
+            </label>
+            <label className="field" htmlFor={`${baseId}-series`}>
+              {t('catalog.series')}
+              <input id={`${baseId}-series`} value={series} onChange={(event) => setSeries(event.target.value)} />
+            </label>
+            <button className="btn btn-primary" type="submit" disabled={pending}>
+              {t('catalog.apply')}
+            </button>
+          </form>
+        ) : null}
+      </div>
     </details>
   );
 }

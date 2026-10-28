@@ -1,9 +1,11 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { Link, Navigate, useLocation } from 'react-router';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router';
+import { BookOpen, Lock, ShieldCheck, User, Users } from 'lucide-react';
 import { api, type Account, type LibraryInfo, type ListedUser, type Me, type SetupResponse } from './api';
 import { BackupScreen } from './backup-screen';
 import { BookDetail, ReaderPage } from './book-detail';
-import { CatalogHome } from './catalog-home';
+import { PageHeader } from './components/ui/page-header';
+import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { ImportScreen } from './import-screen';
 import { LibraryBrowser } from './library';
 import { useAccountChrome, useLocale } from './shell';
@@ -81,6 +83,7 @@ export function Gate() {
   const signedInName = phase.kind === 'ready' ? phase.user.username : null;
   const signedInRole = phase.kind === 'ready' ? phase.user.role : null;
   useEffect(() => {
+    if (phase.kind === 'loading') return;
     if (!signedInName || !signedInRole) {
       setAccount(null);
       return;
@@ -92,39 +95,28 @@ export function Gate() {
         void signOutRef.current();
       },
     });
-    return () => setAccount(null);
-  }, [signedInName, signedInRole, setAccount]);
+  }, [phase.kind, signedInName, signedInRole, setAccount]);
 
   if (phase.kind === 'loading') {
-    return <p role="status">{t('status.loading')}</p>;
+    return <LoadingState />;
   }
 
   if (phase.kind === 'error') {
     return (
-      <>
-        <p className="alert" role="alert">
-          {errorText(t, phase.code)}
-        </p>
-        <button
-          type="button"
-          className="button"
-          onClick={() => {
+      <div className="state-page">
+        <ErrorNotice
+          message={errorText(t, phase.code)}
+          onRetry={() => {
             setPhase({ kind: 'loading' });
             setGeneration((value) => value + 1);
           }}
-        >
-          {t('status.retry')}
-        </button>
-      </>
+        />
+      </div>
     );
   }
 
   if (phase.kind === 'setup') {
-    return (
-      <SetupForm
-        onDone={(user, library) => setPhase({ kind: 'ready', user, libraries: [library] })}
-      />
-    );
+    return <SetupForm onDone={(user, library) => setPhase({ kind: 'ready', user, libraries: [library] })} />;
   }
 
   if (phase.kind === 'login') {
@@ -157,30 +149,56 @@ export function Gate() {
   if (bookMatch) {
     const editionId = pathId(bookMatch[1] ?? '');
     if (editionId) {
-      return (
-        <BookDetail editionId={editionId} role={phase.user.role} />
-      );
+      return <BookDetail editionId={editionId} role={phase.user.role} />;
     }
   }
 
+  return <LibraryBrowser libraries={phase.libraries} />;
+}
+
+function AuthLayout({
+  eyebrow,
+  title,
+  description,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  const { t } = useLocale();
   return (
-    <>
-      <header className="page-head">
-        <h1>{t('home.title')}</h1>
-        <p className="section-label">{t('home.libraries')}</p>
-        {phase.libraries.length === 0 ? (
-          <p className="placeholder">{t('home.noAccess')}</p>
-        ) : (
-          <ul className="page-libraries">
-            {phase.libraries.map((library) => (
-              <li key={library.id}>{library.name}</li>
-            ))}
-          </ul>
-        )}
-      </header>
-      <LibraryBrowser />
-      <CatalogHome />
-    </>
+    <div className="auth-layout">
+      <section className="auth-story" aria-label="QiJuan">
+        <div className="auth-story-inner">
+          <span className="auth-seal" lang="zh-Hans" aria-hidden="true">
+            栖卷
+          </span>
+          <p className="auth-quote" lang="zh-Hans">
+            书有归处，
+            <br />
+            人有闲读。
+          </p>
+          <div className="auth-spines" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+          <p className="auth-story-foot">{t('auth.media')}</p>
+        </div>
+      </section>
+      <section className="auth-panel-wrap">
+        <div className="auth-panel">
+          <p className="eyebrow">{eyebrow}</p>
+          <h1>{title}</h1>
+          {description ? <p className="auth-lede">{description}</p> : null}
+          {children}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -218,22 +236,28 @@ function SetupForm({ onDone }: { onDone: (user: Account, library: LibraryInfo) =
   }
 
   return (
-    <div className="auth-panel">
-      <p className="tagline">{t('brand.tagline')}</p>
-      <h1>{t('setup.title')}</h1>
+    <AuthLayout eyebrow={t('setup.eyebrow')} title={t('setup.title')} description={t('setup.description')}>
       <form className="form" noValidate onSubmit={(event) => void submit(event)}>
         {error ? (
-          <p className="alert" role="alert">
+          <div className="alert alert-error" role="alert">
             {errorText(t, error)}
-          </p>
+          </div>
         ) : null}
-        <TextField label={t('setup.username')} type="text" value={username} autoComplete="username" onChange={setUsername} />
+        <TextField
+          label={t('setup.username')}
+          type="text"
+          value={username}
+          autoComplete="username"
+          icon={<User size={16} />}
+          onChange={setUsername}
+        />
         <TextField
           label={t('setup.password')}
           type="password"
           value={password}
           autoComplete="new-password"
           hint={t('account.passwordHint')}
+          icon={<Lock size={16} />}
           onChange={setPassword}
         />
         <TextField
@@ -241,13 +265,14 @@ function SetupForm({ onDone }: { onDone: (user: Account, library: LibraryInfo) =
           type="text"
           value={libraryName}
           autoComplete="off"
+          icon={<BookOpen size={16} />}
           onChange={setLibraryName}
         />
-        <button className="button" type="submit" disabled={pending}>
+        <button className="btn btn-primary btn-block" type="submit" disabled={pending}>
           {t('setup.submit')}
         </button>
       </form>
-    </div>
+    </AuthLayout>
   );
 }
 
@@ -279,28 +304,38 @@ function LoginForm({ onDone }: { onDone: (user: Account, libraries: LibraryInfo[
   }
 
   return (
-    <div className="auth-panel">
-      <p className="tagline">{t('brand.tagline')}</p>
-      <h1>{t('login.title')}</h1>
+    <AuthLayout eyebrow={t('brand.tagline')} title={t('login.title')} description={t('login.description')}>
       <form className="form" noValidate onSubmit={(event) => void submit(event)}>
         {error ? (
-          <p className="alert" role="alert">
+          <div className="alert alert-error" role="alert">
             {errorText(t, error)}
-          </p>
+          </div>
         ) : null}
-        <TextField label={t('login.username')} type="text" value={username} autoComplete="username" onChange={setUsername} />
+        <TextField
+          label={t('login.username')}
+          type="text"
+          value={username}
+          autoComplete="username"
+          icon={<User size={16} />}
+          onChange={setUsername}
+        />
         <TextField
           label={t('login.password')}
           type="password"
           value={password}
           autoComplete="current-password"
+          icon={<Lock size={16} />}
           onChange={setPassword}
         />
-        <button className="button" type="submit" disabled={pending}>
+        <button className="btn btn-primary btn-block" type="submit" disabled={pending}>
           {t('login.submit')}
         </button>
       </form>
-    </div>
+      <p className="auth-foot">
+        <ShieldCheck size={14} aria-hidden="true" />
+        {t('login.foot')}
+      </p>
+    </AuthLayout>
   );
 }
 
@@ -391,73 +426,107 @@ function Settings() {
   const readers = (users ?? []).filter((user) => user.role === 'reader');
 
   return (
-    <>
-      <p className="tagline">{t('brand.tagline')}</p>
-      <h1>{t('settings.title')}</h1>
-      <div className="toolbar">
-        <Link className="text-link" to="/">
-          {t('settings.back')}
-        </Link>
+    <div className="settings-page">
+      <PageHeader
+        eyebrow={
+          <span className="eyebrow">
+            <Users size={13} aria-hidden="true" />
+            {t('settings.eyebrow')}
+          </span>
+        }
+        title={t('settings.title')}
+        description={t('settings.subtitle')}
+      />
+
+      {error ? (
+        <ErrorNotice message={errorText(t, error)} onRetry={() => void reload()} />
+      ) : null}
+
+      <div className="settings-grid">
+        <section className="panel create-reader-panel">
+          <div className="panel-head">
+            <div>
+              <p className="section-kicker">{t('settings.accounts')}</p>
+              <h2>{t('settings.newReader')}</h2>
+            </div>
+          </div>
+          <p className="panel-lede">{t('settings.readerHint')}</p>
+          <form className="form" noValidate onSubmit={(event) => void create(event)}>
+            <TextField
+              label={t('settings.username')}
+              type="text"
+              value={username}
+              autoComplete="off"
+              icon={<User size={16} />}
+              onChange={setUsername}
+            />
+            <TextField
+              label={t('settings.password')}
+              type="password"
+              value={password}
+              autoComplete="new-password"
+              hint={t('account.passwordHint')}
+              icon={<Lock size={16} />}
+              onChange={setPassword}
+            />
+            <button className="btn btn-primary" type="submit" disabled={pending}>
+              {t('settings.create')}
+            </button>
+          </form>
+        </section>
+
+        <section className="panel readers-panel">
+          <div className="panel-head">
+            <div>
+              <p className="section-kicker">{t('settings.access')}</p>
+              <h2>{t('settings.allReaders')}</h2>
+            </div>
+            {users ? <span className="section-count">{readers.length}</span> : null}
+          </div>
+          {users === null ? (
+            <LoadingState />
+          ) : readers.length === 0 ? (
+            <EmptyState icon={<Users size={22} />} title={t('settings.empty')} />
+          ) : (
+            <ul className="reader-list">
+              {readers.map((reader) => (
+                <li key={reader.id} className="reader-row">
+                  <div className="reader-head">
+                    <span className="avatar avatar-light" aria-hidden="true">
+                      {reader.username.charAt(0).toLocaleUpperCase()}
+                    </span>
+                    <div>
+                      <h2>{reader.username}</h2>
+                      <p className="hint">{t('account.reader')}</p>
+                    </div>
+                  </div>
+                  <ul className="grant-list">
+                    {(libraries ?? []).map((library) => {
+                      const granted = reader.libraryIds.includes(library.id);
+                      const action = granted ? t('settings.revoke') : t('settings.grant');
+                      return (
+                        <li key={library.id} className="grant-row">
+                          <span className="grant-library">{library.name}</span>
+                          <button
+                            type="button"
+                            className={granted ? 'btn btn-secondary btn-sm grant-on' : 'btn btn-ghost btn-sm'}
+                            aria-label={`${action} ${library.name} ${reader.username}`}
+                            aria-pressed={granted}
+                            onClick={() => void toggle(reader.id, library.id, granted)}
+                          >
+                            {action}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
-      <form className="form" noValidate onSubmit={(event) => void create(event)}>
-        {error ? (
-          <p className="alert" role="alert">
-            {errorText(t, error)}
-          </p>
-        ) : null}
-        <TextField
-          label={t('settings.username')}
-          type="text"
-          value={username}
-          autoComplete="off"
-          onChange={setUsername}
-        />
-        <TextField
-          label={t('settings.password')}
-          type="password"
-          value={password}
-          autoComplete="new-password"
-          hint={t('account.passwordHint')}
-          onChange={setPassword}
-        />
-        <button className="button" type="submit" disabled={pending}>
-          {t('settings.create')}
-        </button>
-      </form>
-      {users === null ? (
-        <p role="status">{t('status.loading')}</p>
-      ) : readers.length === 0 ? (
-        <p className="placeholder">{t('settings.empty')}</p>
-      ) : (
-        <ul className="reader-list">
-          {readers.map((reader) => (
-            <li key={reader.id} className="reader-row">
-              <h2>{reader.username}</h2>
-              <p className="hint">{t('account.reader')}</p>
-              <ul className="plain-list">
-                {(libraries ?? []).map((library) => {
-                  const granted = reader.libraryIds.includes(library.id);
-                  const action = granted ? t('settings.revoke') : t('settings.grant');
-                  return (
-                    <li key={library.id} className="grant-row">
-                      <span>{library.name}</span>
-                      <button
-                        type="button"
-                        className="button button-secondary"
-                        aria-label={`${action} ${library.name} ${reader.username}`}
-                        onClick={() => void toggle(reader.id, library.id, granted)}
-                      >
-                        {action}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
+    </div>
   );
 }
 
@@ -467,6 +536,7 @@ function TextField({
   value,
   autoComplete,
   hint,
+  icon,
   onChange,
 }: {
   label: string;
@@ -474,6 +544,7 @@ function TextField({
   value: string;
   autoComplete: string;
   hint?: string;
+  icon?: ReactNode;
   onChange: (value: string) => void;
 }) {
   const hintId = useId();
@@ -481,17 +552,24 @@ function TextField({
   return (
     <div className="field">
       <label htmlFor={inputId}>{label}</label>
-      <input
-        id={inputId}
-        type={type}
-        value={value}
-        name={type === 'password' ? 'password' : label}
-        autoComplete={autoComplete}
-        autoCapitalize={type === 'text' ? 'none' : undefined}
-        spellCheck={false}
-        aria-describedby={hint ? hintId : undefined}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <div className={icon ? 'input-with-icon' : undefined}>
+        {icon ? (
+          <span className="input-icon" aria-hidden="true">
+            {icon}
+          </span>
+        ) : null}
+        <input
+          id={inputId}
+          type={type}
+          value={value}
+          name={type === 'password' ? 'password' : label}
+          autoComplete={autoComplete}
+          autoCapitalize={type === 'text' ? 'none' : undefined}
+          spellCheck={false}
+          aria-describedby={hint ? hintId : undefined}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
       {hint ? (
         <p className="hint" id={hintId}>
           {hint}

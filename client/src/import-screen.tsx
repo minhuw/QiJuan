@@ -1,7 +1,9 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
-import { Link } from 'react-router';
+import { AlertCircle, CheckCircle2, Clock, Files, Loader2, Upload } from 'lucide-react';
 import { api, apiForm, type ImportJob, type LibraryInfo } from './api';
 import { FileField } from './components/ui/file-field';
+import { PageHeader } from './components/ui/page-header';
+import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -23,6 +25,13 @@ const ITEM_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'duplicate'] 
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
   return t(`errors.${known}`);
+}
+
+function StatusIcon({ status }: { status: ImportJob['status'] }) {
+  if (status === 'succeeded') return <CheckCircle2 size={14} aria-hidden="true" />;
+  if (status === 'failed') return <AlertCircle size={14} aria-hidden="true" />;
+  if (status === 'running') return <Loader2 className="spin" size={14} aria-hidden="true" />;
+  return <Clock size={14} aria-hidden="true" />;
 }
 
 export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
@@ -116,125 +125,181 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
   }
 
   return (
-    <>
-      <p className="tagline">{t('brand.tagline')}</p>
-      <h1>{t('import.title')}</h1>
-      <div className="toolbar">
-        <Link className="text-link" to="/">
-          {t('import.back')}
-        </Link>
-      </div>
+    <div className="import-page">
+      <PageHeader
+        eyebrow={
+          <span className="eyebrow">
+            <Upload size={13} aria-hidden="true" />
+            {t('import.eyebrow')}
+          </span>
+        }
+        title={t('import.title')}
+        description={t('import.subtitle')}
+      />
+
       {error && jobs === null ? (
-        <>
-          <p className="alert" role="alert">
-            {t('import.error')}
-          </p>
-          <button
-            type="button"
-            className="button"
-            onClick={() => {
-              setError(null);
-              setGeneration((value) => value + 1);
-            }}
-          >
-            {t('status.retry')}
-          </button>
-        </>
+        <ErrorNotice
+          message={t('import.error')}
+          onRetry={() => {
+            setError(null);
+            setGeneration((value) => value + 1);
+          }}
+        />
       ) : null}
-      {jobs === null && !error ? <p role="status">{t('status.loading')}</p> : null}
-      {jobs && jobs.length === 0 ? <p className="placeholder">{t('import.empty')}</p> : null}
-      {running ? (
-        <p className="import-progress" role="status">
-          {t('import.running')}
-        </p>
-      ) : null}
-      {jobs?.map((job) => (
-        <section key={job.id} className="import-block">
-          <h2>{t('import.summary')}</h2>
-          <dl className="summary-list">
-            {ITEM_STATUSES.map((status) => (
-              <div key={status} className="summary-row">
-                <dt>{t(`import.status.${status}`)}</dt>
-                <dd className={`status-${status}`}>{job.summary[status]}</dd>
-              </div>
-            ))}
-          </dl>
-          <ul className="import-list">
-            {job.items.map((item) => (
-              <li key={item.id} className="import-row">
-                <span className="import-name">{item.filename}</span>
-                <span className={`status-${item.status}`}>
-                  {t(`import.status.${item.status}`)}
-                  {item.error && FILE_ERRORS.has(item.error) ? ` · ${t(`import.fileError.${item.error}`)}` : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-      {libraries.length === 0 ? (
-        <p className="placeholder">{t('import.noLibraries')}</p>
-      ) : (
-        <>
-          <div className="field">
-            <label htmlFor={libraryFieldId}>{t('import.library')}</label>
-            <select
-              id={libraryFieldId}
-              value={selected?.id ?? ''}
-              onChange={(event) => setLibraryId(Number(event.target.value))}
-            >
-              {libraries.map((library) => (
-                <option key={library.id} value={library.id}>
-                  {library.name}
-                </option>
-              ))}
-            </select>
+
+      <div className="import-layout">
+        <section className="panel import-form-panel" aria-labelledby="import-form-heading">
+          <div className="panel-head">
+            <div>
+              <p className="section-kicker">{t('import.upload')}</p>
+              <h2 id="import-form-heading">{t('import.newImport')}</h2>
+            </div>
+            {running ? (
+              <span className="status-pill status-pill-running">
+                <Loader2 className="spin" size={12} aria-hidden="true" />
+                {t('import.status.running')}
+              </span>
+            ) : null}
           </div>
-          {selected?.mode === 'managed' ? (
-            <form className="form" noValidate onSubmit={(event) => void upload(event)}>
-              {formError ? (
-                <p className="alert" role="alert">
-                  {errorText(t, formError)}
-                </p>
-              ) : null}
-              <FileField
-                id={fileId}
-                name="files"
-                label={t('import.files')}
-                chooseLabel={t('import.choose')}
-                emptyLabel={t('import.none')}
-                multiple
-              />
-              <button className="button" type="submit" disabled={pending}>
-                {t('import.upload')}
-              </button>
-            </form>
+
+          {libraries.length === 0 ? (
+            <EmptyState icon={<Files size={22} />} title={t('import.noLibraries')} />
           ) : (
-            <form className="form" noValidate onSubmit={(event) => void importFolder(event)}>
-              {formError ? (
-                <p className="alert" role="alert">
-                  {errorText(t, formError)}
-                </p>
-              ) : null}
+            <>
               <div className="field">
-                <label htmlFor={folderId}>{t('import.folder')}</label>
-                <input
-                  id={folderId}
-                  type="text"
-                  value={folder}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) => setFolder(event.target.value)}
-                />
-                <p className="hint">{t('import.folderHint')}</p>
+                <label htmlFor={libraryFieldId}>{t('import.library')}</label>
+                <select
+                  id={libraryFieldId}
+                  value={selected?.id ?? ''}
+                  onChange={(event) => setLibraryId(Number(event.target.value))}
+                >
+                  {libraries.map((library) => (
+                    <option key={library.id} value={library.id}>
+                      {library.name}
+                    </option>
+                  ))}
+                </select>
+                {selected ? (
+                  <p className="hint">
+                    {selected.mode === 'managed' ? t('import.managedHint') : t('import.indexedHint')}
+                  </p>
+                ) : null}
               </div>
-              <button className="button" type="submit" disabled={pending}>
-                {t('import.folderSubmit')}
-              </button>
-            </form>
+
+              {formError ? (
+                <div className="alert alert-error" role="alert">
+                  {errorText(t, formError)}
+                </div>
+              ) : null}
+
+              {selected?.mode === 'managed' ? (
+                <form className="form" noValidate onSubmit={(event) => void upload(event)}>
+                  <FileField
+                    id={fileId}
+                    name="files"
+                    label={t('import.files')}
+                    chooseLabel={t('import.choose')}
+                    emptyLabel={t('import.none')}
+                    multiple
+                  />
+                  <button className="btn btn-primary btn-block" type="submit" disabled={pending}>
+                    <Upload size={16} aria-hidden="true" />
+                    {t('import.upload')}
+                  </button>
+                </form>
+              ) : (
+                <form className="form" noValidate onSubmit={(event) => void importFolder(event)}>
+                  <div className="field">
+                    <label htmlFor={folderId}>{t('import.folder')}</label>
+                    <input
+                      id={folderId}
+                      type="text"
+                      value={folder}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setFolder(event.target.value)}
+                    />
+                    <p className="hint">{t('import.folderHint')}</p>
+                  </div>
+                  <button className="btn btn-primary btn-block" type="submit" disabled={pending}>
+                    <Upload size={16} aria-hidden="true" />
+                    {t('import.folderSubmit')}
+                  </button>
+                </form>
+              )}
+            </>
           )}
-        </>
-      )}
-    </>
+        </section>
+
+        <section className="panel import-history-panel" aria-labelledby="import-history-heading">
+          <div className="panel-head">
+            <div>
+              <p className="section-kicker">{t('import.progress')}</p>
+              <h2 id="import-history-heading">{t('import.history')}</h2>
+            </div>
+            {jobs ? <span className="section-count">{jobs.length}</span> : null}
+          </div>
+          {running ? (
+            <p className="alert alert-info" role="status">
+              <Loader2 className="spin" size={16} aria-hidden="true" />
+              {t('import.running')}
+            </p>
+          ) : null}
+          {jobs === null && !error ? <LoadingState /> : null}
+          {jobs && jobs.length === 0 ? (
+            <EmptyState
+              icon={<Files size={22} />}
+              title={t('import.empty')}
+              description={t('import.emptyHint')}
+            />
+          ) : null}
+          {jobs?.map((job) => {
+            const done = job.summary.succeeded + job.summary.failed + job.summary.duplicate;
+            const percent = job.summary.total > 0 ? Math.round((done / job.summary.total) * 100) : 0;
+            return (
+              <article key={job.id} className="job-card">
+                <div className="job-head">
+                  <div>
+                    <p className="section-kicker">
+                      {t('import.source')} · {job.source}
+                    </p>
+                    <h2>{t('import.summary')}</h2>
+                  </div>
+                  <span className={`status-pill status-pill-${job.status}`}>
+                    <StatusIcon status={job.status} />
+                    {t(`import.status.${job.status}`)}
+                  </span>
+                </div>
+                <div className="progress-track" aria-hidden="true">
+                  <span className={`progress-fill progress-${job.status}`} style={{ width: `${percent}%` }} />
+                </div>
+                <dl className="summary-grid">
+                  {ITEM_STATUSES.map((status) => (
+                    <div key={status} className="summary-cell">
+                      <dt>
+                        <span className={`status-dot status-dot-${status}`} aria-hidden="true" />
+                        {t(`import.status.${status}`)}
+                      </dt>
+                      <dd className={`status-${status}`}>{job.summary[status]}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <ul className="import-list">
+                  {job.items.map((item) => (
+                    <li key={item.id} className="import-row">
+                      <span className="import-name">{item.filename}</span>
+                      <span className={`import-status status-${item.status}`}>
+                        {t(`import.status.${item.status}`)}
+                        {item.error && FILE_ERRORS.has(item.error) ? ` · ${t(`import.fileError.${item.error}`)}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            );
+          })}
+        </section>
+      </div>
+    </div>
   );
 }

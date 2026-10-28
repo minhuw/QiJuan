@@ -1,6 +1,26 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { api, type HomePayload, type LibraryEdition, type LibraryPage, type ReadingStatus } from './api';
+import {
+  ArrowRight,
+  BookMarked,
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  LayoutGrid,
+  Library,
+  List,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  Star,
+  X,
+} from 'lucide-react';
+import { api, type HomePayload, type LibraryEdition, type LibraryInfo, type LibraryPage, type ReadingStatus } from './api';
+import { CatalogHome } from './catalog-home';
+import { CoverArt } from './components/ui/cover-art';
+import { PageHeader } from './components/ui/page-header';
+import { EmptyState, ErrorNotice, SkeletonGrid } from './components/ui/states';
 import { useLocale } from './shell';
 
 const PAGE_LIMIT = 24;
@@ -41,7 +61,111 @@ function libraryPath(input: {
   return `/api/library?${params.toString()}`;
 }
 
-export function LibraryBrowser() {
+function Stars({ rating }: { rating: number }) {
+  return (
+    <span className="stars" aria-hidden="true">
+      {Array.from({ length: 5 }, (_, index) => (
+        <Star key={index} size={12} className={index < rating ? 'star-filled' : 'star-empty'} />
+      ))}
+    </span>
+  );
+}
+
+function BookCard({ book }: { book: LibraryEdition }) {
+  const { t } = useLocale();
+  const authors = book.authors.join(', ');
+  return (
+    <li className="book-card">
+      <Link className="cover-card" to={`/books/${book.id}`}>
+        <span className="cover-frame">
+          <CoverArt
+            editionId={book.id}
+            title={book.title}
+            author={book.authors[0]}
+            hasCover={book.hasCover}
+          />
+          <span className="cover-sheen" aria-hidden="true" />
+          {book.status ? (
+            <span className={`status-pill status-pill-${book.status} cover-status`}>
+              <span className="status-dot" aria-hidden="true" />
+              {t(`reading.${book.status}`)}
+            </span>
+          ) : null}
+          {book.favorite ? (
+            <span className="cover-favorite" aria-hidden="true">
+              <Star size={12} fill="currentColor" />
+            </span>
+          ) : null}
+        </span>
+        <span className="book-card-copy">
+          <span className="cover-caption">{book.title}</span>
+          {authors ? <span className="cover-byline">{authors}</span> : null}
+          <span className="book-card-signals">
+            <span className="format-row">
+              {book.formats.map((format) => (
+                <span key={format} className={`format-badge format-${format}`}>
+                  {format.toUpperCase()}
+                </span>
+              ))}
+            </span>
+            {book.rating ? <Stars rating={book.rating} /> : null}
+          </span>
+        </span>
+      </Link>
+    </li>
+  );
+}
+
+function ContinueCard({ book }: { book: LibraryEdition }) {
+  const { t } = useLocale();
+  return (
+    <li className="continue-item">
+      <Link className="continue-card" to={`/books/${book.id}`}>
+        <CoverArt
+          editionId={book.id}
+          title={book.title}
+          author={book.authors[0]}
+          hasCover={book.hasCover}
+          variant="thumb"
+        />
+        <span className="continue-copy">
+          <span className="continue-kicker">
+            <BookOpen size={13} aria-hidden="true" />
+            {t('reading.reading')}
+          </span>
+          <span className="continue-title">{book.title}</span>
+          {book.authors.length > 0 ? <span className="continue-author">{book.authors.join(', ')}</span> : null}
+          <span className="continue-cta">
+            {t('library.resume')}
+            <ArrowRight size={14} aria-hidden="true" />
+          </span>
+        </span>
+      </Link>
+    </li>
+  );
+}
+
+function StatCard({
+  icon,
+  value,
+  label,
+}: {
+  icon: ReactNode;
+  value: string;
+  label: string;
+}) {
+  return (
+    <div className="stat-card">
+      <span className="stat-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="stat-value">{value}</span>
+      <span className="stat-label">{label}</span>
+    </div>
+  );
+}
+
+export function LibraryBrowser({ libraries = [] }: { libraries?: LibraryInfo[] }) {
   const { t } = useLocale();
   const searchId = useId();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -120,228 +244,406 @@ export function LibraryBrowser() {
     setOffset(0);
   }
 
+  function clearFilters() {
+    setDraft('');
+    setQ('');
+    setLanguage('');
+    setFormat('');
+    setStatus('');
+    setShelfId('');
+    setOffset(0);
+  }
+
   const initialLoading = homeLoading && !home;
   const showPageLoading = pageLoading && !initialLoading;
   const alertCode = homeError ?? pageError;
+  const activeFilters = Boolean(q || language || format || status || shelfId);
+  const total = page?.total ?? 0;
+  const first = total === 0 ? 0 : offset + 1;
+  const last = offset + (page?.editions.length ?? 0);
 
   return (
-    <div className="library-block">
-      {initialLoading ? <p role="status">{t('status.loading')}</p> : null}
+    <div className="library-page">
+      <PageHeader
+        eyebrow={
+          <span className="eyebrow">
+            <Sparkles size={13} aria-hidden="true" />
+            {t('brand.tagline')}
+          </span>
+        }
+        title={t('home.title')}
+        description={t('home.subtitle')}
+        meta={
+          <div className="library-context">
+            <span className="context-label">{t('home.libraries')}</span>
+            {libraries.length === 0 ? (
+              <span className="context-empty">{t('home.noAccess')}</span>
+            ) : (
+              libraries.map((library) => (
+                <span className="context-chip" key={library.id}>
+                  <Library size={13} aria-hidden="true" />
+                  <span>{library.name}</span>
+                </span>
+              ))
+            )}
+          </div>
+        }
+        actions={
+          <Link className="btn btn-primary" to="/import">
+            <Plus size={16} aria-hidden="true" />
+            {t('home.addBooks')}
+          </Link>
+        }
+      />
+
+      <section className="stat-row" aria-label={t('home.libraries')}>
+        <StatCard
+          icon={<BookOpen size={18} />}
+          value={page ? String(page.total) : '—'}
+          label={t('home.books')}
+        />
+        <StatCard
+          icon={<BookMarked size={18} />}
+          value={home ? String(home.continueReading.length) : '—'}
+          label={t('home.inProgress')}
+        />
+        <StatCard
+          icon={<Library size={18} />}
+          value={home ? String(home.shelves.length) : '—'}
+          label={t('home.shelvesCount')}
+        />
+      </section>
+
       {alertCode ? (
-        <p className="alert" role="alert">
-          {errorText(t, alertCode)}
-        </p>
+        <ErrorNotice
+          message={errorText(t, alertCode)}
+          onRetry={() => {
+            setHomeError(null);
+            setPageError(null);
+            setGeneration((value) => value + 1);
+          }}
+        />
       ) : null}
-      {homeError || pageError ? (
-        <button type="button" className="button" onClick={() => setGeneration((value) => value + 1)}>
-          {t('status.retry')}
-        </button>
-      ) : null}
+
+      {initialLoading ? <SkeletonGrid count={6} /> : null}
+
       {home ? (
         <>
-          <section className="import-block">
-            <h2>{t('library.continue')}</h2>
-            {home.continueReading.length === 0 ? <p className="placeholder">{t('library.continueEmpty')}</p> : null}
-            {home.continueReading.length > 0 ? (
-              <ul className="cover-grid">
+          <section className="content-section" aria-labelledby="continue-heading">
+            <div className="section-heading">
+              <div>
+                <p className="section-kicker">{t('home.inProgress')}</p>
+                <h2 id="continue-heading">{t('library.continue')}</h2>
+              </div>
+              <span className="section-count">{home.continueReading.length}</span>
+            </div>
+            {home.continueReading.length === 0 ? (
+              <EmptyState
+                compact
+                icon={<BookOpen size={20} />}
+                title={t('library.continueEmpty')}
+                description={t('home.subtitle')}
+                action={
+                  <Link className="btn btn-secondary btn-sm" to="/import">
+                    <Plus size={14} aria-hidden="true" />
+                    {t('home.addBooks')}
+                  </Link>
+                }
+              />
+            ) : (
+              <ul className="continue-grid">
                 {home.continueReading.map((book) => (
-                  <BookCard key={book.id} book={book} />
+                  <ContinueCard key={book.id} book={book} />
                 ))}
               </ul>
-            ) : null}
+            )}
           </section>
-          <section className="import-block">
-            <h2>{t('library.recent')}</h2>
-            {home.recent.length === 0 ? <p className="placeholder">{t('library.recentEmpty')}</p> : null}
-            {home.recent.length > 0 ? (
-              <ul className="cover-grid">
-                {home.recent.map((book) => (
-                  <BookCard key={book.id} book={book} />
-                ))}
-              </ul>
-            ) : null}
-          </section>
-          <section className="import-block">
-            <h2>{t('library.shelves')}</h2>
-            {home.shelves.length === 0 ? <p className="placeholder">{t('library.shelvesEmpty')}</p> : null}
-            {home.shelves.length > 0 ? (
-              <ul className="plain-list">
-                {home.shelves.map((shelf) => (
-                  <li key={shelf.id} className="book-row">
-                    <button
-                      type="button"
-                      className="button button-secondary"
-                      onClick={() => {
-                        setShelfId(String(shelf.id));
-                        setOffset(0);
-                      }}
-                    >
-                      {shelf.name}
-                    </button>
-                    <span className="hint-inline">{shelf.count}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
+
+          <div className="dashboard-split">
+            <section className="content-section" aria-labelledby="recent-heading">
+              <div className="section-heading">
+                <div>
+                  <p className="section-kicker">{t('home.books')}</p>
+                  <h2 id="recent-heading">{t('library.recent')}</h2>
+                </div>
+                <span className="section-count">{home.recent.length}</span>
+              </div>
+              {home.recent.length === 0 ? (
+                <EmptyState compact icon={<Sparkles size={20} />} title={t('library.recentEmpty')} />
+              ) : (
+                <ul className="book-grid book-grid-recent">
+                  {home.recent.map((book) => (
+                    <BookCard key={book.id} book={book} />
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="content-section shelves-section" aria-labelledby="shelves-heading">
+              <div className="section-heading">
+                <div>
+                  <p className="section-kicker">{t('home.libraries')}</p>
+                  <h2 id="shelves-heading">{t('library.shelves')}</h2>
+                </div>
+                <span className="section-count">{home.shelves.length}</span>
+              </div>
+              {home.shelves.length === 0 ? (
+                <EmptyState compact icon={<BookMarked size={20} />} title={t('library.shelvesEmpty')} />
+              ) : (
+                <ul className="shelf-list">
+                  {home.shelves.map((shelf) => (
+                    <li key={shelf.id}>
+                      <button
+                        type="button"
+                        className={String(shelf.id) === shelfId ? 'shelf-card shelf-card-active' : 'shelf-card'}
+                        aria-label={shelf.name}
+                        aria-pressed={String(shelf.id) === shelfId}
+                        onClick={() => {
+                          setShelfId(String(shelf.id));
+                          setOffset(0);
+                        }}
+                      >
+                        <span className="shelf-icon" aria-hidden="true">
+                          <BookMarked size={17} />
+                        </span>
+                        <span className="shelf-name">{shelf.name}</span>
+                        <span className="shelf-count">{shelf.count}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
         </>
       ) : null}
 
-      <form className="library-search-form" onSubmit={submitSearch}>
-        <label className="field library-search-field" htmlFor={searchId}>
-          {t('library.search')}
-          <input
-            id={searchId}
-            ref={searchRef}
-            className="library-search"
-            type="search"
-            value={draft}
-            placeholder={t('library.searchHint')}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        </label>
-        <button className="button" type="submit">
-          {t('library.submit')}
-        </button>
-      </form>
-
-      <div className="library-toolbar">
-        <label>
-          {t('library.language')}
-          <select
-            value={language}
-            onChange={(event) => {
-              setLanguage(event.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">{t('library.languageAny')}</option>
-            {(page?.languages ?? []).map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('library.format')}
-          <select
-            value={format}
-            onChange={(event) => {
-              setFormat(event.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">{t('library.formatAny')}</option>
-            <option value="epub">{t('library.formatEpub')}</option>
-            <option value="pdf">{t('library.formatPdf')}</option>
-          </select>
-        </label>
-        <label>
-          {t('library.status')}
-          <select
-            value={status}
-            onChange={(event) => {
-              setStatus(event.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">{t('library.statusAny')}</option>
-            {STATUSES.map((item) => (
-              <option key={item} value={item}>
-                {t(`reading.${item}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('library.shelf')}
-          <select
-            value={shelfId}
-            onChange={(event) => {
-              setShelfId(event.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">{t('library.shelfAny')}</option>
-            {(page?.shelves ?? home?.shelves ?? []).map((shelf) => (
-              <option key={shelf.id} value={shelf.id}>
-                {shelf.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="view-switch" role="group" aria-label={t('library.results')}>
-          <button type="button" className="button button-secondary" aria-pressed={view === 'grid'} onClick={() => setView('grid')}>
-            {t('library.grid')}
-          </button>
-          <button type="button" className="button button-secondary" aria-pressed={view === 'list'} onClick={() => setView('list')}>
-            {t('library.list')}
-          </button>
+      <section className="browse-panel" aria-labelledby="browse-heading">
+        <div className="browse-head">
+          <div>
+            <p className="section-kicker">{t('library.results')}</p>
+            <h2 id="browse-heading">{t('home.allBooks')}</h2>
+          </div>
+          {page ? (
+            <span className="browse-count">
+              {first}–{last} {t('library.of')} {page.total}
+            </span>
+          ) : null}
         </div>
-      </div>
 
-      {showPageLoading ? <p role="status">{t('status.loading')}</p> : null}
-      {page && !pageLoading && page.editions.length === 0 ? <p className="placeholder">{t('library.empty')}</p> : null}
-      {page && !pageLoading && page.editions.length > 0 ? (
-        <ul className={view === 'grid' ? 'cover-grid' : 'compact-list'} aria-label={t('library.results')}>
-          {page.editions.map((book) =>
-            view === 'grid' ? (
-              <BookCard key={book.id} book={book} />
-            ) : (
-              <li key={book.id} className="book-row">
-                <Link to={`/books/${book.id}`}>{book.title}</Link>
-                {book.authors.length > 0 ? <span>{book.authors.join(', ')}</span> : null}
-                {book.language ? <span className="hint-inline">{book.language}</span> : null}
-                {book.formats.map((item) => (
-                  <span key={item}>{item.toUpperCase()}</span>
-                ))}
-                {book.status ? <span>{t(`reading.${book.status}`)}</span> : null}
-              </li>
-            ),
-          )}
-        </ul>
-      ) : null}
-      {page && !pageLoading && (offset > 0 || offset + page.editions.length < page.total) ? (
-        <div className="toolbar">
-          <button
-            type="button"
-            className="button button-secondary"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
-          >
-            {t('library.previous')}
+        <form className="search-form" role="search" onSubmit={submitSearch}>
+          <div className="search-field">
+            <Search size={18} aria-hidden="true" />
+            <label className="visually-hidden" htmlFor={searchId}>
+              {t('library.search')}
+            </label>
+            <input
+              id={searchId}
+              ref={searchRef}
+              type="search"
+              value={draft}
+              placeholder={t('library.searchHint')}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <kbd aria-hidden="true">/</kbd>
+          </div>
+          <button className="btn btn-primary" type="submit">
+            {t('library.submit')}
           </button>
-          <button
-            type="button"
-            className="button button-secondary"
-            disabled={offset + page.editions.length >= page.total}
-            onClick={() => setOffset(offset + PAGE_LIMIT)}
-          >
-            {t('library.next')}
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
+        </form>
 
-function BookCard({ book }: { book: LibraryEdition }) {
-  const authors = book.authors.join(', ');
-  return (
-    <li>
-      <Link className="cover-card" to={`/books/${book.id}`}>
-        {book.hasCover ? (
-          <img className="cover-image" alt="" src={`/api/editions/${book.id}/cover`} />
-        ) : (
-          <span className="cover-fallback">
-            <span className="cover-fallback-title">{book.title}</span>
-            {book.authors[0] ? <span className="cover-fallback-author">{book.authors[0]}</span> : null}
+        <div className="filter-bar">
+          <span className="filter-caption">
+            <SlidersHorizontal size={14} aria-hidden="true" />
+            {t('library.filters')}
           </span>
-        )}
-        <span className="cover-caption">{book.title}</span>
-        {authors ? <span className="cover-byline">{authors}</span> : null}
-      </Link>
-    </li>
+          <label className="filter-field">
+            <span>{t('library.language')}</span>
+            <select
+              value={language}
+              onChange={(event) => {
+                setLanguage(event.target.value);
+                setOffset(0);
+              }}
+            >
+              <option value="">{t('library.languageAny')}</option>
+              {(page?.languages ?? []).map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="filter-field">
+            <span>{t('library.format')}</span>
+            <select
+              value={format}
+              onChange={(event) => {
+                setFormat(event.target.value);
+                setOffset(0);
+              }}
+            >
+              <option value="">{t('library.formatAny')}</option>
+              <option value="epub">{t('library.formatEpub')}</option>
+              <option value="pdf">{t('library.formatPdf')}</option>
+            </select>
+          </label>
+          <label className="filter-field">
+            <span>{t('library.status')}</span>
+            <select
+              value={status}
+              onChange={(event) => {
+                setStatus(event.target.value);
+                setOffset(0);
+              }}
+            >
+              <option value="">{t('library.statusAny')}</option>
+              {STATUSES.map((item) => (
+                <option key={item} value={item}>
+                  {t(`reading.${item}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="filter-field">
+            <span>{t('library.shelf')}</span>
+            <select
+              value={shelfId}
+              onChange={(event) => {
+                setShelfId(event.target.value);
+                setOffset(0);
+              }}
+            >
+              <option value="">{t('library.shelfAny')}</option>
+              {(page?.shelves ?? home?.shelves ?? []).map((shelf) => (
+                <option key={shelf.id} value={shelf.id}>
+                  {shelf.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {activeFilters ? (
+            <button type="button" className="btn btn-ghost btn-sm clear-filters" onClick={clearFilters}>
+              <X size={14} aria-hidden="true" />
+              {t('library.clearFilters')}
+            </button>
+          ) : null}
+          <div className="view-switch" role="group" aria-label={t('library.results')}>
+            <button
+              type="button"
+              className="view-button"
+              aria-pressed={view === 'grid'}
+              onClick={() => setView('grid')}
+            >
+              <LayoutGrid size={15} aria-hidden="true" />
+              {t('library.grid')}
+            </button>
+            <button
+              type="button"
+              className="view-button"
+              aria-pressed={view === 'list'}
+              onClick={() => setView('list')}
+            >
+              <List size={15} aria-hidden="true" />
+              {t('library.list')}
+            </button>
+          </div>
+        </div>
+
+        {showPageLoading ? <SkeletonGrid count={8} /> : null}
+        {page && !pageLoading && page.editions.length === 0 ? (
+          <EmptyState
+            icon={<Search size={22} />}
+            title={t('library.empty')}
+            description={activeFilters ? t('library.searchHint') : undefined}
+            action={
+              activeFilters ? (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={clearFilters}>
+                  {t('library.clearFilters')}
+                </button>
+              ) : null
+            }
+          />
+        ) : null}
+        {page && !pageLoading && page.editions.length > 0 ? (
+          view === 'grid' ? (
+            <ul className="book-grid" aria-label={t('library.results')}>
+              {page.editions.map((book) => (
+                <BookCard key={book.id} book={book} />
+              ))}
+            </ul>
+          ) : (
+            <ul className="book-table" aria-label={t('library.results')}>
+              {page.editions.map((book) => (
+                <li key={book.id} className="book-row">
+                  <Link className="book-row-cover" to={`/books/${book.id}`} tabIndex={-1} aria-hidden="true">
+                    <CoverArt
+                      editionId={book.id}
+                      title={book.title}
+                      author={book.authors[0]}
+                      hasCover={book.hasCover}
+                      variant="thumb"
+                    />
+                  </Link>
+                  <div className="book-row-main">
+                    <Link className="book-row-title" to={`/books/${book.id}`}>
+                      {book.title}
+                    </Link>
+                    {book.authors.length > 0 ? (
+                      <span className="book-row-author">{book.authors.join(', ')}</span>
+                    ) : null}
+                  </div>
+                  {book.language ? <span className="book-row-lang">{book.language}</span> : null}
+                  <span className="book-row-formats">
+                    {book.formats.map((item) => (
+                      <span key={item} className={`format-badge format-${item}`}>
+                        {item.toUpperCase()}
+                      </span>
+                    ))}
+                  </span>
+                  {book.status ? (
+                    <span className={`status-pill status-pill-${book.status}`}>
+                      <span className="status-dot" aria-hidden="true" />
+                      {t(`reading.${book.status}`)}
+                    </span>
+                  ) : null}
+                  {book.rating ? <Stars rating={book.rating} /> : null}
+                </li>
+              ))}
+            </ul>
+          )
+        ) : null}
+
+        {page && !pageLoading && (offset > 0 || offset + page.editions.length < page.total) ? (
+          <div className="pagination">
+            <span className="pagination-copy">
+              {first}–{last} {t('library.of')} {page.total}
+            </span>
+            <div className="pagination-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+              >
+                <ChevronLeft size={15} aria-hidden="true" />
+                {t('library.previous')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={offset + page.editions.length >= page.total}
+                onClick={() => setOffset(offset + PAGE_LIMIT)}
+              >
+                {t('library.next')}
+                <ChevronRight size={15} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <CatalogHome />
+    </div>
   );
 }
