@@ -199,7 +199,7 @@ export function startJobWorker(options: {
   const timer = setInterval(() => {
     if (stopped || active) return;
     active = true;
-    // One job at a time. Lookup and apply await Open Library; do not claim the next row until that finishes.
+    // One job at a time. Lookup and apply await external metadata requests; do not claim the next row until that finishes.
     void workNext().finally(() => {
       active = false;
     });
@@ -307,7 +307,7 @@ async function performJob(
     }
     return undefined;
   }
-  if (job.source === 'lookup') return runLookup(db, openLibrary, job);
+  if (job.source === 'lookup') return runLookup(db, dataDir, openLibrary, assistant, job);
   if (job.source === 'apply') return runApply(db, dataDir, openLibrary, job);
   if (job.source === 'refresh') return runRefresh(db, dataDir, job);
   if (job.source === 'rescan') return runRescan(db, dataDir, job);
@@ -316,12 +316,15 @@ async function performJob(
 
 async function runLookup(
   db: AppDatabase,
-  transport: OpenLibraryTransport,
+  dataDir: string,
+  openLibrary: OpenLibraryTransport,
+  assistant: AssistantTransport,
   job: typeof jobs.$inferSelect,
-): Promise<{ preview: { previewId: number; fields: unknown[] } | null }> {
+): Promise<{ preview: { previewId: number; fields: unknown[]; source: 'assistant'; model: string } | null }> {
   const editionId = readEditionId(readPayload(job.payload));
   assertEdition(db, job.libraryId, editionId);
-  const preview = await createMetadataPreview(db, transport, editionId);
+  if (!readAssistantSettings(dataDir)) throw new AssistantError('metadata_assistant_unconfigured');
+  const preview = await createMetadataPreview(db, dataDir, assistant, openLibrary, editionId);
   return { preview: preview ?? null };
 }
 
@@ -413,6 +416,7 @@ function assertEdition(db: AppDatabase, libraryId: number, editionId: number): v
 }
 
 function jobFailureCode(error: unknown): string {
+  if (error instanceof AssistantError) return error.code;
   if (error instanceof OpenLibraryError) return error.code;
   if (error instanceof CatalogError) return error.code;
   if (error instanceof BookError) return error.code;

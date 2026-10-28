@@ -1,5 +1,5 @@
-import { eq } from 'drizzle-orm';
-import { CatalogError } from '../catalog.js';
+import { and, asc, eq, isNull } from 'drizzle-orm';
+import { CatalogError, findOrCreateSeries } from '../catalog.js';
 import type { AppDatabase } from '../db.js';
 import {
   type LockField,
@@ -13,23 +13,23 @@ import {
   saveCoverRow,
   latestCover,
 } from '../edition-fields.js';
-import { editions, metadataPreviews } from '../schema.js';
-import {
-  type OpenLibraryProposal,
-  type OpenLibraryTransport,
-  fetchOpenLibraryCover,
-  lookupOpenLibrary,
-  preferIsbn,
-} from './openLibrary.js';
+import { editions, fileAssets, metadataPreviews, series } from '../schema.js';
+import { runMetadataAgent } from './assistant/agent.js';
+import { AssistantError, type AssistantTransport } from './assistant/client.js';
+import { readAssistantSettings } from './assistant-settings.js';
+import { type OpenLibraryTransport, fetchOpenLibraryCover } from './openLibrary.js';
 
 export const PREVIEW_FIELDS = [
   'title',
   'authors',
+  'translators',
   'description',
   'publisher',
   'publishedDate',
   'language',
   'identifiers',
+  'series',
+  'seriesOrder',
   'cover',
 ] as const;
 
@@ -43,46 +43,102 @@ export interface FieldPreview {
   proposed: string | null;
 }
 
+export interface MetadataPreview {
+  previewId: number;
+  fields: FieldPreview[];
+  source: 'assistant';
+  model: string;
+}
+
+/** Older previews came from a direct Open Library proposal and may lack the newer fields. */
+interface StoredProposal {
+  title: string | null;
+  authors: string[];
+  translators: string[];
+  description: string | null;
+  publisher: string | null;
+  publishedDate: string | null;
+  language: string | null;
+  identifiers: Array<{ scheme: string; value: string }>;
+  series: string | null;
+  seriesOrder: number | null;
+  coverId: number | null;
+  isbn: string | null;
+}
+
 const FIELD_LOCK: Record<PreviewField, LockField> = {
   title: 'title',
   authors: 'authors',
+  translators: 'translators',
   description: 'description',
   publisher: 'publisher',
   publishedDate: 'published_date',
   language: 'language',
   identifiers: 'identifiers',
+  series: 'series',
+  seriesOrder: 'series_order',
   cover: 'cover',
 };
 
 export async function createMetadataPreview(
   db: AppDatabase,
-  transport: OpenLibraryTransport,
+  dataDir: string,
+  assistant: AssistantTransport,
+  openLibrary: OpenLibraryTransport,
   editionId: number,
   now = new Date(),
-): Promise<{ previewId: number; fields: FieldPreview[] } | null> {
+): Promise<MetadataPreview | null> {
   const edition = db.select().from(editions).where(eq(editions.id, editionId)).get();
   if (!edition || edition.trashedAt) return null;
   const authors = loadNames(db, edition.id, 'author');
+  const translators = loadNames(db, edition.id, 'translator');
   const identifiers = loadIdentifiers(db, edition.id);
-  const proposal = await lookupOpenLibrary(transport, {
-    title: edition.title,
-    author: authors[0] ?? null,
-    isbn: preferIsbn(identifiers),
+  const seriesRow =
+    edition.seriesId == null
+      ? null
+      : db.select({ name: series.name }).from(series).where(eq(series.id, edition.seriesId)).get() ?? null;
+  const asset = loadPromptAsset(db, edition.id);
+  const config = readAssistantSettings(dataDir);
+  if (!config) throw new AssistantError('metadata_assistant_unconfigured');
+  const result = await runMetadataAgent({
+    transport: assistant,
+    openLibrary,
+    config,
+    input: {
+      filename: asset?.originalFilename ?? edition.title,
+      format: asset?.format ?? 'epub',
+      fields: {
+        title: edition.title,
+        authors,
+        translators,
+        description: edition.description,
+        publisher: edition.publisher,
+        publishedDate: edition.publishedDate,
+        language: edition.language,
+        identifiers,
+        series: seriesRow?.name ?? null,
+        seriesOrder: edition.seriesOrder,
+      },
+    },
   });
-  if (!proposal) return null;
   const stamp = now.toISOString();
   const previewId = db.transaction((tx) => {
     const query = tx as unknown as AppDatabase;
     query.delete(metadataPreviews).where(eq(metadataPreviews.editionId, edition.id)).run();
     const inserted = query
       .insert(metadataPreviews)
-      .values({ editionId: edition.id, proposal: JSON.stringify(proposal), createdAt: stamp })
+      .values({ editionId: edition.id, proposal: JSON.stringify(result.proposal), createdAt: stamp })
       .returning({ id: metadataPreviews.id })
       .get();
     if (!inserted) throw new Error('preview insert failed');
     return inserted.id;
   }, { behavior: 'immediate' });
-  return { previewId, fields: buildFieldPreviews(db, edition.id, proposal) };
+  return {
+    previewId,
+    fields: buildFieldPreviews(db, edition.id, result.proposal),
+    source: 'assistant',
+    model: result.model,
+  };
 }
 
 /**
@@ -142,6 +198,31 @@ export async function applyMetadataPreview(
       toLock.push('language');
       changed = true;
     }
+    let seriesId = edition.seriesId;
+    let seriesOrder = edition.seriesOrder;
+    let seriesChanged = false;
+    if (confirm.has('series') && !currentLocks.has('series')) {
+      seriesId = proposal.series
+        ? findOrCreateSeries(query, { libraryId: edition.libraryId, name: proposal.series }, now).id
+        : null;
+      toLock.push('series');
+      seriesChanged = true;
+    }
+    if (confirm.has('seriesOrder') && !currentLocks.has('series_order')) {
+      if (proposal.seriesOrder == null) {
+        seriesOrder = null;
+        seriesChanged = true;
+      } else if (seriesId != null) {
+        seriesOrder = proposal.seriesOrder;
+        seriesChanged = true;
+      }
+      toLock.push('series_order');
+    }
+    if (seriesChanged) {
+      values.seriesId = seriesId;
+      values.seriesOrder = seriesOrder;
+      changed = true;
+    }
     if (changed) {
       values.updatedAt = stamp;
       query.update(editions).set(values).where(eq(editions.id, edition.id)).run();
@@ -149,6 +230,11 @@ export async function applyMetadataPreview(
     if (confirm.has('authors') && !currentLocks.has('authors') && proposal.authors.length > 0) {
       replaceContributors(query, edition.id, 'author', proposal.authors, stamp, 'loose');
       toLock.push('authors');
+      changed = true;
+    }
+    if (confirm.has('translators') && !currentLocks.has('translators')) {
+      replaceContributors(query, edition.id, 'translator', proposal.translators, stamp, 'loose');
+      toLock.push('translators');
       changed = true;
     }
     if (confirm.has('identifiers') && !currentLocks.has('identifiers') && proposal.identifiers.length > 0) {
@@ -177,33 +263,44 @@ export async function applyMetadataPreview(
   releaseUnreferenced(db, dataDir, retired);
 }
 
-export function buildFieldPreviews(db: AppDatabase, editionId: number, proposal: OpenLibraryProposal): FieldPreview[] {
+export function buildFieldPreviews(db: AppDatabase, editionId: number, proposal: StoredProposal): FieldPreview[] {
   const edition = db.select().from(editions).where(eq(editions.id, editionId)).get();
   if (!edition) return [];
   const locks = loadLocks(db, edition.id);
   const authors = loadNames(db, edition.id, 'author').join(', ');
+  const translators = loadNames(db, edition.id, 'translator').join(', ');
   const identifiers = loadIdentifiers(db, edition.id)
     .map((item) => `${item.scheme}|${item.value}`)
     .join(', ');
+  const seriesRow =
+    edition.seriesId == null
+      ? null
+      : db.select({ name: series.name }).from(series).where(eq(series.id, edition.seriesId)).get() ?? null;
   const cover = latestCover(db, edition.id);
   const current: Record<PreviewField, string | null> = {
     title: edition.title,
     authors: authors || null,
+    translators: translators || null,
     description: edition.description,
     publisher: edition.publisher,
     publishedDate: edition.publishedDate,
     language: edition.language,
     identifiers: identifiers || null,
+    series: seriesRow?.name ?? null,
+    seriesOrder: edition.seriesOrder == null ? null : String(edition.seriesOrder),
     cover: cover ? 'present' : null,
   };
   const proposed: Record<PreviewField, string | null> = {
     title: proposal.title,
     authors: proposal.authors.length > 0 ? proposal.authors.join(', ') : null,
+    translators: proposal.translators.length > 0 ? proposal.translators.join(', ') : null,
     description: proposal.description,
     publisher: proposal.publisher,
     publishedDate: proposal.publishedDate,
     language: proposal.language,
     identifiers: proposal.identifiers.length > 0 ? proposal.identifiers.map((item) => `${item.scheme}|${item.value}`).join(', ') : null,
+    series: proposal.series,
+    seriesOrder: proposal.seriesOrder == null ? null : String(proposal.seriesOrder),
     cover: proposal.coverId || proposal.isbn ? 'present' : null,
   };
   return PREVIEW_FIELDS.map((field) => {
@@ -216,6 +313,35 @@ export function buildFieldPreviews(db: AppDatabase, editionId: number, proposal:
       proposed: proposed[field],
     };
   });
+}
+
+function loadPromptAsset(
+  db: AppDatabase,
+  editionId: number,
+): { originalFilename: string; format: 'epub' | 'pdf' } | null {
+  const columns = { originalFilename: fileAssets.originalFilename, format: fileAssets.format };
+  const present = db
+    .select(columns)
+    .from(fileAssets)
+    .where(
+      and(
+        eq(fileAssets.editionId, editionId),
+        isNull(fileAssets.trashedAt),
+        eq(fileAssets.availability, 'present'),
+      ),
+    )
+    .orderBy(asc(fileAssets.id))
+    .get();
+  if (present) return present;
+  // A missing indexed file still has a filename and format worth identifying.
+  return (
+    db
+      .select(columns)
+      .from(fileAssets)
+      .where(and(eq(fileAssets.editionId, editionId), isNull(fileAssets.trashedAt)))
+      .orderBy(asc(fileAssets.id))
+      .get() ?? null
+  );
 }
 
 function fieldStatus(
@@ -234,7 +360,7 @@ function fieldStatus(
   return 'change';
 }
 
-function parseProposal(text: string): OpenLibraryProposal | null {
+function parseProposal(text: string): StoredProposal | null {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -250,7 +376,10 @@ function parseProposal(text: string): OpenLibraryProposal | null {
   const language = asNullableString(record.language);
   const isbn = asNullableString(record.isbn);
   const authors = asStringArray(record.authors);
+  const translators = record.translators === undefined ? [] : asStringArray(record.translators);
   const identifiers = asIdentifiers(record.identifiers);
+  const series = record.series === undefined ? null : asNullableString(record.series);
+  const seriesOrder = record.seriesOrder === undefined ? null : asNullableNumber(record.seriesOrder);
   const coverId = typeof record.coverId === 'number' && Number.isInteger(record.coverId) ? record.coverId : null;
   if (
     title === undefined ||
@@ -260,16 +389,38 @@ function parseProposal(text: string): OpenLibraryProposal | null {
     language === undefined ||
     isbn === undefined ||
     !authors ||
-    !identifiers
+    !translators ||
+    !identifiers ||
+    series === undefined ||
+    seriesOrder === undefined
   ) {
     return null;
   }
-  return { title, authors, description, publisher, publishedDate, language, identifiers, coverId, isbn };
+  return {
+    title,
+    authors,
+    translators,
+    description,
+    publisher,
+    publishedDate,
+    language,
+    identifiers,
+    series,
+    seriesOrder,
+    coverId,
+    isbn,
+  };
 }
 
 function asNullableString(value: unknown): string | null | undefined {
   if (value === null) return null;
   if (typeof value === 'string') return value;
+  return undefined;
+}
+
+function asNullableNumber(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   return undefined;
 }
 

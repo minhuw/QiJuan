@@ -5,6 +5,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { absoluteBlobPath } from '../src/blobs.js';
+import type { AssistantTransport } from '../src/metadata/assistant/client.js';
+import type { AssistantProposal } from '../src/metadata/assistant/submit.js';
 import {
   OPEN_LIBRARY_COVERS_ORIGIN,
   OPEN_LIBRARY_ORIGIN,
@@ -128,6 +130,57 @@ function stubTransport(): { transport: OpenLibraryTransport; calls: RecordedCall
   return { transport, calls };
 }
 
+function proposalAssistant(
+  overrides: Partial<AssistantProposal> = {},
+  onRequest?: () => Promise<void>,
+): AssistantTransport {
+  const proposal: AssistantProposal = {
+    title: 'OL Title',
+    authors: ['Ada Lovelace'],
+    translators: [],
+    description: 'From the catalog.',
+    publisher: 'OL Press',
+    publishedDate: '1843',
+    language: 'en',
+    identifiers: [{ scheme: 'isbn', value: '9780000000002' }],
+    series: null,
+    seriesOrder: null,
+    coverId: 42,
+    isbn: '9780000000002',
+    ...overrides,
+  };
+  return {
+    async fetch() {
+      await onRequest?.();
+      return Response.json({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'submit_metadata', arguments: JSON.stringify(proposal) },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    },
+  };
+}
+
+function failingAssistant(): AssistantTransport {
+  return {
+    async fetch() {
+      return new Response('unavailable', { status: 503 });
+    },
+  };
+}
+
 describe('open library client', () => {
   it('builds the public search, isbn, and cover urls with no api key', () => {
     expect(buildSearchUrl({ title: 'Tale', author: 'Lin' }).href).toBe(
@@ -161,12 +214,13 @@ describe('open library client', () => {
     migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
     configureTestAssistant(config.dataDir);
     const { transport, calls } = stubTransport();
+    const assistant = embeddedMetadataAssistant();
     const app = await buildApp({
       config,
       clientDist: null,
       logger: false,
       openLibrary: transport,
-      assistant: embeddedMetadataAssistant(),
+      assistant,
     });
     cleanups.push(() => {
       void app.close();
@@ -218,6 +272,7 @@ describe('open library client', () => {
     const before = statSync(blobPath);
     const beforeHash = createHash('sha256').update(readFileSync(blobPath)).digest('hex');
     calls.length = 0;
+    assistant.fetch = proposalAssistant().fetch;
 
     const renamed = await app.inject({
       method: 'PATCH',
@@ -275,10 +330,10 @@ describe('open library client', () => {
       locked: false,
       proposed: 'From the catalog.',
     });
-    expect(calls.some((call) => call.url.startsWith(`${OPEN_LIBRARY_ORIGIN}/search.json`))).toBe(true);
-    expect(calls.some((call) => call.url === `${OPEN_LIBRARY_ORIGIN}/isbn/9780000000002.json`)).toBe(true);
-    expect(calls.every((call) => call.userAgent?.includes('QiJuan'))).toBe(true);
+    expect(calls.some((call) => call.url.startsWith(`${OPEN_LIBRARY_ORIGIN}/search.json`))).toBe(false);
+    expect(calls.some((call) => call.url === `${OPEN_LIBRARY_ORIGIN}/isbn/9780000000002.json`)).toBe(false);
     expect(calls.some((call) => call.url.includes('covers.openlibrary.org'))).toBe(false);
+    const beforeApply = await editionOf(app, cookie, editionId);
 
     const applied = await app.inject({
       method: 'POST',
@@ -295,7 +350,7 @@ describe('open library client', () => {
     expect(afterApply.publisher).toBe('QiJuan Test Press');
     expect(afterApply.language).toBe('en');
     expect(afterApply.identifiers).toEqual([{ scheme: 'isbn', value: '9780000000002' }]);
-    expect(afterApply.cover).toEqual({ mediaType: 'image/png' });
+    expect(afterApply.cover).toEqual(beforeApply.cover);
     expect(afterApply.locks).toEqual(expect.arrayContaining(['title', 'description']));
     expect(afterApply.locks).not.toContain('publisher');
 
@@ -331,7 +386,7 @@ describe('open library client', () => {
     expect(editions.count).toBe(1);
   });
 
-  it('succeeds with an empty preview when Open Library has no match', async () => {
+  it('returns an assistant preview even when Open Library has no match', async () => {
     const { transport, calls } = stubTransport();
     transport.fetch = async (input, init) => {
       const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -351,22 +406,18 @@ describe('open library client', () => {
     expect(lookup.statusCode).toBe(202);
     const job = await waitForJob(app, cookie, lookup.json().job.id as number);
     expect(job.status).toBe('succeeded');
-    expect(job.result).toEqual({ preview: null });
-    expect(calls.length).toBeGreaterThan(0);
+    expect(job.result).toMatchObject({ preview: { source: 'assistant', model: 'scripted-model' } });
+    expect(calls).toEqual([]);
     expect(await editionOf(app, cookie, editionId)).toMatchObject({ title: before.title, description: before.description });
     const db = new Database(config.databasePath, { readonly: true });
     const previews = db.prepare('SELECT COUNT(*) AS count FROM metadata_previews').get() as { count: number };
     db.close();
-    expect(previews.count).toBe(0);
+    expect(previews.count).toBe(1);
   });
 
-  it('fails the lookup job when the transport fails and leaves the edition unchanged', async () => {
-    const transport: OpenLibraryTransport = {
-      async fetch() {
-        return new Response('unavailable', { status: 503 });
-      },
-    };
-    const { app, config, cookie, editionId } = await importedPdf(transport);
+  it('fails the lookup job when the assistant transport fails and leaves the edition unchanged', async () => {
+    const { transport } = stubTransport();
+    const { app, config, cookie, editionId } = await importedPdf(transport, failingAssistant());
     const before = await editionOf(app, cookie, editionId);
     const lookup = await app.inject({
       method: 'POST',
@@ -397,7 +448,7 @@ describe('open library client', () => {
       if (!original) throw new Error('missing fetch');
       return original(input, init);
     };
-    const { app, cookie, editionId } = await importedPdf(transport);
+    const { app, cookie, editionId } = await importedPdf(transport, proposalAssistant());
     const before = await editionOf(app, cookie, editionId);
     const lookup = await app.inject({
       method: 'POST',
@@ -422,20 +473,18 @@ describe('open library client', () => {
     expect(after.title).toBe(before.title);
   });
 
-  it('returns before Open Library answers and does not claim a second job or scan while one is in flight', async () => {
+  it('waits for the assistant and does not claim a second job or scan while one is in flight', async () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    let calls = 0;
-    const transport: OpenLibraryTransport = {
-      async fetch() {
-        calls += 1;
-        await gate;
-        return Response.json({ docs: [] });
-      },
-    };
-    const { app, config, dir, cookie, libraryId, editionId } = await importedPdf(transport);
+    let assistantCalls = 0;
+    const assistant = proposalAssistant({}, async () => {
+      assistantCalls += 1;
+      await gate;
+    });
+    const { transport } = stubTransport();
+    const { app, config, dir, cookie, libraryId, editionId } = await importedPdf(transport, assistant);
     const root = path.join(dir, 'indexed');
     mkdirSync(root, { recursive: true });
     writeFileSync(path.join(root, 'tale.epub'), buildEpub());
@@ -470,14 +519,14 @@ describe('open library client', () => {
     let running = false;
     while (Date.now() - started < 2000) {
       const view = await app.inject({ method: 'GET', url: `/api/jobs/${lookupId}`, headers: { cookie } });
-      if (view.json().job.status === 'running' && calls >= 1) {
+      if (view.json().job.status === 'running' && assistantCalls >= 1) {
         running = true;
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     expect(running).toBe(true);
-    expect(calls).toBe(1);
+    expect(assistantCalls).toBe(1);
 
     const second = await app.inject({
       method: 'POST',
@@ -491,7 +540,7 @@ describe('open library client', () => {
       headers: { cookie },
     });
     expect(rescan.statusCode).toBe(202);
-    expect(calls).toBe(1);
+    expect(assistantCalls).toBe(1);
     const queuedLookup = await app.inject({
       method: 'GET',
       url: `/api/jobs/${second.json().job.id as number}`,
@@ -527,18 +576,30 @@ describe('open library client', () => {
   });
 });
 
-async function importedPdf(transport: OpenLibraryTransport) {
+async function importedPdf(
+  transport: OpenLibraryTransport,
+  lookupAssistant?: AssistantTransport,
+) {
   const temp = makeTempDir();
   cleanups.push(temp.cleanup);
   const config = tempConfig(temp.dir);
   migrate({ databasePath: config.databasePath, migrationsDir: defaultMigrationsDir() });
   configureTestAssistant(config.dataDir);
+  const uploadAssistant = embeddedMetadataAssistant({ avoidIsbn: true });
+  let modelCalls = 0;
+  const assistant: AssistantTransport = {
+    async fetch(input, init) {
+      const current = modelCalls === 0 ? uploadAssistant : lookupAssistant ?? uploadAssistant;
+      modelCalls += 1;
+      return current.fetch!(input, init);
+    },
+  };
   const app = await buildApp({
     config,
     clientDist: null,
     logger: false,
     openLibrary: transport,
-    assistant: embeddedMetadataAssistant({ avoidIsbn: true }),
+    assistant,
   });
   cleanups.push(() => {
     void app.close();
