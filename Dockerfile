@@ -25,9 +25,11 @@ RUN set -eu \
  && rm -f /tmp/restic.bz2 \
  && restic version
 
+ARG QIJUAN_REVISION=dev
 ENV NODE_ENV=production
 ENV QIJUAN_DATA_DIR=/data
 ENV QIJUAN_PORT=8080
+ENV QIJUAN_REVISION=$QIJUAN_REVISION
 
 RUN mkdir -p /data
 

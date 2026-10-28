@@ -42,6 +42,8 @@ describe('project layout', () => {
     expect(dockerfile).toContain('/health');
     expect(dockerfile).toContain('restic-release.json');
     expect(dockerfile).toContain('restic checksum mismatch');
+    expect(dockerfile).toContain('ARG QIJUAN_REVISION=dev');
+    expect(dockerfile).toContain('ENV QIJUAN_REVISION=$QIJUAN_REVISION');
   });
 
   it('publishes one amd64 image to GHCR and does not push pull requests', () => {
@@ -53,6 +55,7 @@ describe('project layout', () => {
     expect(workflow).toContain('secrets.GITHUB_TOKEN');
     expect(workflow).toContain("push: ${{ github.event_name != 'pull_request' }}");
     expect(workflow).toContain('npm run ci');
+    expect(workflow).toContain('QIJUAN_REVISION=${{ github.sha }}');
   });
 
   it('keeps acceptance tests out of the fast vitest config', () => {

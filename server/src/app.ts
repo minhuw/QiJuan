@@ -19,6 +19,7 @@ import type { OpenLibraryTransport } from './metadata/openLibrary.js';
 import { requeueInterruptedJobs, startJobWorker } from './jobs.js';
 import { redactOptions } from './logger.js';
 import { defaultClientDist } from './paths.js';
+import { resolveRevision } from './revision.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -71,6 +72,8 @@ export async function buildApp(options: BuildAppOptions) {
     state.sqlite.close();
   });
 
+  const revision = resolveRevision();
+
   try {
     // Before every route, so later book, cover, download, search, annotation, and OPDS handlers cannot skip auth.
     installSessionGuard(app, live);
@@ -83,15 +86,16 @@ export async function buildApp(options: BuildAppOptions) {
             200: {
               type: 'object',
               additionalProperties: false,
-              required: ['ok'],
+              required: ['ok', 'revision'],
               properties: {
                 ok: { type: 'boolean' },
+                revision: { type: 'string' },
               },
             },
           },
         },
       },
-      async () => ({ ok: true as const }),
+      async () => ({ ok: true as const, revision }),
     );
 
     await app.register(multipart, {

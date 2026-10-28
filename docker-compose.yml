@@ -1,6 +1,9 @@
 services:
   qijuan:
-    build: .
+    build:
+      context: .
+      args:
+        QIJUAN_REVISION: ${QIJUAN_REVISION:-dev}
     image: qijuan:local
     ports:
       - "8080:8080"

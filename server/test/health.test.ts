@@ -37,7 +37,10 @@ describe('GET /health', () => {
     const app = await buildApp({ config, clientDist: null, logger: false });
     const response = await app.inject({ method: 'GET', url: '/health' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true });
+    expect(response.json()).toEqual({
+      ok: true,
+      revision: expect.stringMatching(/^(dev|[0-9a-f]{7,40})$/),
+    });
     expect(response.body).not.toContain('test-secret-should-not-leak');
     expect(response.headers['set-cookie']).toBeUndefined();
     await app.close();
