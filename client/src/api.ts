@@ -31,6 +31,14 @@ export interface ApiResult<T> {
   reason?: string | null;
 }
 
+export interface MetadataAssistantInfo {
+  configured: boolean;
+  baseUrl: string | null;
+  model: string | null;
+  apiKeyConfigured: boolean;
+  apiKeyHint: string | null;
+}
+
 export interface ImportItem {
   id: number;
   position: number;

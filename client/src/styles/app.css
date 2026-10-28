@@ -3201,6 +3201,26 @@ input[type='radio'] {
   margin-top: 0.2rem;
 }
 
+.assistant-panel {
+  margin-top: 1.2rem;
+}
+
+.assistant-panel .panel-lede {
+  margin-bottom: 0.9rem;
+}
+
+.assistant-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: -0.1rem 0 0.9rem;
+}
+
+.assistant-actions {
+  align-items: center;
+}
+
 .readers-panel {
   min-height: 16rem;
 }

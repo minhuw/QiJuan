@@ -69,7 +69,31 @@
     "newReader": "新建读者",
     "readerHint": "读者可以浏览、阅读，并保有自己的阅读进度。",
     "access": "书库权限",
-    "allReaders": "所有读者"
+    "allReaders": "所有读者",
+    "assistant": {
+      "title": "元数据助手",
+      "kicker": "元数据",
+      "hint": "模型只会收到文件名和书目字段，不会收到书籍正文、OCR 或文件内容。",
+      "baseUrl": "接口地址",
+      "model": "模型",
+      "apiKey": "API 密钥",
+      "keyKept": "已保存 API 密钥。留空可继续使用。",
+      "keyOptional": "本地模型服务器可以留空。",
+      "configured": "已配置",
+      "notConfigured": "未配置",
+      "save": "保存",
+      "test": "测试连接",
+      "remove": "移除",
+      "testOk": "连接测试成功。",
+      "saved": "元数据助手已保存。",
+      "removed": "元数据助手已移除。",
+      "errors": {
+        "metadata_assistant_unconfigured": "请先填写接口地址和模型。",
+        "assistant_unauthorized": "模型服务器拒绝了这个 API 密钥。",
+        "assistant_invalid_response": "模型服务器返回了无法识别的响应。",
+        "metadata_unavailable": "无法连接模型服务器。"
+      }
+    }
   },
   "import": {
     "open": "导入",

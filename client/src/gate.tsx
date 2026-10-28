@@ -1,7 +1,29 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router';
-import { BookOpen, Lock, ShieldCheck, User, Users } from 'lucide-react';
-import { api, type Account, type LibraryInfo, type ListedUser, type Me, type SetupResponse } from './api';
+import {
+  BookOpen,
+  CheckCircle2,
+  Cpu,
+  FlaskConical,
+  Globe,
+  KeyRound,
+  Loader2,
+  Lock,
+  Save,
+  ShieldCheck,
+  Trash2,
+  User,
+  Users,
+} from 'lucide-react';
+import {
+  api,
+  type Account,
+  type LibraryInfo,
+  type ListedUser,
+  type Me,
+  type MetadataAssistantInfo,
+  type SetupResponse,
+} from './api';
 import { BackupScreen } from './backup-screen';
 import { BookDetail, ReaderPage } from './book-detail';
 import { PageHeader } from './components/ui/page-header';
@@ -24,6 +46,13 @@ const ERROR_CODES = new Set([
   'internal',
 ]);
 
+const ASSISTANT_ERROR_CODES = new Set([
+  'metadata_assistant_unconfigured',
+  'assistant_unauthorized',
+  'assistant_invalid_response',
+  'metadata_unavailable',
+]);
+
 type Phase =
   | { kind: 'loading' }
   | { kind: 'error'; code: string }
@@ -40,6 +69,11 @@ function pathId(value: string): number | null {
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
   return t(`errors.${known}`);
+}
+
+function assistantErrorText(t: (key: string) => string, code: string | null): string {
+  if (code && ASSISTANT_ERROR_CODES.has(code)) return t(`settings.assistant.errors.${code}`);
+  return errorText(t, code);
 }
 
 async function loadPhase(): Promise<Phase> {
@@ -526,7 +560,214 @@ function Settings() {
           )}
         </section>
       </div>
+
+      <AssistantPanel />
     </div>
+  );
+}
+
+function AssistantPanel() {
+  const { t } = useLocale();
+  const [assistant, setAssistant] = useState<MetadataAssistantInfo | null>(null);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState<'save' | 'test' | 'remove' | null>(null);
+
+  function applyAssistant(next: MetadataAssistantInfo) {
+    setAssistant(next);
+    setBaseUrl(next.baseUrl ?? '');
+    setModel(next.model ?? '');
+    setApiKey('');
+  }
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    const result = await api<{ assistant: MetadataAssistantInfo }>('/api/metadata/assistant');
+    setLoading(false);
+    if (result.error || !result.data) {
+      setError(result.error ?? 'internal');
+      return;
+    }
+    applyAssistant(result.data.assistant);
+  }
+
+  useEffect(() => {
+    void load();
+    // The panel loads the saved assistant once when Settings opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const configured = assistant?.configured === true;
+  const canSave = baseUrl.trim() !== '' && model.trim() !== '';
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!canSave) {
+      setError('invalid_request');
+      setNotice(null);
+      return;
+    }
+    setPending('save');
+    setError(null);
+    setNotice(null);
+    const result = await api<{ assistant: MetadataAssistantInfo }>('/api/metadata/assistant', {
+      method: 'PUT',
+      body: { baseUrl: baseUrl.trim(), model: model.trim(), apiKey },
+    });
+    setPending(null);
+    if (result.error || !result.data) {
+      setError(result.error ?? 'internal');
+      return;
+    }
+    applyAssistant(result.data.assistant);
+    setNotice(t('settings.assistant.saved'));
+  }
+
+  async function testConnection() {
+    setPending('test');
+    setError(null);
+    setNotice(null);
+    const result = await api<{ ok: true; model: string }>('/api/metadata/assistant/test', { method: 'POST' });
+    setPending(null);
+    if (result.error || !result.data) {
+      setError(result.error ?? 'internal');
+      return;
+    }
+    setNotice(t('settings.assistant.testOk'));
+  }
+
+  async function remove() {
+    setPending('remove');
+    setError(null);
+    setNotice(null);
+    const result = await api<{ assistant: MetadataAssistantInfo }>('/api/metadata/assistant', { method: 'DELETE' });
+    setPending(null);
+    if (result.error || !result.data) {
+      setError(result.error ?? 'internal');
+      return;
+    }
+    applyAssistant(result.data.assistant);
+    setNotice(t('settings.assistant.removed'));
+  }
+
+  return (
+    <section className="panel assistant-panel" aria-busy={loading || pending !== null}>
+      <div className="panel-head">
+        <div>
+          <p className="section-kicker">{t('settings.assistant.kicker')}</p>
+          <h2>{t('settings.assistant.title')}</h2>
+        </div>
+        {assistant ? (
+          <span className={configured ? 'status-pill status-pill-succeeded' : 'status-pill status-pill-queued'}>
+            {configured ? t('settings.assistant.configured') : t('settings.assistant.notConfigured')}
+          </span>
+        ) : null}
+      </div>
+
+      {loading ? (
+        <LoadingState />
+      ) : assistant === null ? (
+        <ErrorNotice message={assistantErrorText(t, error)} onRetry={() => void load()} />
+      ) : (
+        <>
+          {error ? <ErrorNotice message={assistantErrorText(t, error)} /> : null}
+          {notice ? (
+            <p className="alert alert-success" role="status">
+              <CheckCircle2 size={16} aria-hidden="true" />
+              {notice}
+            </p>
+          ) : null}
+          {configured && assistant.model ? (
+            <div className="assistant-summary">
+              <span className="chip chip-accent">{assistant.model}</span>
+              {assistant.apiKeyConfigured && assistant.apiKeyHint ? (
+                <span className="chip chip-mono">••••{assistant.apiKeyHint}</span>
+              ) : null}
+            </div>
+          ) : null}
+          <p className="panel-lede">{t('settings.assistant.hint')}</p>
+          <form className="form" noValidate onSubmit={(event) => void save(event)}>
+            <div className="field-grid">
+              <TextField
+                label={t('settings.assistant.baseUrl')}
+                type="text"
+                value={baseUrl}
+                autoComplete="off"
+                placeholder="https://api.deepseek.com/v1"
+                icon={<Globe size={16} />}
+                disabled={pending !== null}
+                onChange={setBaseUrl}
+              />
+              <TextField
+                label={t('settings.assistant.model')}
+                type="text"
+                value={model}
+                autoComplete="off"
+                placeholder="deepseek-chat"
+                icon={<Cpu size={16} />}
+                disabled={pending !== null}
+                onChange={setModel}
+              />
+            </div>
+            <TextField
+              label={t('settings.assistant.apiKey')}
+              type="password"
+              value={apiKey}
+              autoComplete="off"
+              hint={
+                assistant.apiKeyConfigured
+                  ? t('settings.assistant.keyKept')
+                  : t('settings.assistant.keyOptional')
+              }
+              icon={<KeyRound size={16} />}
+              disabled={pending !== null}
+              onChange={setApiKey}
+            />
+            <div className="form-footer assistant-actions">
+              <button className="btn btn-primary" type="submit" disabled={pending !== null || !canSave}>
+                {pending === 'save' ? (
+                  <Loader2 className="spin" size={15} aria-hidden="true" />
+                ) : (
+                  <Save size={15} aria-hidden="true" />
+                )}
+                {t('settings.assistant.save')}
+              </button>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                disabled={pending !== null || !configured}
+                onClick={() => void testConnection()}
+              >
+                {pending === 'test' ? (
+                  <Loader2 className="spin" size={15} aria-hidden="true" />
+                ) : (
+                  <FlaskConical size={15} aria-hidden="true" />
+                )}
+                {t('settings.assistant.test')}
+              </button>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={pending !== null || !configured}
+                onClick={() => void remove()}
+              >
+                {pending === 'remove' ? (
+                  <Loader2 className="spin" size={15} aria-hidden="true" />
+                ) : (
+                  <Trash2 size={15} aria-hidden="true" />
+                )}
+                {t('settings.assistant.remove')}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -535,16 +776,20 @@ function TextField({
   type,
   value,
   autoComplete,
+  placeholder,
   hint,
   icon,
+  disabled,
   onChange,
 }: {
   label: string;
   type: 'text' | 'password';
   value: string;
   autoComplete: string;
+  placeholder?: string;
   hint?: string;
   icon?: ReactNode;
+  disabled?: boolean;
   onChange: (value: string) => void;
 }) {
   const hintId = useId();
@@ -566,6 +811,8 @@ function TextField({
           autoComplete={autoComplete}
           autoCapitalize={type === 'text' ? 'none' : undefined}
           spellCheck={false}
+          placeholder={placeholder}
+          disabled={disabled}
           aria-describedby={hint ? hintId : undefined}
           onChange={(event) => onChange(event.target.value)}
         />

@@ -69,7 +69,31 @@
     "newReader": "New reader",
     "readerHint": "Readers can browse, read, and keep their own place.",
     "access": "Library access",
-    "allReaders": "All readers"
+    "allReaders": "All readers",
+    "assistant": {
+      "title": "Metadata agent",
+      "kicker": "Metadata",
+      "hint": "The model receives the filename and bibliographic fields, never book text, OCR, or file contents.",
+      "baseUrl": "Base URL",
+      "model": "Model",
+      "apiKey": "API key",
+      "keyKept": "An API key is saved. Leave this blank to keep it.",
+      "keyOptional": "Optional for local model servers.",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "save": "Save",
+      "test": "Test connection",
+      "remove": "Remove",
+      "testOk": "Connection test succeeded.",
+      "saved": "Metadata agent saved.",
+      "removed": "Metadata agent removed.",
+      "errors": {
+        "metadata_assistant_unconfigured": "Set a base URL and model first.",
+        "assistant_unauthorized": "The model server rejected the API key.",
+        "assistant_invalid_response": "The model server returned an unexpected response.",
+        "metadata_unavailable": "The model server could not be reached."
+      }
+    }
   },
   "import": {
     "open": "Import",
