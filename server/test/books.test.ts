@@ -8,7 +8,9 @@ import { makeTempDir } from './helpers.js';
 import {
   buildEpub,
   buildImagePdf,
+  buildObjectStreamPdf,
   buildTextPdf,
+  buildXrefStreamPdf,
   CHINESE_PARAGRAPH,
   COVER_PNG,
   ENGLISH_PARAGRAPH,
@@ -76,6 +78,21 @@ describe('book fixtures', () => {
     const parsedImage = parseBookFile('image.pdf', imagePath);
     expect(parsedImage.title).toBe(IMAGE_PDF_TITLE);
     expect(parsedImage.cover).toBeNull();
+  });
+
+  it('reads a PDF cross-reference stream, including one with an object stream', () => {
+    const dir = tempDir();
+    const streamPath = path.join(dir, 'stream.pdf');
+    const objectPath = path.join(dir, 'objects.pdf');
+    writeFileSync(streamPath, buildXrefStreamPdf());
+    writeFileSync(objectPath, buildObjectStreamPdf());
+
+    for (const file of [streamPath, objectPath]) {
+      const parsed = parseBookFile('book.pdf', file);
+      expect(parsed.title).toBe(TEXT_PDF_TITLE);
+      expect(parsed.language).toBe(TEXT_PDF_LANGUAGE);
+      expect(parsed.creators).toEqual([{ name: TEXT_PDF_AUTHOR, role: 'author' }]);
+    }
   });
 
   it('fails a malformed book and does not unzip anything except a recognized EPUB', () => {

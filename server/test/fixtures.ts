@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib';
 import { buildZip } from '../src/zip.js';
 
 export const EPUB_TITLE = '栖卷试读';
@@ -147,8 +148,110 @@ export function buildImagePdf(): Buffer {
   );
 }
 
+/** PDF 1.5 cross-reference stream. Objects themselves are uncompressed. */
+export function buildXrefStreamPdf(): Buffer {
+  return finishXrefStreamPdf(
+    [
+      ['1', Buffer.from('<< /Type /Catalog /Pages 2 0 R /Lang (en) >>')],
+      ['2', Buffer.from('<< /Type /Pages /Count 1 /Kids [3 0 R] >>')],
+      ['3', Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>')],
+      ['5', Buffer.from(`<< /Title ${pdfUtf16(TEXT_PDF_TITLE)} /Author (${TEXT_PDF_AUTHOR}) >>`)],
+    ],
+    { predict: false },
+  );
+}
+
+/** Catalog and info live in a compressed object stream, and the xref stream uses PNG prediction. */
+export function buildObjectStreamPdf(): Buffer {
+  const catalog = Buffer.from('<< /Type /Catalog /Pages 2 0 R /Lang (en) >>');
+  const info = Buffer.from(`<< /Title ${pdfUtf16(TEXT_PDF_TITLE)} /Author (${TEXT_PDF_AUTHOR}) >>`);
+  const header = `1 0 5 ${catalog.length + 1}\n`;
+  const stored = Buffer.concat([Buffer.from(header), catalog, Buffer.from('\n'), info]);
+  const compressed = deflateSync(stored);
+  const objectStream = Buffer.concat([
+    Buffer.from(
+      `<< /Type /ObjStm /N 2 /First ${Buffer.byteLength(header)} /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`,
+    ),
+    compressed,
+    Buffer.from('\nendstream'),
+  ]);
+  return finishXrefStreamPdf(
+    [
+      ['2', Buffer.from('<< /Type /Pages /Count 1 /Kids [3 0 R] >>')],
+      ['3', Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>')],
+      ['4', objectStream],
+    ],
+    { predict: true, compressed: new Set([1, 5]), container: 4 },
+  );
+}
+
 export function malformedBook(): Buffer {
   return Buffer.from('this is not an epub or a pdf');
+}
+
+function finishXrefStreamPdf(
+  bodies: Array<[string, Buffer]>,
+  options: { predict: boolean; compressed?: Set<number>; container?: number },
+): Buffer {
+  const parts: Buffer[] = [Buffer.from('%PDF-1.5\n')];
+  let cursor = parts[0]?.length ?? 0;
+  const offsets = new Map<number, number>();
+  for (const [number, body] of bodies) {
+    offsets.set(Number(number), cursor);
+    const chunk = Buffer.concat([Buffer.from(`${number} 0 obj\n`), body, Buffer.from('\nendobj\n')]);
+    parts.push(chunk);
+    cursor += chunk.length;
+  }
+  const xrefNumber = 6;
+  const xrefOffset = cursor;
+  const raw = Buffer.alloc(7 * 7);
+  const writeEntry = (index: number, type: number, second: number, third: number) => {
+    const at = index * 7;
+    raw[at] = type;
+    raw.writeUInt32BE(second, at + 1);
+    raw.writeUInt16BE(third, at + 5);
+  };
+  writeEntry(0, 0, 0, 65535);
+  for (let number = 1; number <= 5; number += 1) {
+    if (options.compressed?.has(number)) {
+      writeEntry(number, 2, options.container ?? 0, number === 1 ? 0 : 1);
+    } else if (offsets.has(number)) {
+      const offset = offsets.get(number);
+      if (offset === undefined) throw new Error('missing pdf object offset');
+      writeEntry(number, 1, offset, 0);
+    } else {
+      writeEntry(number, 0, 0, 0);
+    }
+  }
+  writeEntry(xrefNumber, 1, xrefOffset, 0);
+  const stored = options.predict ? deflateSync(pngUp(raw, 7)) : raw;
+  const filter = options.predict
+    ? `/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 7 >> `
+    : '';
+  const stream = Buffer.concat([
+    Buffer.from(
+      `${xrefNumber} 0 obj\n<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Info 5 0 R ${filter}/Length ${stored.length} >>\nstream\n`,
+    ),
+    stored,
+    Buffer.from(`\nendstream\nendobj\nstartxref\n${xrefOffset}\n%%EOF\n`),
+  ]);
+  parts.push(stream);
+  return Buffer.concat(parts);
+}
+
+function pngUp(rows: Buffer, columns: number): Buffer {
+  const count = rows.length / columns;
+  const out = Buffer.alloc(count * (columns + 1));
+  let previous = Buffer.alloc(columns);
+  for (let row = 0; row < count; row += 1) {
+    const current = rows.subarray(row * columns, (row + 1) * columns);
+    out[row * (columns + 1)] = 2;
+    for (let column = 0; column < columns; column += 1) {
+      out[row * (columns + 1) + 1 + column] = ((current[column] ?? 0) - (previous[column] ?? 0)) & 255;
+    }
+    previous = Buffer.from(current);
+  }
+  return out;
 }
 
 function streamObject(dictInner: string, data: Buffer): Buffer {
