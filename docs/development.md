@@ -1,6 +1,6 @@
 # Development
 
-QiJuan is one Node.js process. Fastify serves the API and, after a production build, the client. The client is Vite and React. The catalog is SQLite through better-sqlite3 and Drizzle. Background import, metadata lookup, refresh, rescan, and backup jobs run in that same process. There is no Redis, Postgres, or second service.
+QiJuan is one Node.js process. Fastify serves the API and, after a production build, the client. The client is Vite and React. The catalog is SQLite through better-sqlite3 and Drizzle. Background import, metadata agent lookups, refresh, rescan, and backup jobs run in that same process. There is no Redis, Postgres, or second service.
 
 Docker is not required to develop, test, or run QiJuan.
 
@@ -21,16 +21,18 @@ npm run migrate
 
 | Variable | Default | Use |
 | --- | --- | --- |
-| `QIJUAN_DATA_DIR` | `./data` | Database, session secret, books, backup settings. |
+| `QIJUAN_DATA_DIR` | `./data` | Database, session secret, books, backup settings, metadata agent settings. |
 | `QIJUAN_PORT` | `8080` | HTTP port. |
 | `QIJUAN_TRUST_PROXY` | off | `true`, a hop count, or a proxy address. |
 | `QIJUAN_SESSION_SECRET` | `session.secret` in the data directory | Set this only to supply your own. |
 | `QIJUAN_LIBRARY_PATHS` | `<data dir>/library` | Extra library roots, separated by `:` on Linux. |
 | `QIJUAN_MAX_UPLOAD_BYTES` | 128 MiB | One file in a multipart import. |
-| `QIJUAN_OPEN_LIBRARY_ORIGIN` | `https://openlibrary.org` | Metadata lookup only. |
+| `QIJUAN_OPEN_LIBRARY_ORIGIN` | `https://openlibrary.org` | Search and record origin for the metadata agent's Open Library tools. Folder imports do not use it. |
 | `QIJUAN_RESTIC_BIN` | `restic` on `PATH` | The Docker image already installs the pinned binary. |
 
-Passwords and backup credentials are redacted in logs.
+Passwords, backup credentials, and the metadata agent's API key are not written to logs.
+
+Uploading books requires the metadata agent. An administrator configures it under **Settings** -> **Metadata agent** with a base URL, a model, and optionally an API key. Save at least the base URL and model before the first upload; a local server may need no key. Folder imports on an indexed library use embedded metadata and do not need the agent. The configuration is stored in `<data dir>/metadata-assistant.json` with file mode `0600`, not in SQLite. The settings API returns only a masked key hint. See [metadata.md](metadata.md) for configuration examples, the fields sent to the model, the three allowed tools, the bounds, and the rejection path.
 
 On first launch, when no administrator exists, the web UI asks for an administrator username, a password, and a library name.
 
@@ -67,8 +69,10 @@ npm run test:acceptance
 
 GitHub Actions runs the same `npm run ci` command, then builds the amd64 image. It pushes that image to GHCR only for a branch push, a `v*.*.*` tag, or a manual run. Pull requests do not push.
 
+The metadata agent tests stub the model transport and Open Library. They do not call a live model provider, so no API key or local model server is needed for the test suite.
+
 Screenshots of the library, a book, the EPUB reader, and backup, at 1280, 768, and 390 pixels wide, are in [screenshots/](screenshots/).
 
 ## Further reading
 
-Migrations and a failed upgrade: [upgrades.md](upgrades.md). Backup and restore: [backup.md](backup.md) and [recovery.md](recovery.md). What this version does not do: [limitations.md](limitations.md).
+Migrations and a failed upgrade: [upgrades.md](upgrades.md). The metadata agent: [metadata.md](metadata.md). Backup and restore: [backup.md](backup.md) and [recovery.md](recovery.md). What this version does not do: [limitations.md](limitations.md).

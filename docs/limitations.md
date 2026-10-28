@@ -21,7 +21,7 @@ These later milestones are not implemented:
 - partial restore of a backup
 - audiobooks
 - social features
-- AI features
+- AI features beyond the [metadata agent](metadata.md): chat, summaries, embeddings
 
 Live Cloudflare R2 was not tested. The R2 preset only fills the endpoint template, region `auto`, and path-style addressing. Backup tests talk to a local S3 server (MinIO), not to Cloudflare. Do not treat the R2 preset as a tested provider.
 

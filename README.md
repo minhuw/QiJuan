@@ -34,6 +34,7 @@ npm run test:acceptance
 ## Docs
 
 - [Development and configuration](docs/development.md)
+- [Metadata agent](docs/metadata.md)
 - [Backup](docs/backup.md) and [recovery](docs/recovery.md)
 - [OPDS](docs/opds.md)
 - [Export](docs/export.md)
