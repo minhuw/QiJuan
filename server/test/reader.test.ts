@@ -5,6 +5,7 @@ import { buildApp } from '../src/app.js';
 import { writeImmutableBlob } from '../src/blobs.js';
 import { parseEpubCfi } from '../src/cfi.js';
 import { openDatabase } from '../src/db.js';
+import { contentDisposition } from '../src/reader.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { makeTempDir, tempConfig } from './helpers.js';
@@ -69,6 +70,23 @@ describe('epub cfi', () => {
     expect(parseEpubCfi('0.0')).toBeNull();
     expect(parseEpubCfi('epubcfi(')).toBeNull();
     expect(parseEpubCfi('')).toBeNull();
+  });
+});
+
+describe('content disposition', () => {
+  it('keeps non-ASCII book names out of the raw header', () => {
+    const name = '康德《纯粹理性批判》句读（上） - 邓晓芒.pdf';
+    const header = contentDisposition(name, 'book.pdf');
+    expect(header).toMatch(/^[\x20-\x7e]+$/);
+    expect(header).toContain('filename="book.pdf"');
+    const encoded = header.split("filename*=UTF-8''")[1] ?? '';
+    expect(decodeURIComponent(encoded)).toBe(name);
+  });
+
+  it('keeps an ASCII name in both forms', () => {
+    expect(contentDisposition('scan.pdf', 'book.pdf')).toBe(
+      `inline; filename="scan.pdf"; filename*=UTF-8''scan.pdf`,
+    );
   });
 });
 

@@ -509,7 +509,14 @@ export function parseByteRange(
 export function contentDisposition(filename: string, fallback = 'book.epub'): string {
   const cleaned = filename.replace(/[\r\n"]/g, '').trim();
   const safe = cleaned.length > 0 && cleaned.length <= 200 ? cleaned : fallback;
-  return `inline; filename="${safe}"`;
+  // HTTP header values are ASCII. Keep an ASCII filename for old clients and put the
+  // real name in the RFC 5987 filename* parameter.
+  const ascii = /^[\x20-\x7e]+$/.test(safe) ? safe.replace(/["\\]/g, '_') : fallback;
+  const encoded = encodeURIComponent(safe).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 function requireCfi(value: string): string {
