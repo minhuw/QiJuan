@@ -139,7 +139,7 @@ describe('first-run gate', () => {
 
     expect(await screen.findByRole('heading', { name: 'Library' })).toBeInTheDocument();
     expect(screen.getByText('Home')).toBeInTheDocument();
-    expect(screen.getByText('ada')).toBeInTheDocument();
+    expect(await screen.findByText('ada')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
     expect(await screen.findByRole('heading', { name: 'Readers' })).toBeInTheDocument();

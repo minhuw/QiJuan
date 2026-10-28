@@ -9,7 +9,9 @@
   },
   "shell": {
     "language": "Language",
-    "skip": "Skip to content"
+    "skip": "Skip to content",
+    "navigation": "Navigation",
+    "version": "Version"
   },
   "home": {
     "title": "Library",
@@ -57,6 +59,8 @@
     "error": "The import could not be loaded.",
     "library": "Library",
     "files": "Files",
+    "choose": "Choose files",
+    "none": "No file chosen",
     "upload": "Upload",
     "folder": "Folder inside the library",
     "folderHint": "Path relative to the library root.",
@@ -77,6 +81,7 @@
     }
   },
   "catalog": {
+    "edit": "Edit several books",
     "books": "Books",
     "select": "Select",
     "language": "Language",
@@ -111,6 +116,7 @@
     "read": "Read",
     "cover": "Cover",
     "replaceCover": "Replace cover",
+    "chooseCover": "Choose image",
     "locked": "Kept when metadata is refreshed.",
     "suggestions": "Similar editions",
     "suggestionNote": "These stay separate. Nothing here merges or deletes an edition.",

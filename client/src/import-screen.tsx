@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { api, apiForm, type ImportJob, type LibraryInfo } from './api';
+import { FileField } from './components/ui/file-field';
 import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -24,13 +25,7 @@ function errorText(t: (key: string) => string, code: string | null): string {
   return t(`errors.${known}`);
 }
 
-export function ImportScreen({
-  libraries,
-  onSignOut,
-}: {
-  libraries: LibraryInfo[];
-  onSignOut: () => void;
-}) {
+export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
   const { t } = useLocale();
   const [jobs, setJobs] = useState<ImportJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -128,9 +123,6 @@ export function ImportScreen({
         <Link className="text-link" to="/">
           {t('import.back')}
         </Link>
-        <button type="button" className="button button-secondary" onClick={onSignOut}>
-          {t('account.signOut')}
-        </button>
       </div>
       {error && jobs === null ? (
         <>
@@ -205,10 +197,14 @@ export function ImportScreen({
                   {errorText(t, formError)}
                 </p>
               ) : null}
-              <div className="field">
-                <label htmlFor={fileId}>{t('import.files')}</label>
-                <input id={fileId} type="file" name="files" multiple />
-              </div>
+              <FileField
+                id={fileId}
+                name="files"
+                label={t('import.files')}
+                chooseLabel={t('import.choose')}
+                emptyLabel={t('import.none')}
+                multiple
+              />
               <button className="button" type="submit" disabled={pending}>
                 {t('import.upload')}
               </button>

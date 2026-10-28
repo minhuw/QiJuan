@@ -97,7 +97,9 @@ describe('book detail', () => {
       'href',
       '/books/3',
     );
-    expect(screen.getByRole('link', { name: catalogs.en.reader.library })).toHaveAttribute('href', '/');
+    expect(
+      screen.getAllByRole('link', { name: catalogs.en.reader.library }).some((link) => link.getAttribute('href') === '/'),
+    ).toBe(true);
     expect(await screen.findByRole('alert')).toBeInTheDocument();
 
     window.history.pushState({}, '', '/books/3');

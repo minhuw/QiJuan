@@ -99,7 +99,7 @@ const EMPTY_DESTINATION: DestinationForm = {
   secretAccessKey: '',
 };
 
-export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
+export function BackupScreen() {
   const { t } = useLocale();
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [destination, setDestination] = useState<DestinationForm>(EMPTY_DESTINATION);
@@ -374,9 +374,6 @@ export function BackupScreen({ onSignOut }: { onSignOut: () => void }) {
         <Link className="text-link" to="/">
           {t('backup.back')}
         </Link>
-        <button type="button" className="button button-secondary" onClick={onSignOut}>
-          {t('account.signOut')}
-        </button>
       </div>
       {error ? (
         <p className="alert" role="alert">

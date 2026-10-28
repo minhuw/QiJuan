@@ -272,7 +272,7 @@ export function LibraryBrowser() {
           </select>
         </label>
         <div className="view-switch" role="group" aria-label={t('library.results')}>
-          <button type="button" className="button" aria-pressed={view === 'grid'} onClick={() => setView('grid')}>
+          <button type="button" className="button button-secondary" aria-pressed={view === 'grid'} onClick={() => setView('grid')}>
             {t('library.grid')}
           </button>
           <button type="button" className="button button-secondary" aria-pressed={view === 'list'} onClick={() => setView('list')}>

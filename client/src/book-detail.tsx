@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { api, apiForm, type EditionDetail, type ImportJob, type MetadataPreview } from './api';
 import { EpubReader } from './reader/epub-reader';
 import { PdfReader } from './reader/pdf-reader';
+import { FileField } from './components/ui/file-field';
 import { ReadingActions } from './reading-actions';
 import { useLocale } from './shell';
 
@@ -88,11 +89,9 @@ function lines(value: string): string[] {
 export function BookDetail({
   editionId,
   role,
-  onSignOut,
 }: {
   editionId: number;
   role: 'admin' | 'reader';
-  onSignOut: () => void;
 }) {
   const { t } = useLocale();
   const [edition, setEdition] = useState<EditionDetail | null>(null);
@@ -357,9 +356,6 @@ export function BookDetail({
         <Link className="text-link" to="/">
           {t('book.back')}
         </Link>
-        <button type="button" className="button button-secondary" onClick={onSignOut}>
-          {t('account.signOut')}
-        </button>
       </div>
       <div className="book-hero">
         {edition.cover ? (
@@ -397,10 +393,13 @@ export function BookDetail({
         <h2>{t('book.cover')}</h2>
         {locks.has('cover') ? <p className="hint">{t('book.locked')}</p> : null}
         <form className="form" onSubmit={(event) => void replaceCover(event)}>
-          <label className="field" htmlFor={`${baseId}-cover`}>
-            {t('book.replaceCover')}
-            <input id={`${baseId}-cover`} type="file" accept="image/png,image/jpeg,image/gif,image/webp" />
-          </label>
+          <FileField
+            id={`${baseId}-cover`}
+            label={t('book.replaceCover')}
+            chooseLabel={t('book.chooseCover')}
+            emptyLabel={t('import.none')}
+            accept="image/png,image/jpeg,image/gif,image/webp"
+          />
           <button className="button" type="submit" disabled={pending}>
             {t('book.replaceCover')}
           </button>
@@ -585,11 +584,9 @@ export function BookDetail({
 export function ReaderPage({
   editionId,
   assetId,
-  onSignOut,
 }: {
   editionId: number;
   assetId: number;
-  onSignOut: () => void;
 }) {
   const { t } = useLocale();
   const [edition, setEdition] = useState<EditionDetail | null>(null);
@@ -633,9 +630,6 @@ export function ReaderPage({
           <Link className="text-link" to={`/books/${edition.id}`}>
             {t('book.back')}
           </Link>
-          <button type="button" className="button button-secondary" onClick={onSignOut}>
-            {t('account.signOut')}
-          </button>
         </div>
         <h1>{edition.title}</h1>
         <p>
@@ -649,11 +643,6 @@ export function ReaderPage({
   }
   return (
     <>
-      <div className="toolbar">
-        <button type="button" className="button button-secondary" onClick={onSignOut}>
-          {t('account.signOut')}
-        </button>
-      </div>
       {asset.format === 'pdf' ? (
         <PdfReader editionId={edition.id} assetId={asset.id} title={edition.title} />
       ) : (

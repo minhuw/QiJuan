@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation } from 'react-router';
 import { api, type Account, type LibraryInfo, type ListedUser, type Me, type SetupResponse } from './api';
 import { BackupScreen } from './backup-screen';
@@ -6,7 +6,7 @@ import { BookDetail, ReaderPage } from './book-detail';
 import { CatalogHome } from './catalog-home';
 import { ImportScreen } from './import-screen';
 import { LibraryBrowser } from './library';
-import { useLocale } from './shell';
+import { useAccountChrome, useLocale } from './shell';
 
 const ERROR_CODES = new Set([
   'invalid_request',
@@ -75,6 +75,26 @@ export function Gate() {
     setPhase({ kind: 'login' });
   }
 
+  const signOutRef = useRef(signOut);
+  signOutRef.current = signOut;
+  const { setAccount } = useAccountChrome();
+  const signedInName = phase.kind === 'ready' ? phase.user.username : null;
+  const signedInRole = phase.kind === 'ready' ? phase.user.role : null;
+  useEffect(() => {
+    if (!signedInName || !signedInRole) {
+      setAccount(null);
+      return;
+    }
+    setAccount({
+      username: signedInName,
+      role: signedInRole,
+      onSignOut: () => {
+        void signOutRef.current();
+      },
+    });
+    return () => setAccount(null);
+  }, [signedInName, signedInRole, setAccount]);
+
   if (phase.kind === 'loading') {
     return <p role="status">{t('status.loading')}</p>;
   }
@@ -113,16 +133,16 @@ export function Gate() {
 
   if (location.pathname === '/backup') {
     if (phase.user.role !== 'admin') return <Navigate to="/" replace />;
-    return <BackupScreen onSignOut={() => void signOut()} />;
+    return <BackupScreen />;
   }
 
   if (location.pathname === '/settings') {
     if (phase.user.role !== 'admin') return <Navigate to="/" replace />;
-    return <Settings onSignOut={() => void signOut()} />;
+    return <Settings />;
   }
 
   if (location.pathname === '/import') {
-    return <ImportScreen libraries={phase.libraries} onSignOut={() => void signOut()} />;
+    return <ImportScreen libraries={phase.libraries} />;
   }
 
   const readMatch = location.pathname.match(/^\/books\/([1-9]\d*)\/read\/([1-9]\d*)$/);
@@ -130,7 +150,7 @@ export function Gate() {
     const editionId = pathId(readMatch[1] ?? '');
     const assetId = pathId(readMatch[2] ?? '');
     if (editionId && assetId) {
-      return <ReaderPage editionId={editionId} assetId={assetId} onSignOut={() => void signOut()} />;
+      return <ReaderPage editionId={editionId} assetId={assetId} />;
     }
   }
   const bookMatch = location.pathname.match(/^\/books\/([1-9]\d*)$/);
@@ -138,50 +158,28 @@ export function Gate() {
     const editionId = pathId(bookMatch[1] ?? '');
     if (editionId) {
       return (
-        <BookDetail editionId={editionId} role={phase.user.role} onSignOut={() => void signOut()} />
+        <BookDetail editionId={editionId} role={phase.user.role} />
       );
     }
   }
 
   return (
     <>
-      <p className="tagline">{t('brand.tagline')}</p>
-      <h1>{t('home.title')}</h1>
-      <p className="section-label">{t('home.libraries')}</p>
-      {phase.libraries.length === 0 ? (
-        <p className="placeholder">{t('home.noAccess')}</p>
-      ) : (
-        <ul className="plain-list">
-          {phase.libraries.map((library) => (
-            <li key={library.id}>{library.name}</li>
-          ))}
-        </ul>
-      )}
+      <header className="page-head">
+        <h1>{t('home.title')}</h1>
+        <p className="section-label">{t('home.libraries')}</p>
+        {phase.libraries.length === 0 ? (
+          <p className="placeholder">{t('home.noAccess')}</p>
+        ) : (
+          <ul className="page-libraries">
+            {phase.libraries.map((library) => (
+              <li key={library.id}>{library.name}</li>
+            ))}
+          </ul>
+        )}
+      </header>
       <LibraryBrowser />
       <CatalogHome />
-      <div className="toolbar">
-        <p className="signed-in">
-          {t('account.signedIn')} <strong>{phase.user.username}</strong>
-          {' · '}
-          {t(`account.${phase.user.role}`)}
-        </p>
-        <Link className="text-link" to="/import">
-          {t('import.open')}
-        </Link>
-        {phase.user.role === 'admin' ? (
-          <Link className="text-link" to="/settings">
-            {t('settings.open')}
-          </Link>
-        ) : null}
-        {phase.user.role === 'admin' ? (
-          <Link className="text-link" to="/backup">
-            {t('backup.open')}
-          </Link>
-        ) : null}
-        <button type="button" className="button button-secondary" onClick={() => void signOut()}>
-          {t('account.signOut')}
-        </button>
-      </div>
     </>
   );
 }
@@ -220,7 +218,7 @@ function SetupForm({ onDone }: { onDone: (user: Account, library: LibraryInfo) =
   }
 
   return (
-    <>
+    <div className="auth-panel">
       <p className="tagline">{t('brand.tagline')}</p>
       <h1>{t('setup.title')}</h1>
       <form className="form" noValidate onSubmit={(event) => void submit(event)}>
@@ -249,7 +247,7 @@ function SetupForm({ onDone }: { onDone: (user: Account, library: LibraryInfo) =
           {t('setup.submit')}
         </button>
       </form>
-    </>
+    </div>
   );
 }
 
@@ -281,7 +279,7 @@ function LoginForm({ onDone }: { onDone: (user: Account, libraries: LibraryInfo[
   }
 
   return (
-    <>
+    <div className="auth-panel">
       <p className="tagline">{t('brand.tagline')}</p>
       <h1>{t('login.title')}</h1>
       <form className="form" noValidate onSubmit={(event) => void submit(event)}>
@@ -302,11 +300,11 @@ function LoginForm({ onDone }: { onDone: (user: Account, libraries: LibraryInfo[
           {t('login.submit')}
         </button>
       </form>
-    </>
+    </div>
   );
 }
 
-function Settings({ onSignOut }: { onSignOut: () => void }) {
+function Settings() {
   const { t } = useLocale();
   const [users, setUsers] = useState<ListedUser[] | null>(null);
   const [libraries, setLibraries] = useState<LibraryInfo[] | null>(null);
@@ -400,12 +398,6 @@ function Settings({ onSignOut }: { onSignOut: () => void }) {
         <Link className="text-link" to="/">
           {t('settings.back')}
         </Link>
-        <Link className="text-link" to="/backup">
-          {t('backup.open')}
-        </Link>
-        <button type="button" className="button button-secondary" onClick={onSignOut}>
-          {t('account.signOut')}
-        </button>
       </div>
       <form className="form" noValidate onSubmit={(event) => void create(event)}>
         {error ? (

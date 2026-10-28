@@ -85,7 +85,9 @@ export function CatalogHome() {
   }
 
   return (
-    <section className="import-block">
+    <details className="quiet-tools">
+      <summary>{t('catalog.edit')}</summary>
+      <section className="import-block">
       <h2>{t('catalog.books')}</h2>
       {error ? (
         <p className="alert" role="alert">
@@ -141,6 +143,7 @@ export function CatalogHome() {
           </button>
         </form>
       ) : null}
-    </section>
+      </section>
+    </details>
   );
 }
