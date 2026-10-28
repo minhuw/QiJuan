@@ -201,6 +201,12 @@ describe('assistant settings', () => {
 });
 
 describe('assistant client', () => {
+  it('types metadata_incomplete as an assistant error code', () => {
+    const error = new AssistantError('metadata_incomplete');
+    expect(error.code).toBe('metadata_incomplete');
+    expect(error.message).toBe('metadata_incomplete');
+  });
+
   it('builds the chat completions url without duplicate slashes', () => {
     expect(buildChatUrl(`${baseUrl}/`)).toBe(`${baseUrl}/chat/completions`);
     expect(buildChatUrl('http://localhost:11434/v1///')).toBe('http://localhost:11434/v1/chat/completions');

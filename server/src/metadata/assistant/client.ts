@@ -12,6 +12,7 @@ export type AssistantErrorCode =
   | 'metadata_assistant_unconfigured'
   | 'assistant_unauthorized'
   | 'assistant_invalid_response'
+  | 'metadata_incomplete'
   | 'metadata_unavailable';
 
 /** The message is the stable code. It never contains the API key or a request body. */

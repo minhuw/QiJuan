@@ -300,32 +300,71 @@ describe('metadata assistant tools', () => {
     ]);
   });
 
-  it('caps search and record result text', async () => {
-    const { transport } = openLibraryTransport((url) => {
-      if (url.pathname === '/search.json') {
-        return {
-          docs: Array.from({ length: 100 }, (_, index) => ({
-            key: `/works/OL${index}W`,
-            title: `Title ${index} ${'x'.repeat(2_000)}`,
-            author_name: [`Author ${index} ${'y'.repeat(2_000)}`],
-            isbn: ['9780140328721'],
-          })),
-        };
-      }
-      return {
-        title: 'Long Record',
-        description: 'd'.repeat(30_000),
-        publishers: Array.from({ length: 30 }, () => 'p'.repeat(300)),
-      };
-    });
-
-    const search = await executeTool('search_open_library', { author: 'Ada' }, { openLibrary: transport });
-    expect(search.length).toBeLessThanOrEqual(SEARCH_RESULT_CHARS);
-    expect(search.length).toBe(SEARCH_RESULT_CHARS);
+  it('caps a long record as valid JSON and keeps the fields the agent needs', async () => {
+    const { transport } = openLibraryTransport(() => ({
+      key: '/works/OL1W',
+      title: 'Long Record',
+      description: 'd'.repeat(30_000),
+      publishers: Array.from({ length: 30 }, (_, index) => `Publisher ${index} ${'p'.repeat(300)}`),
+      publish_date: '1843',
+      languages: [{ key: '/languages/eng' }],
+      isbn_13: ['9780140328721'],
+    }));
 
     const record = await executeTool('get_open_library_record', { key: '/works/OL1W' }, { openLibrary: transport });
     expect(record.length).toBeLessThanOrEqual(RECORD_RESULT_CHARS);
-    expect(record.length).toBe(RECORD_RESULT_CHARS);
+
+    const parsed = JSON.parse(record) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      key: '/works/OL1W',
+      title: 'Long Record',
+      isbn_13: ['9780140328721'],
+      publish_date: '1843',
+      languages: ['eng'],
+      truncated: true,
+    });
+    expect(Array.isArray(parsed.publishers)).toBe(true);
+    expect((parsed.publishers as string[])[0]).toContain('Publisher 0');
+    expect(typeof parsed.description).toBe('string');
+    expect((parsed.description as string).length).toBeGreaterThan(0);
+    expect((parsed.description as string).length).toBeLessThan(30_000);
+  });
+
+  it('caps long search results as valid JSON with a results array', async () => {
+    const { transport } = openLibraryTransport(() => ({
+      docs: Array.from({ length: 20 }, (_, index) => ({
+        key: `/works/OL${index}W`,
+        title: `Title ${index} ${'x'.repeat(20_000)}`,
+        author_name: [`Author ${index} ${'y'.repeat(20_000)}`],
+        isbn: ['9780140328721'],
+      })),
+    }));
+
+    const search = await executeTool('search_open_library', { author: 'Ada' }, { openLibrary: transport });
+    expect(search.length).toBeLessThanOrEqual(SEARCH_RESULT_CHARS);
+    const parsed = JSON.parse(search) as { results: Array<Record<string, unknown>>; truncated?: boolean };
+    expect(Array.isArray(parsed.results)).toBe(true);
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it('returns submit_metadata as a tool error or the validated proposal', async () => {
+    const invalid = JSON.parse(
+      await executeTool(
+        'submit_metadata',
+        { ...validSubmission, title: '', identifiers: [{ scheme: 'isbn', value: 'bad' }] },
+        {},
+      ),
+    ) as { error: string; detail: string };
+    expect(invalid.error).toBe('metadata_incomplete');
+    expect(invalid.detail).toContain('title');
+    expect(invalid.detail).toContain('identifiers');
+
+    const validated = validateSubmission(validSubmission);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+    const text = await executeTool('submit_metadata', validSubmission, {});
+    expect(JSON.parse(text)).toEqual(validated.proposal);
   });
 
   it('returns not found as a tool error instead of throwing', async () => {
@@ -484,6 +523,33 @@ describe('metadata agent loop', () => {
     expect(JSON.parse(String(toolMessage?.content))).toMatchObject({
       results: [{ key: '/works/OL123W', title: 'The Book' }],
     });
+  });
+
+  it('forwards capped tool results as parseable JSON', async () => {
+    const { transport, bodies } = assistantTransport((_body, index) =>
+      index === 0
+        ? { tool_calls: [{ name: 'search_open_library', arguments: { title: 'Long' } }] }
+        : { tool_calls: [{ name: 'submit_metadata', arguments: validSubmission }] },
+    );
+    const { transport: openLibrary } = openLibraryTransport(() => ({
+      docs: Array.from({ length: 20 }, (_, index) => ({
+        key: `/works/OL${index}W`,
+        title: `Title ${index} ${'x'.repeat(20_000)}`,
+        author_name: [`Author ${index} ${'y'.repeat(20_000)}`],
+        isbn: ['9780140328721'],
+      })),
+    }));
+
+    const result = await runMetadataAgent(agentOptions(transport, openLibrary));
+    expect(result.proposal.title).toBe('The Book');
+
+    const second = bodies[1] as { messages: Array<Record<string, unknown>> };
+    const toolMessage = second.messages.find((message) => message.role === 'tool');
+    const content = String(toolMessage?.content);
+    expect(content.length).toBeLessThanOrEqual(SEARCH_RESULT_CHARS);
+    const parsed = JSON.parse(content) as { results: Array<Record<string, unknown>>; truncated?: boolean };
+    expect(Array.isArray(parsed.results)).toBe(true);
+    expect(parsed.truncated).toBe(true);
   });
 
   it('accepts a direct submit on the first turn', async () => {

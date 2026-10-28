@@ -174,7 +174,7 @@ export async function runMetadataAgent(options: RunMetadataAgentOptions): Promis
         content = errorContent('metadata_unavailable', 'Open Library request failed');
       }
       if (Date.now() >= deadline) throw incomplete('time budget exhausted without submit_metadata');
-      messages.push(toolMessage(call.id, capText(content, MAX_TOOL_RESULT_CHARS)));
+      messages.push(toolMessage(call.id, content));
     }
 
     // There is no way to submit after the tool budget is gone; do not ask the model for another turn.
@@ -240,8 +240,7 @@ function errorContent(error: string, detail: string): string {
 }
 
 function incomplete(reason: string): AssistantError {
-  // The client's exported code union predates the agent; the stable runtime code is metadata_incomplete.
-  const error = new AssistantError('metadata_incomplete' as never) as AssistantError & { reason: string };
+  const error = new AssistantError('metadata_incomplete') as AssistantError & { reason: string };
   error.message = `metadata_incomplete: ${reason}`;
   error.reason = reason;
   return error;

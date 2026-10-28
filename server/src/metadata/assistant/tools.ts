@@ -123,7 +123,13 @@ export async function executeTool(name: string, args: unknown, deps: MetadataToo
 
     if (name === 'search_open_library') return await search(record, resolveDeps(deps));
     if (name === 'get_open_library_record') return await getRecord(record, resolveDeps(deps));
-    if (name === 'submit_metadata') return JSON.stringify(validateSubmission(record));
+    if (name === 'submit_metadata') {
+      const submission = validateSubmission(record);
+      if (!submission.ok) {
+        return errorText('metadata_incomplete', `missing or invalid fields: ${submission.missing.join(', ')}`);
+      }
+      return JSON.stringify(submission.proposal);
+    }
     return errorText('unknown_tool', 'the only tools are search_open_library, get_open_library_record, and submit_metadata');
   } catch (error) {
     return errorText('metadata_unavailable', error instanceof Error ? error.message : 'Open Library request failed');
@@ -149,7 +155,7 @@ async function search(args: Record<string, unknown>, deps: ResolvedDeps): Promis
     .filter((doc): doc is Record<string, unknown> => doc !== null)
     .slice(0, 5)
     .map(compactSearchResult);
-  return capText(JSON.stringify({ results }), SEARCH_RESULT_CHARS);
+  return capSearchResults(results, SEARCH_RESULT_CHARS);
 }
 
 async function getRecord(args: Record<string, unknown>, deps: ResolvedDeps): Promise<string> {
@@ -181,7 +187,7 @@ async function getRecord(args: Record<string, unknown>, deps: ResolvedDeps): Pro
   if (body === null) return errorText('not_found', 'Open Library record not found');
   const record = asRecord(body);
   if (!record) return errorText('metadata_unavailable', 'Open Library returned an invalid record');
-  return capText(JSON.stringify(compactRecord(record)), RECORD_RESULT_CHARS);
+  return capRecordJson(compactRecord(record), RECORD_RESULT_CHARS);
 }
 
 function resolveDeps(deps: MetadataToolDeps): ResolvedDeps {
@@ -372,8 +378,135 @@ function parseArguments(value: string): unknown {
   }
 }
 
-function capText(text: string, max: number): string {
-  return text.length > max ? text.slice(0, max) : text;
+interface StringTarget {
+  value: string;
+  set: (next: string) => void;
+}
+
+/**
+ * Caps a record as JSON rather than as raw text: the description is shortened first,
+ * then optional arrays are trimmed, then long strings are shortened. The key, title,
+ * ISBNs, publishers, publish date, and languages stay present (and are shortened last).
+ */
+function capRecordJson(record: Record<string, unknown>, max: number): string {
+  if (jsonLength(record) <= max) return JSON.stringify(record);
+
+  const candidate: Record<string, unknown> = { ...record, truncated: true };
+
+  if (typeof candidate.description === 'string') {
+    const description = shortenStringField(candidate, 'description', max);
+    if (description.length === 0) delete candidate.description;
+  }
+  if (jsonLength(candidate) <= max) return JSON.stringify(candidate);
+
+  for (const key of ['contributors', 'series', 'covers', 'isbn_10']) {
+    const value = candidate[key];
+    if (Array.isArray(value)) {
+      while (value.length > 1 && jsonLength(candidate) > max) value.pop();
+    }
+    if (key in candidate && jsonLength(candidate) > max) delete candidate[key];
+    if (jsonLength(candidate) <= max) return JSON.stringify(candidate);
+  }
+
+  while (jsonLength(candidate) > max && shrinkLongestString(candidate, max, false)) {
+    // Shorten the longest non-key string one field at a time.
+  }
+  while (jsonLength(candidate) > max && shrinkLongestString(candidate, max, true)) {
+    // A pathologically long key is the last thing to shorten.
+  }
+
+  if (jsonLength(candidate) > max) return JSON.stringify({ truncated: true });
+  return JSON.stringify(candidate);
+}
+
+/** Keeps search output a valid, bounded `{ results: [...] }` object. */
+function capSearchResults(results: Array<Record<string, unknown>>, max: number): string {
+  const output: Record<string, unknown> = { results };
+  if (jsonLength(output) <= max) return JSON.stringify(output);
+
+  output.truncated = true;
+  const cappedResults = output.results as Array<Record<string, unknown>>;
+  while (cappedResults.length > 1 && jsonLength(output) > max) cappedResults.pop();
+  while (jsonLength(output) > max && shrinkLongestString(output, max, true)) {
+    // Shorten strings in the remaining results before dropping the last one.
+  }
+  if (jsonLength(output) > max) output.results = [];
+  if (jsonLength(output) > max) return JSON.stringify({ results: [], truncated: true });
+  return JSON.stringify(output);
+}
+
+function shortenStringField(object: Record<string, unknown>, key: string, max: number): string {
+  const original = object[key];
+  if (typeof original !== 'string') return '';
+
+  let low = 0;
+  let high = original.length;
+  let best = 0;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    object[key] = original.slice(0, middle);
+    if (jsonLength(object) <= max) {
+      best = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  object[key] = original.slice(0, best);
+  return object[key] as string;
+}
+
+function shrinkLongestString(root: Record<string, unknown>, max: number, includeKey: boolean): boolean {
+  const found: { target: StringTarget | null } = { target: null };
+  const visit = (value: unknown, key: string | undefined, assign: ((next: string) => void) | null): void => {
+    if (typeof value === 'string') {
+      if (!includeKey && key === 'key') return;
+      if (assign && (!found.target || value.length > found.target.value.length)) {
+        found.target = { value, set: assign };
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => {
+        visit(item, key, (next) => {
+          value[index] = next;
+        });
+      });
+      return;
+    }
+    const record = asRecord(value);
+    if (!record) return;
+    for (const [childKey, child] of Object.entries(record)) {
+      visit(child, childKey, (next) => {
+        record[childKey] = next;
+      });
+    }
+  };
+  visit(root, undefined, null);
+
+  const target = found.target;
+  if (!target || target.value.length === 0) return false;
+
+  const original = target.value;
+  let low = 0;
+  let high = original.length - 1;
+  let best = -1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    target.set(original.slice(0, middle));
+    if (jsonLength(root) <= max) {
+      best = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  target.set(original.slice(0, Math.max(best, 0)));
+  return true;
+}
+
+function jsonLength(value: unknown): number {
+  return JSON.stringify(value).length;
 }
 
 function errorText(error: string, detail: string): string {
