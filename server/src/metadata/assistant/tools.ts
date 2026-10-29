@@ -399,12 +399,18 @@ function capRecordJson(record: Record<string, unknown>, max: number): string {
   }
   if (jsonLength(candidate) <= max) return JSON.stringify(candidate);
 
-  for (const key of ['contributors', 'series', 'covers', 'isbn_10']) {
+  for (const key of ['contributors', 'series', 'covers']) {
     const value = candidate[key];
     if (Array.isArray(value)) {
       while (value.length > 1 && jsonLength(candidate) > max) value.pop();
     }
     if (key in candidate && jsonLength(candidate) > max) delete candidate[key];
+    if (jsonLength(candidate) <= max) return JSON.stringify(candidate);
+  }
+
+  for (const key of ['isbn_10', 'isbn_13']) {
+    const value = candidate[key];
+    if (Array.isArray(value) && value.length > 1 && jsonLength(candidate) > max) value.splice(1);
     if (jsonLength(candidate) <= max) return JSON.stringify(candidate);
   }
 

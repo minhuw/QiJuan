@@ -330,6 +330,28 @@ describe('metadata assistant tools', () => {
     expect((parsed.description as string).length).toBeLessThan(30_000);
   });
 
+  it('keeps isbn_10 when capping a record that has no isbn_13', async () => {
+    const { transport } = openLibraryTransport(() => ({
+      key: '/works/OL1W',
+      title: 'ISBN-10 Only Record',
+      isbn_10: ['0140328726'],
+      publishers: Array.from({ length: 6 }, (_, index) => `Publisher ${index} ${'p'.repeat(2_500)}`),
+    }));
+
+    const record = await executeTool('get_open_library_record', { key: '/works/OL1W' }, { openLibrary: transport });
+    expect(record.length).toBeLessThanOrEqual(RECORD_RESULT_CHARS);
+
+    const parsed = JSON.parse(record) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      key: '/works/OL1W',
+      title: 'ISBN-10 Only Record',
+      isbn_10: ['0140328726'],
+      truncated: true,
+    });
+    expect(Array.isArray(parsed.publishers)).toBe(true);
+    expect((parsed.publishers as string[]).length).toBeGreaterThan(0);
+  });
+
   it('caps long search results as valid JSON with a results array', async () => {
     const { transport } = openLibraryTransport(() => ({
       docs: Array.from({ length: 20 }, (_, index) => ({
