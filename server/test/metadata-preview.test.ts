@@ -9,7 +9,7 @@ import type { OpenLibraryTransport } from '../src/metadata/openLibrary.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { configureTestAssistant, embeddedMetadataAssistant, makeTempDir, tempConfig } from './helpers.js';
-import { COVER_PNG, buildEpub } from './fixtures.js';
+import { COVER_PNG, buildEpub, buildTextPdf } from './fixtures.js';
 
 const cleanups: Array<() => void> = [];
 const password = 'correct-horse-battery';
@@ -540,8 +540,17 @@ describe('metadata assistant preview and apply', () => {
     ]);
     expect(imported.status).toBe('succeeded');
     const editionId = imported.items[0]?.editionId ?? 0;
+    const before = await edition(app, cookie, editionId);
+    expect(before.series).toBeNull();
+    expect(before.seriesOrder).toBeNull();
 
-    assistant.fetch = proposalAssistant({ series: null, seriesOrder: 7, coverId: null, isbn: null }).fetch;
+    assistant.fetch = proposalAssistant({
+      series: null,
+      seriesOrder: 7,
+      description: 'Order-only description.',
+      coverId: null,
+      isbn: null,
+    }).fetch;
     const lookupJob = await lookup(app, cookie, editionId);
     expect(lookupJob.status).toBe('succeeded');
     const preview = lookupJob.result?.preview;
@@ -549,12 +558,20 @@ describe('metadata assistant preview and apply', () => {
       current: null,
       proposed: '7',
     });
+    expect(preview?.fields.find((field) => field.field === 'description')).toMatchObject({
+      status: 'change',
+      current: before.description,
+      proposed: 'Order-only description.',
+    });
 
-    const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['seriesOrder']);
+    const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['seriesOrder', 'description']);
     expect(applied.status).toBe('succeeded');
     const after = await edition(app, cookie, editionId);
+    expect(after.description).toBe('Order-only description.');
+    expect(after.description).not.toBe(before.description);
     expect(after.series).toBeNull();
     expect(after.seriesOrder).toBeNull();
+    expect(after.locks).toContain('description');
     expect(after.locks).not.toContain('seriesOrder');
   });
 
@@ -687,6 +704,54 @@ describe('metadata assistant preview and apply', () => {
     expect(prompt.filename).toBe('first-present-source.epub');
     expect(prompt.format).toBe('epub');
     expect(prompt.fields?.title).toBe('Agent Chosen Title');
+    expect(prompt.filename).not.toBe(prompt.fields?.title);
+  });
+
+  it('sends the PDF asset filename and format to the agent when the only asset is a PDF', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const base = proposalAssistant({ title: 'Pdf Agent Title', coverId: null, isbn: null });
+    const assistant: AssistantTransport = {
+      async fetch(input, init) {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (!base.fetch) throw new Error('missing assistant transport');
+        return base.fetch(input, init);
+      },
+    };
+    const { app, config, cookie, libraryId } = await startApp({ assistant });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'only-present-source.pdf',
+        content: buildTextPdf(),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+    expect((await edition(app, cookie, editionId)).title).toBe('Pdf Agent Title');
+
+    const assets = new Database(config.databasePath, { readonly: true });
+    const asset = assets
+      .prepare('SELECT original_filename, format FROM file_assets WHERE edition_id = ? ORDER BY id')
+      .all(editionId) as Array<{ original_filename: string; format: string }>;
+    assets.close();
+    expect(asset).toEqual([{ original_filename: 'only-present-source.pdf', format: 'pdf' }]);
+
+    const beforeLookup = bodies.length;
+    const lookupJob = await lookup(app, cookie, editionId);
+    expect(lookupJob.status).toBe('succeeded');
+    const lookupBodies = bodies.slice(beforeLookup);
+    expect(lookupBodies).toHaveLength(1);
+    const messages = Array.isArray(lookupBodies[0]?.messages)
+      ? (lookupBodies[0]?.messages as Array<Record<string, unknown>>)
+      : [];
+    const user = messages.find((message) => message.role === 'user');
+    const prompt = JSON.parse(String(user?.content ?? '{}')) as {
+      filename?: string;
+      format?: string;
+      fields?: { title?: string | null };
+    };
+    expect(prompt.filename).toBe('only-present-source.pdf');
+    expect(prompt.format).toBe('pdf');
+    expect(prompt.fields?.title).toBe('Pdf Agent Title');
     expect(prompt.filename).not.toBe(prompt.fields?.title);
   });
 
