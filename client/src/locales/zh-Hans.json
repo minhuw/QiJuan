@@ -412,7 +412,7 @@
     "library_mode": "这个书库不能这样导入。",
     "metadata_unavailable": "无法连接书目来源。",
     "metadata_incomplete": "元数据助手没有提供所有必填字段。请检查书籍后重试。",
-    "metadata_assistant_unconfigured": "请先在设置中配置元数据助手，再上传书籍。",
+    "metadata_assistant_unconfigured": "请先在设置中配置元数据助手，再查询元数据。",
     "conflict": "这个名字已经用过。",
     "backup_in_progress": "已经有一个备份在运行。",
     "backup_not_configured": "请先设置目的地和恢复密码。",

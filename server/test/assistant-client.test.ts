@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { buildApp } from '../src/app.js';
 import {
   AssistantError,
   buildChatUrl,
@@ -17,7 +18,7 @@ import {
 } from '../src/metadata/assistant-settings.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
-import { makeTempDir, tempConfig, buildApp } from './helpers.js';
+import { makeTempDir, tempConfig } from './helpers.js';
 
 const cleanups: Array<() => void> = [];
 const password = 'correct-horse-battery';
@@ -97,6 +98,8 @@ describe('assistant settings', () => {
   it('writes a private file and never exposes the key in the public view', () => {
     const temp = makeTempDir();
     cleanups.push(temp.cleanup);
+    chmodSync(temp.dir, 0o775);
+    expect(statSync(temp.dir).mode & 0o777).toBe(0o775);
 
     const view = writeAssistantSettings(temp.dir, {
       baseUrl: ` ${baseUrl}/ `,

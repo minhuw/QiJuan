@@ -6,8 +6,6 @@ import { loadConfig, type AppConfig } from '../src/config.js';
 import type { AssistantTransport } from '../src/metadata/assistant/client.js';
 import { writeAssistantSettings } from '../src/metadata/assistant-settings.js';
 
-export { buildApp } from '../src/app.js';
-
 // The integration suite opens SQLite databases, hashes files, and spawns helpers.
 // The 5s default is too tight when Vitest runs all files in parallel on a busy host.
 vi.setConfig({ testTimeout: 15_000 });
