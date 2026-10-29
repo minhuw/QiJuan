@@ -202,21 +202,39 @@ export async function applyMetadataPreview(
     let seriesOrder = edition.seriesOrder;
     let seriesChanged = false;
     if (confirm.has('series') && !currentLocks.has('series')) {
-      seriesId = proposal.series
+      const nextSeriesId = proposal.series
         ? findOrCreateSeries(query, { libraryId: edition.libraryId, name: proposal.series }, now).id
         : null;
-      toLock.push('series');
+      const hadSeries = seriesId != null || seriesOrder != null;
+      if (nextSeriesId == null) {
+        // Clearing a series also clears its order; neither value may outlive the other.
+        seriesId = null;
+        seriesOrder = null;
+        toLock.push('series');
+        if (hadSeries) toLock.push('series_order');
+      } else {
+        // An order belongs to its series, so a switch drops the old order unless confirmed below.
+        if (nextSeriesId !== seriesId) seriesOrder = null;
+        seriesId = nextSeriesId;
+        toLock.push('series');
+      }
       seriesChanged = true;
     }
     if (confirm.has('seriesOrder') && !currentLocks.has('series_order')) {
       if (proposal.seriesOrder == null) {
         seriesOrder = null;
         seriesChanged = true;
+        toLock.push('series_order');
       } else if (seriesId != null) {
         seriesOrder = proposal.seriesOrder;
         seriesChanged = true;
+        toLock.push('series_order');
+      } else if (seriesOrder != null) {
+        // A series order requires a series, so drop any stale value without locking the proposal.
+        seriesOrder = null;
+        seriesChanged = true;
       }
-      toLock.push('series_order');
+      // A non-null order without a series is not persisted and does not lock the field.
     }
     if (seriesChanged) {
       values.seriesId = seriesId;

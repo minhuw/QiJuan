@@ -493,6 +493,80 @@ describe('batch import', () => {
     expect(openLibrary.urls.some((url) => url.includes('/b/id/8123-L.jpg'))).toBe(true);
   });
 
+  it('reuses an existing series when an upload proposal differs only in ASCII case', async () => {
+    const assistant = scriptedAssistant((body) => {
+      const input = promptInput(body);
+      const title = input.fields.title ?? input.filename.replace(/\.[^.]+$/, '');
+      const series = input.filename.startsWith('second') ? 'agent series' : 'Agent Series';
+      return {
+        tool_calls: [
+          {
+            name: 'submit_metadata',
+            arguments: {
+              title,
+              authors: ['Agent Author'],
+              translators: [],
+              description: 'Agent description.',
+              publisher: 'Agent Press',
+              publishedDate: '1965-03-02',
+              language: 'fr',
+              identifiers:
+                input.fields.identifiers.length > 0
+                  ? input.fields.identifiers
+                  : [{ scheme: 'isbn', value: '9780140328721' }],
+              series,
+              seriesOrder: null,
+              coverId: null,
+              isbn: null,
+            },
+          },
+        ],
+      };
+    });
+    const started = await startUploadApp({ assistant: assistant.transport });
+    const job = await uploadFiles(started.app, started.cookie, started.libraryId, [
+      {
+        name: 'files',
+        filename: 'first.epub',
+        content: buildEpub({
+          title: 'First Series Book',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee21',
+        }),
+      },
+      {
+        name: 'files',
+        filename: 'second.epub',
+        content: buildEpub({
+          title: 'Second Series Book',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee22',
+        }),
+      },
+    ]);
+    expect(job.status).toBe('succeeded');
+    expect(job.summary).toMatchObject({ total: 2, succeeded: 2, failed: 0, duplicate: 0 });
+
+    const db = new Database(started.config.databasePath, { readonly: true });
+    const seriesRows = db.prepare('SELECT id, name FROM series ORDER BY id').all() as Array<{
+      id: number;
+      name: string;
+    }>;
+    const editions = db
+      .prepare(
+        `SELECT e.title, e.series_id AS seriesId, s.name AS seriesName
+         FROM editions e LEFT JOIN series s ON s.id = e.series_id
+         ORDER BY e.id`,
+      )
+      .all() as Array<{ title: string; seriesId: number | null; seriesName: string | null }>;
+    db.close();
+
+    expect(seriesRows).toHaveLength(1);
+    expect(seriesRows[0]?.name).toBe('Agent Series');
+    expect(editions).toEqual([
+      { title: 'First Series Book', seriesId: seriesRows[0]?.id, seriesName: 'Agent Series' },
+      { title: 'Second Series Book', seriesId: seriesRows[0]?.id, seriesName: 'Agent Series' },
+    ]);
+  });
+
   it('fails each upload missing a required field without creating a blob or edition', async () => {
     const required = ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate', 'identifiers'];
     const attempts = new Map<string, number>();

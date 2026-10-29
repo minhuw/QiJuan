@@ -396,6 +396,300 @@ describe('metadata assistant preview and apply', () => {
     expect(cover.calls.some((href) => href.includes('/b/id/77-L.jpg'))).toBe(true);
   });
 
+  it('reuses an existing series whose name differs only in ASCII case', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const { app, config, cookie, libraryId } = await startApp({ assistant });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'first.epub',
+        content: buildEpub({
+          title: 'Case First',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee11',
+        }),
+      },
+      {
+        filename: 'second.epub',
+        content: buildEpub({
+          title: 'Case Second',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee12',
+        }),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const firstId = imported.items[0]?.editionId ?? 0;
+    const secondId = imported.items[1]?.editionId ?? 0;
+
+    const series = await app.inject({
+      method: 'POST',
+      url: '/api/editions/batch',
+      headers: { cookie },
+      payload: { editionIds: [secondId], series: 'Agent Series' },
+    });
+    expect(series.statusCode).toBe(200);
+    const existingSeriesId = (await edition(app, cookie, secondId)).series?.id ?? 0;
+    expect(existingSeriesId).toBeGreaterThan(0);
+
+    assistant.fetch = proposalAssistant({ series: 'agent series', seriesOrder: null }).fetch;
+    const lookupJob = await lookup(app, cookie, firstId);
+    expect(lookupJob.status).toBe('succeeded');
+    const preview = lookupJob.result?.preview;
+    expect(preview?.fields.find((field) => field.field === 'series')).toMatchObject({
+      current: null,
+      proposed: 'agent series',
+    });
+
+    const applied = await apply(app, cookie, firstId, preview?.previewId ?? 0, ['series']);
+    expect(applied.status).toBe('succeeded');
+    expect((await edition(app, cookie, firstId)).series).toEqual({
+      id: existingSeriesId,
+      name: 'Agent Series',
+    });
+
+    const db = new Database(config.databasePath, { readonly: true });
+    const rows = db.prepare('SELECT id, name FROM series ORDER BY id').all() as Array<{ id: number; name: string }>;
+    db.close();
+    expect(rows).toEqual([{ id: existingSeriesId, name: 'Agent Series' }]);
+  });
+
+  it('clears the series order with the series and locks both together', async () => {
+    const assistant = proposalAssistant({ series: 'Legacy Series', seriesOrder: 4, coverId: null, isbn: null });
+    const { app, cookie, libraryId } = await startApp({ assistant });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'clear-series.epub',
+        content: buildEpub({
+          title: 'Clear Series',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee13',
+        }),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const before = await edition(app, cookie, editionId);
+    expect(before.series?.name).toBe('Legacy Series');
+    expect(before.seriesOrder).toBe(4);
+    expect(before.locks).not.toContain('series');
+
+    assistant.fetch = proposalAssistant({ series: null, seriesOrder: null, coverId: null, isbn: null }).fetch;
+    const lookupJob = await lookup(app, cookie, editionId);
+    expect(lookupJob.status).toBe('succeeded');
+    const preview = lookupJob.result?.preview;
+    expect(preview?.fields.find((field) => field.field === 'series')).toMatchObject({
+      current: 'Legacy Series',
+      proposed: null,
+    });
+    expect(preview?.fields.find((field) => field.field === 'seriesOrder')).toMatchObject({
+      current: '4',
+      proposed: null,
+    });
+
+    const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['series']);
+    expect(applied.status).toBe('succeeded');
+    const after = await edition(app, cookie, editionId);
+    expect(after.series).toBeNull();
+    expect(after.seriesOrder).toBeNull();
+    expect(after.locks).toEqual(expect.arrayContaining(['series', 'seriesOrder']));
+  });
+
+  it('clears the previous series order when switching series without confirming an order', async () => {
+    const assistant = proposalAssistant({ series: 'First Series', seriesOrder: 3, coverId: null, isbn: null });
+    const { app, cookie, libraryId } = await startApp({ assistant });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'switch-series.epub',
+        content: buildEpub({
+          title: 'Switch Series',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee17',
+        }),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+    expect((await edition(app, cookie, editionId)).seriesOrder).toBe(3);
+
+    assistant.fetch = proposalAssistant({
+      series: 'Second Series',
+      seriesOrder: 9,
+      coverId: null,
+      isbn: null,
+    }).fetch;
+    const lookupJob = await lookup(app, cookie, editionId);
+    expect(lookupJob.status).toBe('succeeded');
+    const preview = lookupJob.result?.preview;
+
+    const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['series']);
+    expect(applied.status).toBe('succeeded');
+    const after = await edition(app, cookie, editionId);
+    expect(after.series?.name).toBe('Second Series');
+    expect(after.seriesOrder).toBeNull();
+    expect(after.locks).toContain('series');
+    expect(after.locks).not.toContain('seriesOrder');
+  });
+
+  it('does not persist or lock a series order when no series results', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const { app, cookie, libraryId } = await startApp({ assistant });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'order-only.epub',
+        content: buildEpub({
+          title: 'Order Only',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee14',
+        }),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+
+    assistant.fetch = proposalAssistant({ series: null, seriesOrder: 7, coverId: null, isbn: null }).fetch;
+    const lookupJob = await lookup(app, cookie, editionId);
+    expect(lookupJob.status).toBe('succeeded');
+    const preview = lookupJob.result?.preview;
+    expect(preview?.fields.find((field) => field.field === 'seriesOrder')).toMatchObject({
+      current: null,
+      proposed: '7',
+    });
+
+    const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['seriesOrder']);
+    expect(applied.status).toBe('succeeded');
+    const after = await edition(app, cookie, editionId);
+    expect(after.series).toBeNull();
+    expect(after.seriesOrder).toBeNull();
+    expect(after.locks).not.toContain('seriesOrder');
+  });
+
+  it('preserves an existing cover when the cover field is not confirmed', async () => {
+    const assistant = proposalAssistant({ coverId: 77, isbn: '9780140328721' });
+    const cover = coverStub();
+    const { app, config, cookie, libraryId } = await startApp({ assistant, openLibrary: cover.transport });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'cover-source.epub',
+        content: buildEpub({
+          title: 'Cover Source',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee15',
+        }),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const before = await edition(app, cookie, editionId);
+    expect(before.cover).toEqual({ mediaType: 'image/png' });
+    const beforeResponse = await app.inject({
+      method: 'GET',
+      url: `/api/editions/${editionId}/cover`,
+      headers: { cookie },
+    });
+    expect(beforeResponse.statusCode).toBe(200);
+    expect(beforeResponse.rawPayload.equals(COVER_PNG)).toBe(true);
+
+    const beforeDb = new Database(config.databasePath, { readonly: true });
+    const rowBefore = beforeDb
+      .prepare(
+        'SELECT id, sha256, bytes, media_type, relative_path, created_at FROM covers WHERE edition_id = ?',
+      )
+      .get(editionId) as
+      | { id: number; sha256: string; bytes: number; media_type: string; relative_path: string; created_at: string }
+      | undefined;
+    beforeDb.close();
+    expect(rowBefore).toBeTruthy();
+    cover.calls.length = 0;
+
+    assistant.fetch = proposalAssistant({
+      title: 'Cover Kept',
+      series: null,
+      seriesOrder: null,
+      coverId: 999,
+      isbn: null,
+    }).fetch;
+    const lookupJob = await lookup(app, cookie, editionId);
+    expect(lookupJob.status).toBe('succeeded');
+    const preview = lookupJob.result?.preview;
+    expect(preview?.fields.find((field) => field.field === 'cover')).toMatchObject({
+      proposed: 'present',
+    });
+
+    const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['title']);
+    expect(applied.status).toBe('succeeded');
+    const after = await edition(app, cookie, editionId);
+    expect(after.title).toBe('Cover Kept');
+    expect(after.cover).toEqual({ mediaType: 'image/png' });
+
+    const afterDb = new Database(config.databasePath, { readonly: true });
+    const rowAfter = afterDb
+      .prepare(
+        'SELECT id, sha256, bytes, media_type, relative_path, created_at FROM covers WHERE edition_id = ?',
+      )
+      .get(editionId) as
+      | { id: number; sha256: string; bytes: number; media_type: string; relative_path: string; created_at: string }
+      | undefined;
+    afterDb.close();
+    expect(rowAfter).toEqual(rowBefore);
+
+    const afterResponse = await app.inject({
+      method: 'GET',
+      url: `/api/editions/${editionId}/cover`,
+      headers: { cookie },
+    });
+    expect(afterResponse.statusCode).toBe(200);
+    expect(afterResponse.rawPayload.equals(COVER_PNG)).toBe(true);
+    expect(cover.calls).toEqual([]);
+  });
+
+  it('sends the present asset filename and format to the agent instead of the edition title', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const base = proposalAssistant({ title: 'Agent Chosen Title', coverId: null, isbn: null });
+    const assistant: AssistantTransport = {
+      async fetch(input, init) {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (!base.fetch) throw new Error('missing assistant transport');
+        return base.fetch(input, init);
+      },
+    };
+    const { app, config, cookie, libraryId } = await startApp({ assistant });
+    const imported = await upload(app, cookie, libraryId, [
+      {
+        filename: 'first-present-source.epub',
+        content: buildEpub({
+          title: 'Embedded Source Title',
+          identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee16',
+        }),
+      },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+    expect((await edition(app, cookie, editionId)).title).toBe('Agent Chosen Title');
+
+    const assets = new Database(config.databasePath);
+    assets
+      .prepare(
+        `INSERT INTO file_assets
+           (edition_id, format, sha256, bytes, original_filename, storage, relative_path, availability, created_at)
+         VALUES (?, 'pdf', ?, 1, 'second-present-source.pdf', 'managed', 'blobs/second', 'present', ?)`,
+      )
+      .run(editionId, '0'.repeat(64), new Date().toISOString());
+    assets.close();
+
+    const beforeLookup = bodies.length;
+    const lookupJob = await lookup(app, cookie, editionId);
+    expect(lookupJob.status).toBe('succeeded');
+    const lookupBodies = bodies.slice(beforeLookup);
+    expect(lookupBodies).toHaveLength(1);
+    const messages = Array.isArray(lookupBodies[0]?.messages)
+      ? (lookupBodies[0]?.messages as Array<Record<string, unknown>>)
+      : [];
+    const user = messages.find((message) => message.role === 'user');
+    const prompt = JSON.parse(String(user?.content ?? '{}')) as {
+      filename?: string;
+      format?: string;
+      fields?: { title?: string | null };
+    };
+    expect(prompt.filename).toBe('first-present-source.epub');
+    expect(prompt.format).toBe('epub');
+    expect(prompt.fields?.title).toBe('Agent Chosen Title');
+    expect(prompt.filename).not.toBe(prompt.fields?.title);
+  });
+
   it('leaves an existing cover alone when Open Library has no selected cover', async () => {
     const assistant = embeddedMetadataAssistant();
     const cover = coverStub(404);
