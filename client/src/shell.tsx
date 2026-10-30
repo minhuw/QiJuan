@@ -321,14 +321,7 @@ export function Shell({ locale, children }: { locale?: string; children?: ReactN
           </div>
           <div className={account ? 'app-body' : 'auth-body'}>
             {account ? (
-              readerMode ? (
-                <header className="reader-appbar">
-                  <Brand compact />
-                  <div className="reader-appbar-end">
-                    <LanguageSelect value={active} onChange={setActive} />
-                  </div>
-                </header>
-              ) : (
+              readerMode ? null : (
                 <header className="mobile-bar">
                   <button
                     type="button"

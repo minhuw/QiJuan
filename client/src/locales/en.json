@@ -283,6 +283,11 @@
     "notes": "Notes",
     "noteBody": "Note",
     "saveNote": "Save note",
+    "addPageNote": "Add page note",
+    "notePlaceholder": "Write a note…",
+    "editNote": "Edit",
+    "cancel": "Cancel",
+    "selectionTooLarge": "Select a shorter passage to highlight or annotate.",
     "remove": "Remove",
     "previousPage": "Previous page",
     "nextPage": "Next page",
@@ -300,7 +305,9 @@
     "outline": "Outline",
     "scanNoText": "This scanned PDF has no searchable text.",
     "newerKept": "A newer change was kept.",
-    "display": "Display"
+    "display": "Display",
+    "options": "Reading options",
+    "mode": "Reading mode"
   },
   "backup": {
     "open": "Backup",

@@ -5,6 +5,7 @@ import { absoluteBlobPath, managedBlobRelativePath } from './blobs.js';
 import { parseEpubCfi } from './cfi.js';
 import { CatalogError } from './catalog.js';
 import { parsePdfLocator } from './pdf-locator.js';
+import { parsePdfSelectionLocator } from './pdf-annotation.js';
 import type { AppDatabase } from './db.js';
 import { requireLiveEdition } from './editions.js';
 import { resolveInsideRoot } from './library-files.js';
@@ -315,8 +316,8 @@ export function addHighlight(
   now = new Date(),
 ): AnnotationRow {
   if (input.revision !== 0) throw new RevisionConflict({ highlight: null });
-  const locator = requireCfi(input.locator);
-  requireEpubAsset(db, input.editionId, input.assetId);
+  const asset = requirePresentAsset(db, input.editionId, input.assetId);
+  const locator = annotationLocatorForAsset(asset.format, input.locator, 'highlight');
   const quote = cleanOptional(input.quote, QUOTE_MAX);
   const stamp = now.toISOString();
   const inserted = db
@@ -351,7 +352,6 @@ export function updateHighlight(
 ): AnnotationRow {
   requireLiveEdition(db, input.editionId);
   const quote = input.quote === undefined ? undefined : cleanOptional(input.quote, QUOTE_MAX);
-  const locator = input.locator === undefined ? undefined : requireCfi(input.locator);
   return db.transaction((tx) => {
     const query = tx as unknown as AppDatabase;
     const existing = query
@@ -363,11 +363,21 @@ export function updateHighlight(
       .get();
     if (!existing) throw new CatalogError('not_found');
     if (existing.revision !== input.revision) throw new RevisionConflict({ highlight: { ...existing, label: null } });
+    let locator = existing.locator;
+    if (input.locator !== undefined) {
+      if (existing.assetId == null) {
+        // Legacy EPUB annotations predate asset-scoped locators.
+        locator = requireCfi(input.locator);
+      } else {
+        const asset = requirePresentAsset(query, input.editionId, existing.assetId);
+        locator = annotationLocatorForAsset(asset.format, input.locator, 'highlight');
+      }
+    }
     const updated = query
       .update(highlights)
       .set({
         quote: quote === undefined ? existing.quote : quote,
-        locator: locator === undefined ? existing.locator : locator,
+        locator,
         revision: existing.revision + 1,
         updatedAt: now.toISOString(),
       })
@@ -403,8 +413,8 @@ export function addNote(
   now = new Date(),
 ): NoteRow {
   if (input.revision !== 0) throw new RevisionConflict({ note: null });
-  const locator = requireCfi(input.locator);
-  requireEpubAsset(db, input.editionId, input.assetId);
+  const asset = requirePresentAsset(db, input.editionId, input.assetId);
+  const locator = annotationLocatorForAsset(asset.format, input.locator, 'note');
   const body = cleanRequired(input.body, NOTE_MAX);
   const stamp = now.toISOString();
   const inserted = db
@@ -534,6 +544,13 @@ function locatorForAsset(format: 'epub' | 'pdf', value: string): string {
   return requireCfi(value);
 }
 
+function annotationLocatorForAsset(format: 'epub' | 'pdf', value: string, kind: 'highlight' | 'note'): string {
+  if (format === 'epub') return requireCfi(value);
+  const locator = parsePdfSelectionLocator(value) ?? (kind === 'note' ? parsePdfLocator(value) : null);
+  if (!locator) throw new CatalogError('invalid_request');
+  return locator;
+}
+
 function requirePresentAsset(db: AppDatabase, editionId: number, assetId: number): EpubAssetRow & { format: 'epub' | 'pdf' } {
   requireLiveEdition(db, editionId);
   if (!Number.isInteger(assetId) || assetId < 1) throw new CatalogError('invalid_request');
@@ -555,12 +572,6 @@ function requirePresentAsset(db: AppDatabase, editionId: number, assetId: number
     .get();
   if (!row || row.availability !== 'present') throw new CatalogError('not_found');
   if (row.format !== 'epub' && row.format !== 'pdf') throw new CatalogError('not_found');
-  return row;
-}
-
-function requireEpubAsset(db: AppDatabase, editionId: number, assetId: number): EpubAssetRow {
-  const row = requirePresentAsset(db, editionId, assetId);
-  if (row.format !== 'epub') throw new CatalogError('not_found');
   return row;
 }
 

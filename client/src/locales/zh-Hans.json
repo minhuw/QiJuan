@@ -283,6 +283,11 @@
     "notes": "笔记列表",
     "noteBody": "笔记",
     "saveNote": "保存笔记",
+    "addPageNote": "添加页面笔记",
+    "notePlaceholder": "写下你的想法…",
+    "editNote": "编辑",
+    "cancel": "取消",
+    "selectionTooLarge": "请选择较短的段落进行划线或批注。",
     "remove": "移除",
     "previousPage": "上一页",
     "nextPage": "下一页",
@@ -300,7 +305,9 @@
     "outline": "大纲",
     "scanNoText": "这份扫描版 PDF 没有可搜索的文字。",
     "newerKept": "已保留较新的修改。",
-    "display": "显示"
+    "display": "显示",
+    "options": "阅读选项",
+    "mode": "阅读方式"
   },
   "backup": {
     "open": "备份",

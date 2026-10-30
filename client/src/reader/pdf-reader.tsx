@@ -6,24 +6,35 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Highlighter,
+  StickyNote,
   LayoutPanelLeft,
+  Library,
   ListTree,
   Loader2,
   MoveHorizontal,
   RefreshCw,
   ScanText,
   Search,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import { api, type ApiResult } from '../api';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
+import type { ReaderFlow } from './epub/settings';
+import { readReaderFlow, saveReaderFlow } from './flow';
+import { createPageScroll } from './page-scroll';
 import { formatPdfLocator, parsePdfPlace, type PdfPlace } from './pdf/locator';
 import { openPdfSession } from './pdf/session';
+import { PdfViewport } from './pdf/viewport';
+import { PdfAnnotationPanel, PdfSelectionToolbar, pdfAnnotationPoint, usePdfAnnotations, type PdfHighlight, type PdfNote } from './pdf/annotation-tools';
 import { nearbyPages, THUMBNAIL_CSS_WIDTH, THUMBNAIL_RADIUS } from './pdf/thumbs';
 import type { PdfOutlineItem, PdfSearchHit, PdfSession, RenderedPage } from './pdf/types';
 import { useLocale } from '../shell';
+import { ReaderOptions, useReaderPanelFocus } from './reader-options';
+import { ReaderFlowSelect } from './flow-select';
 
 const ERROR_CODES = new Set([
   'invalid_request',
@@ -45,6 +56,8 @@ interface Bookmark {
 interface ReadingPlace {
   position: { locator: string; revision: number; assetId: number | null; updatedAt: string } | null;
   bookmarks: Bookmark[];
+  highlights: PdfHighlight[];
+  notes: PdfNote[];
 }
 
 function errorText(t: (key: string) => string, code: string | null): string {
@@ -73,39 +86,45 @@ function OutlineTree({ items, onOpen }: { items: PdfOutlineItem[]; onOpen: (item
   );
 }
 
-export function PdfReader({ editionId, assetId, title }: { editionId: number; assetId: number; title: string }) {
+export function PdfReader(props: { editionId: number; assetId: number; title: string }) {
+  return <PdfReaderDocument key={`${props.editionId}:${props.assetId}`} {...props} />;
+}
+
+function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; assetId: number; title: string }) {
   const { t } = useLocale();
   const searchId = useId();
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const pageRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const textRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<PdfSession | null>(null);
   const placeRef = useRef<PdfPlace | null>(null);
   const savedRef = useRef<string | null>(null);
   const saverRef = useRef<{ push: (locator: string) => void; flush: () => void; cancel: () => void } | null>(null);
   const revisionRef = useRef(0);
   const generationRef = useRef(0);
+  const navigationRef = useRef(0);
+  const restoreCommandRef = useRef<PdfPlace | null>(null);
   const chainRef = useRef(Promise.resolve());
   const chainIdle = useRef(true);
   const renderedRef = useRef<RenderedPage | null>(null);
-  const suppressScroll = useRef(false);
+  const bottomEntryRef = useRef<PdfPlace | null>(null);
   const holdRef = useRef(false);
   const echoEpoch = useRef(0);
   const heldEcho = useRef<{ token: number; epoch: number } | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const widthRef = useRef(0);
   const thumbs = useRef(new Map<number, HTMLCanvasElement>());
   const thumbTickets = useRef(new Map<number, number>());
   const [error, setError] = useState<string | null>(null);
   const [keptNewer, setKeptNewer] = useState(false);
   const [ready, setReady] = useState(false);
+  const [painting, setPainting] = useState(false);
+  const [flow, setFlow] = useState<ReaderFlow>(readReaderFlow);
+  const [currentPage, setCurrentPage] = useState(1);
   const [view, setView] = useState<PdfPlace | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [outline, setOutline] = useState<PdfOutlineItem[]>([]);
   const [thumbnailPages, setThumbnailPages] = useState<number[]>([]);
   const [searchable, setSearchable] = useState<boolean | null>(null);
-  const [panel, setPanel] = useState<'outline' | 'thumbnails' | 'search' | 'bookmarks' | null>(null);
+  const [panel, setPanel] = useState<'outline' | 'thumbnails' | 'search' | 'bookmarks' | 'highlights' | 'notes' | null>(null);
+  const panelRef = useReaderPanelFocus(panel);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<PdfSearchHit[]>([]);
@@ -113,12 +132,16 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
   const [searching, setSearching] = useState(false);
   const [scaleLabel, setScaleLabel] = useState<number | null>(null);
   const [pageDraft, setPageDraft] = useState('1');
+  const [selectionTooLarge, setSelectionTooLarge] = useState(false);
+  const annotations = usePdfAnnotations({ editionId, assetId, settle, onOpen: setPanel });
 
   function remember(place: PdfPlace) {
     if (holdRef.current) return;
     const locator = formatPdfLocator(place);
     if (!locator) return;
+    if (placeRef.current?.page !== place.page) setPageDraft(String(place.page));
     placeRef.current = place;
+    setCurrentPage(place.page);
     if (locator === savedRef.current) return;
     savedRef.current = locator;
     saverRef.current?.push(locator);
@@ -128,6 +151,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     const held = heldEcho.current;
     if (!held || held.token !== token) return;
     heldEcho.current = null;
+    restoreCommandRef.current = null;
     if (holdTimer.current !== null) {
       clearTimeout(holdTimer.current);
       holdTimer.current = null;
@@ -141,17 +165,15 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     });
   }
 
-  function settleHeldEcho(epoch: number) {
+  function settleHeldEcho(epoch: number, request: PdfPlace) {
     const held = heldEcho.current;
-    if (!held || held.epoch !== epoch) return;
+    if (!held || held.epoch !== epoch || restoreCommandRef.current !== request) return;
     releaseHeldEcho(held.token);
   }
 
   useEffect(() => {
     const scroller = scrollerRef.current;
-    const canvas = canvasRef.current;
-    const textLayer = textRef.current;
-    if (!scroller || !canvas || !textLayer) return;
+    if (!scroller) return;
     let alive = true;
     const saver = createDebouncedSave(POSITION_SAVE_DELAY_MS, (locator) => {
       const ticket = generationRef.current;
@@ -208,6 +230,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
       if (!alive) return;
       if (place.data) {
         setBookmarks(place.data.bookmarks);
+        annotations.load(place.data);
         revisionRef.current = place.data.position?.revision ?? 0;
       }
       try {
@@ -232,8 +255,10 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
         setPageCount(session.pageCount);
         setOutline(session.outline);
         setThumbnailPages(session.thumbnailPages);
-        setPanel(session.outline.length > 0 ? 'outline' : session.thumbnailPages.length > 0 ? 'thumbnails' : null);
+        setPanel(null);
         setPageDraft(String(initial.page));
+        setCurrentPage(initial.page);
+        setPainting(true);
         setView(initial);
         setReady(true);
       } catch {
@@ -261,81 +286,32 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
   }, []);
 
   useEffect(() => {
-    const session = sessionRef.current;
-    const place = view;
-    const canvas = canvasRef.current;
-    const textLayer = textRef.current;
-    const scroller = scrollerRef.current;
-    const shell = pageRef.current;
-    if (!ready || !session || !place || !canvas || !textLayer || !scroller || !shell) return;
-    let cancel = false;
-    const epoch = echoEpoch.current;
-    const width = scroller.clientWidth || 640;
-    void session
-      .renderPage({ page: place.page, zoom: place.zoom, containerWidth: width, canvas, textLayer })
-      .then((rendered) => {
-        if (cancel) return;
-        if (!rendered) {
-          settleHeldEcho(epoch);
-          return;
-        }
-        const current = placeRef.current;
-        if (!current || current.page !== place.page || current.zoom !== place.zoom) return;
-        renderedRef.current = rendered;
-        shell.style.width = `${rendered.cssWidth}px`;
-        shell.style.height = `${rendered.cssHeight}px`;
-        setScaleLabel(rendered.scale);
-        const point = rendered.toViewport(current.x, current.y);
-        suppressScroll.current = true;
-        scroller.scrollLeft = point.x;
-        scroller.scrollTop = point.y;
-        suppressScroll.current = false;
-        remember(current);
-        settleHeldEcho(epoch);
-        setError((previous) => (previous === 'internal' ? null : previous));
-      })
-      .catch(() => {
-        if (cancel) return;
-        const current = placeRef.current;
-        if (!current || current.page !== place.page || current.zoom !== place.zoom) return;
-        setError('internal');
-        settleHeldEcho(epoch);
-      });
-    return () => {
-      cancel = true;
-    };
-  }, [ready, view]);
-
-  useEffect(() => {
     const scroller = scrollerRef.current;
     if (!ready || !scroller) return;
-    const node: HTMLDivElement = scroller;
-    function onScroll() {
-      if (suppressScroll.current || holdRef.current) return;
-      const rendered = renderedRef.current;
-      const place = placeRef.current;
-      if (!rendered || !place) return;
-      const point = rendered.toPdf(node.scrollLeft, node.scrollTop);
-      remember({ ...place, x: point.x, y: point.y });
-    }
-    node.addEventListener('scroll', onScroll, { passive: true });
-    return () => node.removeEventListener('scroll', onScroll);
-  }, [ready]);
-
-  useEffect(() => {
-    const scroller = scrollerRef.current;
-    if (!ready || !scroller || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      const width = scroller.clientWidth;
-      if (width === widthRef.current) return;
-      widthRef.current = width;
-      const place = placeRef.current;
-      if (!place || place.zoom !== 'width') return;
-      setView({ ...place });
+    let gestureAxis = 'vertical';
+    const pageScroll = createPageScroll({
+      horizontal: true,
+      enabled: () => flow === 'paginated' && !holdRef.current && renderedRef.current !== null,
+      canTurn: (turn, _target, axis) => {
+        gestureAxis = axis;
+        const current = placeRef.current;
+        if (!current || scroller.clientHeight <= 0) return false;
+        const atStart = axis === 'horizontal' ? scroller.scrollLeft <= 2 : scroller.scrollTop <= 2;
+        const atEnd = axis === 'horizontal'
+          ? scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 2
+          : scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+        return turn === 'next' ? current.page < pageCount && atEnd : current.page > 1 && atStart;
+      },
+      turn: (turn) => {
+        const current = placeRef.current;
+        if (!current) return;
+        return goTo(current.page + (turn === 'next' ? 1 : -1), undefined, turn === 'prev' && gestureAxis === 'vertical');
+      },
+      onError: () => setError('internal'),
     });
-    observer.observe(scroller);
-    return () => observer.disconnect();
-  }, [ready]);
+    pageScroll.attach(scroller);
+    return pageScroll.destroy;
+  }, [ready, pageCount, flow]);
 
   useEffect(() => {
     const session = sessionRef.current;
@@ -352,7 +328,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
   useEffect(() => {
     const session = sessionRef.current;
     if (!ready || !session || !view || (panel !== 'thumbnails' && panel !== 'outline')) return;
-    const pages = nearbyPages(thumbnailPages, view.page, THUMBNAIL_RADIUS);
+    const pages = nearbyPages(thumbnailPages, currentPage, THUMBNAIL_RADIUS);
     let cancel = false;
     for (const page of pages) {
       const canvas = thumbs.current.get(page);
@@ -363,19 +339,20 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
       void session.renderThumbnail(page, canvas, THUMBNAIL_CSS_WIDTH).then((ok) => {
         if (cancel || thumbTickets.current.get(page) !== ticket || ok) return;
         const current = placeRef.current;
-        if (!current || current.page !== view.page || current.zoom !== view.zoom) return;
+        if (!current || current.page !== currentPage || current.zoom !== view.zoom) return;
         canvas.hidden = true;
       });
     }
     return () => {
       cancel = true;
     };
-  }, [panel, ready, thumbnailPages, view]);
+  }, [panel, ready, thumbnailPages, view, currentPage]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (flow === 'continuous' && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) return;
       onReaderKey(event, {
-        enabled: true,
+        enabled: ready,
         direction: 'ltr',
         next: () => {
           const place = placeRef.current;
@@ -389,34 +366,60 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pageCount]);
+  }, [pageCount, flow, ready]);
 
-  async function goTo(page: number, point?: { x: number | null; y: number | null }) {
+  async function goTo(page: number, point?: { x: number | null; y: number | null }, enterAtBottom = false) {
     const session = sessionRef.current;
     const current = placeRef.current;
-    if (!session || !current || session.pageCount < 1) return;
+    if (!session || !current || session.pageCount < 1 || holdRef.current) return;
+    const navigation = ++navigationRef.current;
+    const generation = generationRef.current;
     const clamped = Math.min(session.pageCount, Math.max(1, page));
     const box = await session.pageBox(clamped);
+    if (sessionRef.current !== session || navigationRef.current !== navigation
+      || generationRef.current !== generation || holdRef.current) return;
     const next: PdfPlace = {
       page: clamped,
       x: point && point.x != null ? point.x : box.xMin,
       y: point && point.y != null ? point.y : box.yMax,
       zoom: current.zoom,
     };
-    remember(next);
+    renderedRef.current = null;
+    setPainting(true);
+    bottomEntryRef.current = enterAtBottom ? next : null;
+    if (enterAtBottom) placeRef.current = next;
+    else remember(next);
     setPageDraft(String(clamped));
+    setCurrentPage(clamped);
     setView(next);
   }
 
-  function setZoom(zoom: PdfPlace['zoom']) {
+  function changeFlow(next: ReaderFlow) {
     const current = placeRef.current;
-    if (!current) return;
+    if (!current || next === flow || holdRef.current) return;
+    navigationRef.current += 1;
+    renderedRef.current = null;
+    bottomEntryRef.current = null;
+    setPainting(true);
+    saveReaderFlow(next);
+    setFlow(next);
+    setView({ ...current });
+  }
+
+  function setZoom(zoom: PdfPlace['zoom']) {
+    bottomEntryRef.current = null;
+    const current = placeRef.current;
+    if (!current || holdRef.current) return;
+    navigationRef.current += 1;
+    setPainting(true);
     remember({ ...current, zoom });
     setView({ ...current, zoom });
   }
 
   async function reloadReading(adoptPosition: boolean): Promise<boolean> {
     generationRef.current += 1;
+    navigationRef.current += 1;
+    restoreCommandRef.current = null;
     const token = generationRef.current;
     saverRef.current?.cancel();
     holdRef.current = true;
@@ -433,6 +436,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
         return false;
       }
       setBookmarks(place.data.bookmarks);
+      annotations.load(place.data);
       const position = place.data.position;
       revisionRef.current = position?.revision ?? 0;
       if (adoptPosition && position) {
@@ -442,10 +446,12 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
           if (canonical) savedRef.current = canonical;
           placeRef.current = parsed;
           setPageDraft(String(parsed.page));
+          setCurrentPage(parsed.page);
           // Ignore scroll and remember until this restore has been painted.
           // A scroll during the GET would otherwise be written with this revision.
           echoEpoch.current += 1;
           heldEcho.current = { token, epoch: echoEpoch.current };
+          restoreCommandRef.current = parsed;
           holdTimer.current = setTimeout(() => releaseHeldEcho(token), 5000);
           handed = true;
           setView(parsed);
@@ -529,7 +535,8 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     setPanel((current) => (current === next ? null : next));
   }
 
-  const nearby = view ? nearbyPages(thumbnailPages, view.page, THUMBNAIL_RADIUS) : [];
+  const nearby = view ? nearbyPages(thumbnailPages, currentPage, THUMBNAIL_RADIUS) : [];
+  const viewportEpoch = echoEpoch.current;
   const showOutline = outline.length > 0;
   const showThumbs = thumbnailPages.length > 0;
 
@@ -537,21 +544,16 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
     <div className="reader-page reader-page-pdf">
       <header className="reader-header">
         <div className="reader-header-top">
-          <div className="reader-breadcrumb">
-            <Link className="back-link" to={`/books/${editionId}`} onClick={() => saverRef.current?.flush()}>
-              <ArrowLeft size={15} aria-hidden="true" />
-              {t('reader.backToBook')}
-            </Link>
-            <span className="reader-separator" aria-hidden="true">
-              /
-            </span>
-            <Link className="text-link" to="/" onClick={() => saverRef.current?.flush()}>
-              {t('reader.library')}
-            </Link>
-          </div>
-          <span className="reader-format-chip">{t('library.formatPdf')}</span>
+          <Link className="reader-back" to={`/books/${editionId}`} title={t('reader.backToBook')} onClick={() => saverRef.current?.flush()}>
+            <ArrowLeft size={18} aria-hidden="true" />
+            <span className="visually-hidden">{t('reader.backToBook')}</span>
+          </Link>
+          <h1 className="reader-title">{title}</h1>
+          <Link className="reader-library-link" to="/" title={t('reader.library')} onClick={() => saverRef.current?.flush()}>
+            <Library size={18} aria-hidden="true" />
+            <span className="visually-hidden">{t('reader.library')}</span>
+          </Link>
         </div>
-        <h1 className="reader-title">{title}</h1>
         {error ? (
           <div className="alert alert-error" role="alert">
             <AlertCircle size={16} aria-hidden="true" />
@@ -564,6 +566,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
             {t('reader.scanNoText')}
           </p>
         ) : null}
+        {selectionTooLarge ? <p className="notice" role="status">{t('reader.selectionTooLarge')}</p> : null}
         {keptNewer ? (
           <p className="notice" role="status">
             <RefreshCw size={15} aria-hidden="true" />
@@ -573,129 +576,137 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
       </header>
 
       <div className="reader-toolbar">
-        <form
-          className="reader-page-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const parsed = Number(pageDraft);
-            if (Number.isInteger(parsed)) void goTo(parsed);
-          }}
-        >
-          <label className="reader-page-input">
-            <span>{t('reader.page')}</span>
-            <input
-              inputMode="numeric"
-              value={pageDraft}
-              disabled={!ready}
-              onChange={(event) => setPageDraft(event.target.value)}
-            />
-          </label>
-          <span className="reader-page-count">
-            {view?.page ?? '–'} <span aria-hidden="true">/</span> {pageCount || '–'}
-          </span>
-        </form>
-
-        <div className="reader-group">
-          <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomOut')} title={t('reader.zoomOut')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, -1))}>
-            <ZoomOut size={16} aria-hidden="true" />
-          </button>
-          <span className="reader-zoom-label">
-            {t('reader.zoom')}
-            {scaleLabel == null ? '' : ` ${scaleLabel.toFixed(2)}`}
-          </span>
-          <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomIn')} title={t('reader.zoomIn')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, 1))}>
-            <ZoomIn size={16} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="reader-tool"
-            aria-pressed={view?.zoom === 'width'}
-            disabled={!ready}
-            onClick={() => setZoom('width')}
-          >
-            <MoveHorizontal size={15} aria-hidden="true" />
-            {t('reader.fitWidth')}
-          </button>
-        </div>
-
-        <div className="reader-toolbar-end">
-          <button type="button" className="reader-tool" disabled={!ready} onClick={() => void addBookmark()}>
-            <Bookmark size={15} aria-hidden="true" />
-            {t('reader.bookmark')}
-          </button>
-        </div>
-      </div>
-
-      <div className="reader-panel-bar" role="toolbar" aria-label={title}>
-        <div className="reader-group">
+        <ReaderFlowSelect value={flow} disabled={!ready} onChange={changeFlow} />
+        <div className="reader-main-actions">
           {showOutline ? (
             <button
               type="button"
-              className="reader-tool"
+              className="reader-tool reader-tool-icon"
+              aria-label={t('reader.outline')}
+              title={t('reader.outline')}
               aria-pressed={panel === 'outline'}
               onClick={() => toggle('outline')}
             >
-              <ListTree size={15} aria-hidden="true" />
-              {t('reader.outline')}
+              <ListTree size={16} aria-hidden="true" />
             </button>
-          ) : null}
-          {showThumbs ? (
+          ) : showThumbs ? (
             <button
               type="button"
-              className="reader-tool"
+              className="reader-tool reader-tool-icon"
+              aria-label={t('reader.thumbnails')}
+              title={t('reader.thumbnails')}
               aria-pressed={panel === 'thumbnails'}
               onClick={() => toggle('thumbnails')}
             >
-              <LayoutPanelLeft size={15} aria-hidden="true" />
-              {t('reader.thumbnails')}
+              <LayoutPanelLeft size={16} aria-hidden="true" />
             </button>
           ) : null}
           <button
             type="button"
-            className="reader-tool"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.search')}
+            title={t('reader.search')}
             aria-pressed={panel === 'search'}
             onClick={() => toggle('search')}
           >
-            <Search size={15} aria-hidden="true" />
-            {t('reader.search')}
+            <Search size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
-            className="reader-tool"
-            aria-pressed={panel === 'bookmarks'}
-            onClick={() => toggle('bookmarks')}
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.bookmark')}
+            title={t('reader.bookmark')}
+            disabled={!ready}
+            onClick={() => void addBookmark()}
           >
-            <Bookmark size={15} aria-hidden="true" />
-            {t('reader.bookmarks')}
+            <Bookmark size={16} aria-hidden="true" />
           </button>
-        </div>
-        <div className="reader-group reader-page-turn">
-          <button
-            type="button"
-            className="reader-tool"
-            disabled={!ready || (view?.page ?? 1) <= 1}
-            onClick={() => void goTo((view?.page ?? 1) - 1)}
-          >
-            <ChevronLeft size={15} aria-hidden="true" />
-            {t('reader.previousPage')}
-          </button>
-          <button
-            type="button"
-            className="reader-tool"
-            disabled={!ready || !view || view.page >= pageCount}
-            onClick={() => {
-              if (view) void goTo(view.page + 1);
-            }}
-          >
-            {t('reader.nextPage')}
-            <ChevronRight size={15} aria-hidden="true" />
-          </button>
+          <ReaderOptions>
+            <form
+              className="reader-page-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const parsed = Number(pageDraft);
+                if (Number.isInteger(parsed)) void goTo(parsed);
+              }}
+            >
+              <label className="reader-page-input">
+                <span>{t('reader.page')}</span>
+                <input
+                  inputMode="numeric"
+                  value={pageDraft}
+                  disabled={!ready}
+                  onChange={(event) => setPageDraft(event.target.value)}
+                />
+              </label>
+            </form>
+
+            <div className="reader-zoom-controls">
+              <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomOut')} title={t('reader.zoomOut')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, -1))}>
+                <ZoomOut size={16} aria-hidden="true" />
+              </button>
+              <span className="reader-zoom-label">
+                {t('reader.zoom')}
+                {scaleLabel == null ? '' : ` ${scaleLabel.toFixed(2)}`}
+              </span>
+              <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomIn')} title={t('reader.zoomIn')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, 1))}>
+                <ZoomIn size={16} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.fitWidth')}
+                title={t('reader.fitWidth')}
+                aria-pressed={view?.zoom === 'width'}
+                disabled={!ready}
+                onClick={() => setZoom('width')}
+              >
+                <MoveHorizontal size={15} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="reader-option-actions">
+              <button type="button" className="reader-tool reader-tool-icon" aria-pressed={panel === 'highlights'} data-dismiss-options onClick={() => toggle('highlights')}>
+                <Highlighter size={16} aria-hidden="true" /><span>{t('reader.highlights')}</span>
+              </button>
+              <button type="button" className="reader-tool reader-tool-icon" aria-pressed={panel === 'notes'} data-dismiss-options onClick={() => toggle('notes')}>
+                <StickyNote size={16} aria-hidden="true" /><span>{t('reader.notes')}</span>
+              </button>
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.bookmarks')}
+                title={t('reader.bookmarks')}
+                aria-pressed={panel === 'bookmarks'}
+                data-dismiss-options
+                onClick={() => toggle('bookmarks')}
+              >
+                <Bookmark size={16} aria-hidden="true" />
+                <span>{t('reader.bookmarks')}</span>
+              </button>
+              {showOutline && showThumbs ? (
+                <button
+                  type="button"
+                  className="reader-tool reader-tool-icon"
+                  aria-label={t('reader.thumbnails')}
+                  title={t('reader.thumbnails')}
+                  aria-pressed={panel === 'thumbnails'}
+                  data-dismiss-options
+                  onClick={() => toggle('thumbnails')}
+                >
+                  <LayoutPanelLeft size={16} aria-hidden="true" />
+                  <span>{t('reader.thumbnails')}</span>
+                </button>
+              ) : null}
+            </div>
+          </ReaderOptions>
         </div>
       </div>
 
       <div className={panel ? 'reader-layout' : 'reader-layout reader-layout-solo'}>
         {panel ? (
           <aside
+            ref={panelRef}
+            tabIndex={-1}
             className="reader-panel"
             aria-label={
               panel === 'outline'
@@ -713,9 +724,18 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
                     ? t('reader.thumbnails')
                     : t(`reader.${panel}`)}
               </h2>
-              <span className="section-count">
-                {panel === 'bookmarks' ? bookmarks.length : panel === 'thumbnails' ? nearby.length : panel === 'search' ? hits.length : outline.length}
+              <span>
+                {panel === 'notes' ? annotations.notes.length : panel === 'highlights' ? annotations.highlights.length : panel === 'bookmarks' ? bookmarks.length : panel === 'thumbnails' ? nearby.length : panel === 'search' ? hits.length : outline.length}
               </span>
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.close')}
+                title={t('reader.close')}
+                onClick={() => setPanel(null)}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
             </div>
             {(panel === 'outline' || panel === 'thumbnails') && showOutline ? (
               <OutlineTree items={outline} onOpen={(item) => void goTo(item.page ?? 1, item)} />
@@ -727,7 +747,7 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
                     <button
                       type="button"
                       className="pdf-thumb"
-                      aria-current={view?.page === page ? 'page' : undefined}
+                      aria-current={currentPage === page ? 'page' : undefined}
                       aria-label={`${t('reader.page')} ${page}`}
                       onClick={() => void goTo(page)}
                     >
@@ -786,6 +806,17 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
                 ) : null}
               </>
             ) : null}
+            {panel === 'highlights' || panel === 'notes' ? (
+              <PdfAnnotationPanel kind={panel} tools={annotations} ready={ready}
+                onPageNote={() => {
+                  const locator = placeRef.current && formatPdfLocator(placeRef.current);
+                  if (locator) annotations.startNote(locator);
+                }}
+                onNavigate={(locator) => {
+                  const point = pdfAnnotationPoint(locator);
+                  if (point) void goTo(point.page, point);
+                }} />
+            ) : null}
             {panel === 'bookmarks' ? (
               bookmarks.length === 0 ? (
                 <p className="placeholder">{t('reader.noBookmarks')}</p>
@@ -817,13 +848,42 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
           </aside>
         ) : null}
         <div className="reader-stage-wrap">
-          <div className="reader-stage pdf-stage" aria-busy={!ready}>
-            <div ref={scrollerRef} className="pdf-scroller">
-              <div ref={pageRef} className="pdf-page">
-                <canvas ref={canvasRef} />
-                <div ref={textRef} className="textLayer" />
-              </div>
-            </div>
+          <div className="reader-stage pdf-stage" aria-busy={!ready || painting}>
+            <PdfViewport
+              session={ready ? sessionRef.current : null}
+              place={view}
+              flow={flow}
+              scrollerRef={scrollerRef}
+              enterAtBottom={view !== null && bottomEntryRef.current === view}
+              annotations={annotations.marks}
+              onSelection={(selection) => {
+                annotations.setSelection(selection);
+                if (selection) setSelectionTooLarge(false);
+              }}
+              onSelectionTooLarge={() => setSelectionTooLarge(true)}
+              onPosition={remember}
+              onRendered={(request, rendered, actual) => {
+                if (request !== view) return;
+                renderedRef.current = rendered;
+                bottomEntryRef.current = null;
+                setScaleLabel(rendered.scale);
+                setPainting(false);
+                setCurrentPage(actual.page);
+                setPageDraft(String(actual.page));
+                remember(actual);
+                settleHeldEcho(viewportEpoch, request);
+                setError((previous) => previous === 'internal' ? null : previous);
+              }}
+              onReflow={(rendered, actual) => {
+                renderedRef.current = rendered;
+                setScaleLabel(rendered.scale);
+                remember(actual);
+              }}
+              onError={() => {
+                setPainting(false);
+                setError('internal');
+              }}
+            />
             {ready ? null : (
               <div className="reader-stage-loading" role="status">
                 <Loader2 className="spin" size={20} aria-hidden="true" />
@@ -833,6 +893,32 @@ export function PdfReader({ editionId, assetId, title }: { editionId: number; as
           </div>
         </div>
       </div>
+      <PdfSelectionToolbar tools={annotations} />
+      <footer className="reader-footer">
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.previousPage')}
+            title={t('reader.previousPage')}
+            disabled={!ready || currentPage <= 1}
+            onClick={() => void goTo(currentPage - 1)}
+          >
+            <ChevronLeft size={16} aria-hidden="true" />
+          </button>
+        <span className="reader-page-indicator">
+          {ready ? currentPage : '–'} <span aria-hidden="true">/</span> {pageCount || '–'}
+        </span>
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.nextPage')}
+            title={t('reader.nextPage')}
+            disabled={!ready || !view || currentPage >= pageCount}
+            onClick={() => void goTo(currentPage + 1)}
+          >
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+      </footer>
     </div>
   );
 }

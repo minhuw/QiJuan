@@ -1,7 +1,7 @@
 import { mapOutline } from './outline';
 import { hasSearchableText, runsFromTextItems, searchRuns, type PdfTextRun } from './search';
 import { pdfWorkerUrl } from './worker';
-import type { PdfPageBox, PdfSearchResult, PdfSession, RenderedPage, RenderPageInput } from './types';
+import type { PdfPageBox, PdfPageSize, PdfSearchResult, PdfSession, RenderedPage, RenderPageInput } from './types';
 
 type Pdfjs = typeof import('pdfjs-dist');
 type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
@@ -14,11 +14,13 @@ interface LiveRender {
   promise: Promise<void>;
 }
 
-interface RenderSlot {
+interface PageRenderState {
+  generation: number;
   task: LiveRender | null;
+  text: { cancel: () => void } | null;
 }
 
-function cancelRender(task: LiveRender | null | undefined) {
+function cancelRender(task: { cancel: () => void } | null | undefined) {
   if (!task) return;
   try {
     task.cancel();
@@ -65,9 +67,7 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
   let textKnown: boolean | null = null;
   let textProbe: Promise<boolean> | null = null;
   let destroyed = false;
-  let renderToken = 0;
-  let activeText: { cancel: () => void } | null = null;
-  const pageRender: RenderSlot = { task: null };
+  const pageRenders = new Map<HTMLCanvasElement, PageRenderState>();
   const thumbRenders = new Map<HTMLCanvasElement, { generation: number; task: LiveRender | null }>();
 
   async function loadRuns(pageNumber: number): Promise<PdfTextRun[]> {
@@ -76,7 +76,6 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
     const page = await doc.getPage(pageNumber);
     const content = await page.getTextContent();
     const next = runsFromTextItems(content.items);
-    page.cleanup();
     runs.set(pageNumber, next);
     return next;
   }
@@ -113,14 +112,24 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
       const [xMin, yMin, xMax, yMax] = page.view;
       return { xMin, yMin, xMax, yMax };
     },
+    async pageSize(pageNumber, zoom, containerWidth): Promise<PdfPageSize> {
+      const page = await doc.getPage(clampPage(pageNumber, pageCount));
+      const { scale, viewport } = pageGeometry(page, zoom, containerWidth);
+      return { scale, cssWidth: viewport.width, cssHeight: viewport.height };
+    },
     renderPage(input) {
-      return paintPage(pdfjs, doc, input, pageRender, () => {
-        renderToken += 1;
-        return renderToken;
-      }, () => renderToken, () => destroyed, (layer) => {
-        activeText?.cancel();
-        activeText = layer;
-      });
+      if (destroyed) return Promise.resolve(null);
+      const state = pageRenders.get(input.canvas) ?? { generation: 0, task: null, text: null };
+      pageRenders.set(input.canvas, state);
+      invalidatePage(state);
+      const generation = state.generation;
+      return paintPage(pdfjs, doc, input, state, () => !destroyed && state.generation === generation);
+    },
+    releasePage(canvas) {
+      const state = pageRenders.get(canvas);
+      if (!state) return;
+      invalidatePage(state);
+      pageRenders.delete(canvas);
     },
     async renderThumbnail(pageNumber, canvas, maxWidth) {
       if (destroyed || pageNumber < 1 || pageNumber > pageCount) return false;
@@ -128,9 +137,8 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
       state.generation += 1;
       const generation = state.generation;
       thumbRenders.set(canvas, state);
-      let page: PdfPage | null = null;
       try {
-        page = await doc.getPage(pageNumber);
+        const page = await doc.getPage(pageNumber);
         if (destroyed || state.generation !== generation) return true;
         cancelRender(state.task);
         state.task = null;
@@ -154,8 +162,6 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
       } catch (error) {
         if (renderWasReplaced(error, pdfjs, destroyed || state.generation !== generation)) return true;
         return false;
-      } finally {
-        if (page && state.generation === generation) page.cleanup();
       }
     },
     async search(query: string): Promise<PdfSearchResult> {
@@ -170,17 +176,14 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
     },
     async destroy() {
       destroyed = true;
-      renderToken += 1;
-      cancelRender(pageRender.task);
-      pageRender.task = null;
+      for (const state of pageRenders.values()) invalidatePage(state);
+      pageRenders.clear();
       for (const state of thumbRenders.values()) {
         state.generation += 1;
         cancelRender(state.task);
         state.task = null;
       }
       thumbRenders.clear();
-      activeText?.cancel();
-      activeText = null;
       runs.clear();
       await task.destroy().catch(() => undefined);
     },
@@ -193,56 +196,69 @@ function renderWasReplaced(error: unknown, pdfjs: Pdfjs, replaced: boolean): boo
   return replaced;
 }
 
+function invalidatePage(state: PageRenderState) {
+  state.generation += 1;
+  cancelRender(state.task);
+  state.task = null;
+  cancelRender(state.text);
+  state.text = null;
+}
+
+function pageGeometry(page: PdfPage, zoom: RenderPageInput['zoom'], containerWidth: number) {
+  const base = page.getViewport({ scale: 1 });
+  const fitted = base.width > 0 ? Math.max(containerWidth, 1) / base.width : 1;
+  const scale = clampScale(zoom === 'width' ? fitted : zoom);
+  return { scale, viewport: page.getViewport({ scale }) };
+}
+
 async function paintPage(
   pdfjs: Pdfjs,
   doc: PdfDocument,
   input: RenderPageInput,
-  slot: RenderSlot,
-  nextToken: () => number,
-  currentToken: () => number,
-  isDestroyed: () => boolean,
-  keepText: (layer: { cancel: () => void } | null) => void,
+  state: PageRenderState,
+  isCurrent: () => boolean,
 ): Promise<RenderedPage | null> {
-  const token = nextToken();
-  const pageNumber = clampPage(input.page, doc.numPages);
-  const page = await doc.getPage(pageNumber);
-  if (token !== currentToken() || isDestroyed()) return null;
-  keepText(null);
-  cancelRender(slot.task);
-  slot.task = null;
-  const base = page.getViewport({ scale: 1 });
-  const fitted = base.width > 0 ? Math.max(input.containerWidth, 1) / base.width : 1;
-  const scale = input.zoom === 'width' ? clampScale(fitted) : clampScale(input.zoom);
-  const viewport = page.getViewport({ scale });
-  const transform = prepareCanvas(input.canvas, viewport.width, viewport.height);
-  const task = page.render({ canvas: input.canvas, viewport, transform });
-  slot.task = task;
+  let page: PdfPage;
+  let geometry: ReturnType<typeof pageGeometry>;
   try {
+    page = await doc.getPage(clampPage(input.page, doc.numPages));
+    if (!isCurrent()) return null;
+    geometry = pageGeometry(page, input.zoom, input.containerWidth);
+    const { viewport } = geometry;
+    const transform = prepareCanvas(input.canvas, viewport.width, viewport.height);
+    const task = page.render({ canvas: input.canvas, viewport, transform });
+    state.task = task;
     await task.promise;
+    if (state.task === task) state.task = null;
   } catch (error) {
-    // Leave a failed task in the slot so the next paint cancels it and drops the canvas lock.
-    // A superseded paint is not a reader error: pdf.js rejects it with RenderingCancelledException,
-    // or with a same-canvas error when the previous task was still the owner.
-    if (renderWasReplaced(error, pdfjs, token !== currentToken() || isDestroyed())) return null;
+    // Keep a failed task so a replacement can cancel it and release the canvas lock.
+    if (renderWasReplaced(error, pdfjs, !isCurrent())) return null;
     throw new Error('pdf-render');
   }
-  if (slot.task === task) slot.task = null;
-  if (token !== currentToken() || isDestroyed()) return null;
+  if (!isCurrent()) return null;
+  const { scale, viewport } = geometry;
+  // PDF.js 6 positions text with CSS variables, including the PDF's user unit.
+  input.textLayer.style.setProperty('--total-scale-factor', String(scale * (viewport.userUnit ?? 1)));
   input.textLayer.replaceChildren();
+  let layer: InstanceType<Pdfjs['TextLayer']> | null = null;
   try {
     const content = await page.getTextContent();
-    if (token !== currentToken() || isDestroyed()) return null;
-    const layer = new pdfjs.TextLayer({
+    if (!isCurrent()) return null;
+    layer = new pdfjs.TextLayer({
       textContentSource: content,
       container: input.textLayer,
       viewport,
     });
-    keepText(layer);
+    state.text = layer;
     await layer.render();
   } catch {
-    keepText(null);
+    // A cancelled older layer must never clear or cancel its replacement.
+    if (layer && state.text === layer) {
+      cancelRender(layer);
+      state.text = null;
+    }
   }
-  if (token !== currentToken() || isDestroyed()) return null;
+  if (!isCurrent()) return null;
   return {
     scale,
     cssWidth: viewport.width,

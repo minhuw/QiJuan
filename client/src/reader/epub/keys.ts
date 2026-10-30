@@ -5,6 +5,10 @@ export interface ReaderKeyEvent {
   key: string;
   target: EventTarget | null;
   cancelable?: boolean;
+  shiftKey?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
   preventDefault: () => void;
 }
 
@@ -48,7 +52,7 @@ export function onReaderKey(
     prev: () => void;
   },
 ): void {
-  if (!options.enabled) return;
+  if (!options.enabled || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
   if (isTypingTarget(event.target)) return;
   const turn = pageTurnForKey(event.key, options.direction);
   if (!turn) return;

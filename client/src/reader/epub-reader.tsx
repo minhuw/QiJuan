@@ -2,28 +2,30 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import {
   AlertCircle,
-  AlignLeft,
   ArrowLeft,
-  BookOpen,
   Bookmark,
   ChevronLeft,
   ChevronRight,
   Highlighter,
+  Library,
   ListTree,
   Loader2,
   NotebookPen,
   RefreshCw,
   Search,
-  Type,
+  X,
 } from 'lucide-react';
 import { api, type ApiResult } from '../api';
 import { isSavedEpubLocator } from './epub/cfi';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
+import { readReaderFlow, saveReaderFlow } from './flow';
 import { openEpubSession } from './epub/session';
 import { fontStack, type ReaderFlow, type ReaderFont, type ReaderTheme } from './epub/settings';
 import type { BookFacts, EpubSession, SearchHit, TocItem, Typography } from './epub/types';
 import { useLocale } from '../shell';
+import { ReaderOptions, useReaderPanelFocus } from './reader-options';
+import { ReaderFlowSelect } from './flow-select';
 
 const FONT_SIZES = ['100%', '112%', '125%', '150%', '175%'];
 const LINE_HEIGHTS = ['1.45', '1.6', '1.8', '2'];
@@ -128,15 +130,14 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
   const [error, setError] = useState<string | null>(null);
   const [keptNewer, setKeptNewer] = useState(false);
   const [ready, setReady] = useState(false);
-  const [flow, setFlow] = useState<ReaderFlow>('paginated');
+  const [flow, setFlow] = useState<ReaderFlow>(readReaderFlow);
   const [font, setFont] = useState<ReaderFont>(INITIAL_TYPE.font);
   const [fontSize, setFontSize] = useState(INITIAL_TYPE.fontSize);
   const [lineHeight, setLineHeight] = useState(INITIAL_TYPE.lineHeight);
   const [margin, setMargin] = useState(INITIAL_TYPE.margin);
   const [theme, setTheme] = useState<ReaderTheme>(INITIAL_TYPE.theme);
   const [panel, setPanel] = useState<'contents' | 'search' | 'bookmarks' | 'highlights' | 'notes' | null>(null);
-  const [displayOpen, setDisplayOpen] = useState(false);
-  const displayPanelId = useId();
+  const panelRef = useReaderPanelFocus(panel);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [facts, setFacts] = useState<BookFacts>({ language: null, direction: 'ltr' });
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -161,8 +162,8 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
         return false;
       }
       setBookmarks(place.data.bookmarks);
-      setHighlights(place.data.highlights);
-      setNotes(place.data.notes);
+      setHighlights(place.data.highlights.filter((mark) => isSavedEpubLocator(mark.locator)));
+      setNotes(place.data.notes.filter((note) => note.locator === null || isSavedEpubLocator(note.locator)));
       const position = place.data.position;
       revisionRef.current = position?.revision ?? 0;
       if (adoptPosition && position && isSavedEpubLocator(position.locator)) {
@@ -264,13 +265,13 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
       revisionRef.current = place.data?.position?.revision ?? 0;
       if (place.data) {
         setBookmarks(place.data.bookmarks);
-        setHighlights(place.data.highlights);
-        setNotes(place.data.notes);
+        setHighlights(place.data.highlights.filter((mark) => isSavedEpubLocator(mark.locator)));
+        setNotes(place.data.notes.filter((note) => note.locator === null || isSavedEpubLocator(note.locator)));
       }
       try {
         const session = await openEpubSession(bytes, stage, {
           initialCfi,
-          flow: 'paginated',
+          flow,
           typography: typeRef.current,
         });
         if (!alive) {
@@ -279,7 +280,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
         }
         sessionRef.current = session;
         setToc(session.toc);
-        setPanel(session.toc.length > 0 ? 'contents' : null);
+        setPanel(null);
         setFacts(session.facts);
         for (const mark of place.data?.highlights ?? []) {
           if (isSavedEpubLocator(mark.locator)) session.highlight(mark.locator);
@@ -460,21 +461,16 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
     <div className={`reader-page theme-${theme}`}>
       <header className="reader-header">
         <div className="reader-header-top">
-          <div className="reader-breadcrumb">
-            <Link className="back-link" to={`/books/${editionId}`}>
-              <ArrowLeft size={15} aria-hidden="true" />
-              {t('reader.backToBook')}
-            </Link>
-            <span className="reader-separator" aria-hidden="true">
-              /
-            </span>
-            <Link className="text-link" to="/">
-              {t('reader.library')}
-            </Link>
-          </div>
-          <span className="reader-format-chip">{t('library.formatEpub')}</span>
+          <Link className="reader-back" to={`/books/${editionId}`} title={t('reader.backToBook')}>
+            <ArrowLeft size={18} aria-hidden="true" />
+            <span className="visually-hidden">{t('reader.backToBook')}</span>
+          </Link>
+          <h1 className="reader-title">{title}</h1>
+          <Link className="reader-library-link" to="/" title={t('reader.library')}>
+            <Library size={18} aria-hidden="true" />
+            <span className="visually-hidden">{t('reader.library')}</span>
+          </Link>
         </div>
-        <h1 className="reader-title">{title}</h1>
         {error ? (
           <div className="alert alert-error" role="alert">
             <AlertCircle size={16} aria-hidden="true" />
@@ -490,201 +486,170 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
       </header>
 
       <div className="reader-toolbar">
-        <div className="reader-group" role="group" aria-label={t('reader.paginated')}>
+        <ReaderFlowSelect
+          value={flow}
+          disabled={!ready}
+          onChange={(next) => {
+            saveReaderFlow(next);
+            setFlow(next);
+            void sessionRef.current?.setFlow(next);
+          }}
+        />
+        <div className="reader-main-actions">
           <button
             type="button"
-            className="reader-tool"
-            aria-pressed={flow === 'paginated'}
-            disabled={!ready}
-            onClick={() => {
-              setFlow('paginated');
-              void sessionRef.current?.setFlow('paginated');
-            }}
-          >
-            <BookOpen size={15} aria-hidden="true" />
-            {t('reader.paginated')}
-          </button>
-          <button
-            type="button"
-            className="reader-tool"
-            aria-pressed={flow === 'continuous'}
-            disabled={!ready}
-            onClick={() => {
-              setFlow('continuous');
-              void sessionRef.current?.setFlow('continuous');
-            }}
-          >
-            <AlignLeft size={15} aria-hidden="true" />
-            {t('reader.scrolled')}
-          </button>
-        </div>
-
-        <button
-          type="button"
-          className="reader-tool reader-display-toggle"
-          aria-expanded={displayOpen}
-          aria-controls={displayPanelId}
-          onClick={() => setDisplayOpen((value) => !value)}
-        >
-          <Type size={15} aria-hidden="true" />
-          {t('reader.display')}
-        </button>
-        <div id={displayPanelId} className={displayOpen ? 'reader-group reader-display-group is-open' : 'reader-group reader-display-group'}>
-          <span className="reader-group-label">
-            <Type size={14} aria-hidden="true" />
-            {t('reader.display')}
-          </span>
-          <label className="reader-select">
-            <span>{t('reader.font')}</span>
-            <select
-              value={font}
-              disabled={!ready}
-              onChange={(event) => {
-                const next = event.target.value === 'sans' ? 'sans' : 'serif';
-                setFont(next);
-                paint({ ...typeRef.current, font: next });
-              }}
-            >
-              <option value="serif">{t('reader.fontSerif')}</option>
-              <option value="sans">{t('reader.fontSans')}</option>
-            </select>
-          </label>
-          <label className="reader-select">
-            <span>{t('reader.fontSize')}</span>
-            <select
-              value={fontSize}
-              disabled={!ready}
-              onChange={(event) => {
-                setFontSize(event.target.value);
-                paint({ ...typeRef.current, fontSize: event.target.value });
-              }}
-            >
-              {FONT_SIZES.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="reader-select">
-            <span>{t('reader.lineHeight')}</span>
-            <select
-              value={lineHeight}
-              disabled={!ready}
-              onChange={(event) => {
-                setLineHeight(event.target.value);
-                paint({ ...typeRef.current, lineHeight: event.target.value });
-              }}
-            >
-              {LINE_HEIGHTS.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="reader-select">
-            <span>{t('reader.margins')}</span>
-            <select
-              value={margin}
-              disabled={!ready}
-              onChange={(event) => {
-                setMargin(event.target.value);
-                paint({ ...typeRef.current, margin: event.target.value });
-              }}
-            >
-              {MARGINS.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="reader-select">
-            <span>{t('reader.theme')}</span>
-            <select
-              value={theme}
-              disabled={!ready}
-              onChange={(event) => {
-                const next = event.target.value === 'ink' ? 'ink' : 'paper';
-                setTheme(next);
-                paint({ ...typeRef.current, theme: next });
-              }}
-            >
-              <option value="paper">{t('reader.themePaper')}</option>
-              <option value="ink">{t('reader.themeInk')}</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="reader-toolbar-end">
-          <button type="button" className="reader-tool" disabled={!ready} onClick={() => void addBookmark()}>
-            <Bookmark size={15} aria-hidden="true" />
-            {t('reader.bookmark')}
-          </button>
-        </div>
-      </div>
-
-      <div className="reader-panel-bar" role="toolbar" aria-label={t('reader.contents')}>
-        <div className="reader-group">
-          <button
-            type="button"
-            className="reader-tool"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.contents')}
+            title={t('reader.contents')}
             aria-pressed={panel === 'contents'}
             onClick={() => toggle('contents')}
           >
-            <ListTree size={15} aria-hidden="true" />
-            {t('reader.contents')}
+            <ListTree size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
-            className="reader-tool"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.search')}
+            title={t('reader.search')}
             aria-pressed={panel === 'search'}
             onClick={() => toggle('search')}
           >
-            <Search size={15} aria-hidden="true" />
-            {t('reader.search')}
+            <Search size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
-            className="reader-tool"
-            aria-pressed={panel === 'bookmarks'}
-            onClick={() => toggle('bookmarks')}
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.bookmark')}
+            title={t('reader.bookmark')}
+            disabled={!ready}
+            onClick={() => void addBookmark()}
           >
-            <Bookmark size={15} aria-hidden="true" />
-            {t('reader.bookmarks')}
+            <Bookmark size={16} aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            className="reader-tool"
-            aria-pressed={panel === 'highlights'}
-            onClick={() => toggle('highlights')}
-          >
-            <Highlighter size={15} aria-hidden="true" />
-            {t('reader.highlights')}
-          </button>
-          <button
-            type="button"
-            className="reader-tool"
-            aria-pressed={panel === 'notes'}
-            onClick={() => toggle('notes')}
-          >
-            <NotebookPen size={15} aria-hidden="true" />
-            {t('reader.notes')}
-          </button>
+          <ReaderOptions>
+            <div className="reader-preferences">
+                <label className="reader-select">
+                  <span>{t('reader.font')}</span>
+                  <select
+                    value={font}
+                    disabled={!ready}
+                    onChange={(event) => {
+                      const next = event.target.value === 'sans' ? 'sans' : 'serif';
+                      setFont(next);
+                      paint({ ...typeRef.current, font: next });
+                    }}
+                  >
+                    <option value="serif">{t('reader.fontSerif')}</option>
+                    <option value="sans">{t('reader.fontSans')}</option>
+                  </select>
+                </label>
+                <label className="reader-select">
+                  <span>{t('reader.fontSize')}</span>
+                  <select
+                    value={fontSize}
+                    disabled={!ready}
+                    onChange={(event) => {
+                      setFontSize(event.target.value);
+                      paint({ ...typeRef.current, fontSize: event.target.value });
+                    }}
+                  >
+                    {FONT_SIZES.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="reader-select">
+                  <span>{t('reader.lineHeight')}</span>
+                  <select
+                    value={lineHeight}
+                    disabled={!ready}
+                    onChange={(event) => {
+                      setLineHeight(event.target.value);
+                      paint({ ...typeRef.current, lineHeight: event.target.value });
+                    }}
+                  >
+                    {LINE_HEIGHTS.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="reader-select">
+                  <span>{t('reader.margins')}</span>
+                  <select
+                    value={margin}
+                    disabled={!ready}
+                    onChange={(event) => {
+                      setMargin(event.target.value);
+                      paint({ ...typeRef.current, margin: event.target.value });
+                    }}
+                  >
+                    {MARGINS.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="reader-select">
+                  <span>{t('reader.theme')}</span>
+                  <select
+                    value={theme}
+                    disabled={!ready}
+                    onChange={(event) => {
+                      const next = event.target.value === 'ink' ? 'ink' : 'paper';
+                      setTheme(next);
+                      paint({ ...typeRef.current, theme: next });
+                    }}
+                  >
+                    <option value="paper">{t('reader.themePaper')}</option>
+                    <option value="ink">{t('reader.themeInk')}</option>
+                  </select>
+                </label>
+            </div>
+            <div className="reader-option-actions">
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.bookmarks')}
+                title={t('reader.bookmarks')}
+                aria-pressed={panel === 'bookmarks'}
+                data-dismiss-options
+                onClick={() => toggle('bookmarks')}
+              >
+                <Bookmark size={16} aria-hidden="true" />
+                <span>{t('reader.bookmarks')}</span>
+              </button>
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.highlights')}
+                title={t('reader.highlights')}
+                aria-pressed={panel === 'highlights'}
+                data-dismiss-options
+                onClick={() => toggle('highlights')}
+              >
+                <Highlighter size={16} aria-hidden="true" />
+                <span>{t('reader.highlights')}</span>
+              </button>
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.notes')}
+                title={t('reader.notes')}
+                aria-pressed={panel === 'notes'}
+                data-dismiss-options
+                onClick={() => toggle('notes')}
+              >
+                <NotebookPen size={16} aria-hidden="true" />
+                <span>{t('reader.notes')}</span>
+              </button>
+            </div>
+          </ReaderOptions>
         </div>
-        {flow === 'paginated' ? (
-          <div className="reader-group reader-page-turn">
-            <button type="button" className="reader-tool" disabled={!ready} onClick={() => void sessionRef.current?.prev()}>
-              <ChevronLeft size={15} aria-hidden="true" />
-              {t('reader.previousPage')}
-            </button>
-            <button type="button" className="reader-tool" disabled={!ready} onClick={() => void sessionRef.current?.next()}>
-              {t('reader.nextPage')}
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
       </div>
 
       {selection ? (
@@ -715,12 +680,21 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
 
       <div className={panel ? 'reader-layout' : 'reader-layout reader-layout-solo'}>
         {panel ? (
-          <aside className="reader-panel" aria-label={t(`reader.${panel === 'contents' ? 'contents' : panel}`)}>
+          <aside ref={panelRef} tabIndex={-1} className="reader-panel" aria-label={t(`reader.${panel === 'contents' ? 'contents' : panel}`)}>
             <div className="reader-panel-head">
               <h2>{t(`reader.${panel === 'contents' ? 'contents' : panel}`)}</h2>
-              <span className="section-count">
+              <span>
                 {panel === 'contents' ? toc.length : panel === 'bookmarks' ? bookmarks.length : panel === 'highlights' ? highlights.length : panel === 'notes' ? notes.length : hits.length}
               </span>
+              <button
+                type="button"
+                className="reader-tool reader-tool-icon"
+                aria-label={t('reader.close')}
+                title={t('reader.close')}
+                onClick={() => setPanel(null)}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
             </div>
             {panel === 'contents' ? <TocTree items={toc} onOpen={go} /> : null}
             {panel === 'search' ? (
@@ -835,6 +809,30 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
           />
         </div>
       </div>
+      {flow === 'paginated' ? (
+        <footer className="reader-footer">
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.previousPage')}
+            title={t('reader.previousPage')}
+            disabled={!ready}
+            onClick={() => void sessionRef.current?.prev()}
+          >
+            <ChevronLeft size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.nextPage')}
+            title={t('reader.nextPage')}
+            disabled={!ready}
+            onClick={() => void sessionRef.current?.next()}
+          >
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </footer>
+      ) : null}
     </div>
   );
 }

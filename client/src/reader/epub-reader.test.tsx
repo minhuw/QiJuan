@@ -21,7 +21,7 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function install() {
+function install(annotations?: { highlights?: unknown[]; notes?: unknown[] }) {
   let relocated: (cfi: string) => void = () => {};
   const session = {
     facts: { language: 'zh-Hans', direction: 'ltr' as const },
@@ -56,6 +56,7 @@ function install() {
           bookmarks: [],
           highlights: [],
           notes: [],
+          ...annotations,
         });
       }
       if (url.endsWith('/reading-place') && init?.method === 'PUT') {
@@ -89,15 +90,37 @@ function renderReader(locale: string) {
 
 afterEach(() => {
   cleanup();
+  localStorage.removeItem('qijuan.reader.flow');
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
 describe('epub reader', () => {
+  it('keeps PDF annotations out of EPUB lists in an edition with both formats', async () => {
+    const pdf = 'pdfsel({"v":1,"pages":[{"page":1,"rects":[[1,2,3,4]]}]})';
+    const { session } = install({
+      highlights: [{ id: 1, locator: savedCfi, quote: 'EPUB passage', revision: 1 }, { id: 2, locator: pdf, quote: 'PDF passage', revision: 1 }],
+      notes: [{ id: 3, locator: savedCfi, body: 'EPUB thought', revision: 1 }, { id: 4, locator: pdf, body: 'PDF thought', revision: 1 }],
+    });
+    renderReader('en');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.options }));
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.highlights }));
+    expect(screen.getByRole('button', { name: 'EPUB passage' })).toBeInTheDocument();
+    expect(screen.queryByText('PDF passage')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.options }));
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.notes }));
+    expect(screen.getByRole('button', { name: 'EPUB thought' })).toBeInTheDocument();
+    expect(screen.queryByText('PDF thought')).not.toBeInTheDocument();
+    expect(session.highlight).toHaveBeenCalledWith(savedCfi);
+    expect(session.highlight).not.toHaveBeenCalledWith(pdf);
+    expect(session.underline).not.toHaveBeenCalledWith(pdf);
+  });
   it('shows the chrome in both locales and asks the rendition for the saved cfi', async () => {
     const english = install();
     const view = renderReader('en');
-    expect(await screen.findByRole('combobox', { name: catalogs.en.reader.fontSize })).toBeEnabled();
+    expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeEnabled());
     expect(openEpubSession).toHaveBeenCalledWith(
       expect.any(ArrayBuffer),
       expect.any(HTMLElement),
@@ -105,11 +128,16 @@ describe('epub reader', () => {
     );
     const passed = vi.mocked(openEpubSession).mock.calls[0]?.[2];
     expect(passed?.initialCfi?.startsWith('epubcfi(')).toBe(true);
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: catalogs.en.reader.fontSize })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.options }));
+    expect(screen.getByRole('combobox', { name: catalogs.en.reader.fontSize })).toBeEnabled();
     expect(screen.getByRole('combobox', { name: catalogs.en.reader.font })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: catalogs.en.reader.lineHeight })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: catalogs.en.reader.margins })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: catalogs.en.reader.theme })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: catalogs.en.reader.paginated })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toHaveValue('paginated');
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.contents }));
     expect(screen.getByRole('button', { name: 'Chapter' })).toBeInTheDocument();
     expect(document.querySelector('.reader-stage')).toHaveAttribute('lang', 'zh-Hans');
     expect(document.querySelector('.reader-stage')).toHaveAttribute('dir', 'ltr');
@@ -124,10 +152,11 @@ describe('epub reader', () => {
     fireEvent.keyDown(window, { key: 'ArrowLeft' });
     expect(english.session.next).toHaveBeenCalledTimes(1);
     expect(english.session.prev).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.scrolled }));
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.reader.mode }), { target: { value: 'continuous' } });
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     expect(english.session.next).toHaveBeenCalledTimes(1);
     expect(english.session.setFlow).toHaveBeenCalledWith('continuous');
+    expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toHaveValue('continuous');
 
     fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.search }));
     fireEvent.change(screen.getByRole('textbox', { name: catalogs.en.reader.search }), { target: { value: 'quiet' } });
@@ -140,15 +169,70 @@ describe('epub reader', () => {
     install();
     renderReader('zh-Hans');
     expect(await screen.findByRole('button', { name: catalogs['zh-Hans'].reader.contents })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs['zh-Hans'].reader.mode })).toBeEnabled());
+    expect(screen.getByRole('combobox', { name: catalogs['zh-Hans'].reader.mode })).toHaveValue('continuous');
+    expect(openEpubSession).toHaveBeenLastCalledWith(expect.any(ArrayBuffer), expect.any(HTMLElement), expect.objectContaining({ flow: 'continuous' }));
     expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.backToBook })).toHaveAttribute('href', '/books/3');
     expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.library })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: catalogs['zh-Hans'].reader.options }));
     expect(screen.getByRole('combobox', { name: catalogs['zh-Hans'].reader.theme })).toBeInTheDocument();
+  });
+
+  it('dismisses reading options with Escape and outside clicks, keeping typography mounted', async () => {
+    const { session } = install();
+    renderReader('en');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeEnabled());
+    const options = screen.getByRole('button', { name: catalogs.en.reader.options });
+    expect(options).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: catalogs.en.reader.previousPage }).closest('footer')).toHaveClass('reader-footer');
+    expect(screen.getByRole('button', { name: catalogs.en.reader.nextPage }).closest('footer')).toHaveClass('reader-footer');
+
+    fireEvent.click(options);
+    const fontSize = screen.getByRole('combobox', { name: catalogs.en.reader.fontSize });
+    fireEvent.change(fontSize, { target: { value: '150%' } });
+    await waitFor(() => expect(session.applyTypography).toHaveBeenCalledWith(expect.objectContaining({ fontSize: '150%' }), savedCfi));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(options).toHaveFocus();
+    expect(fontSize).toBeInTheDocument();
+    fireEvent.click(options);
+    expect(screen.getByRole('combobox', { name: catalogs.en.reader.fontSize })).toHaveValue('150%');
+    fireEvent.pointerDown(document.querySelector('.reader-stage')!);
+    expect(options).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.reader.mode }), { target: { value: 'continuous' } });
+    expect(screen.queryByRole('button', { name: catalogs.en.reader.previousPage })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: catalogs.en.reader.nextPage })).not.toBeInTheDocument();
+  });
+
+  it('opens secondary panels from options and closes panels explicitly', async () => {
+    install();
+    renderReader('en');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeEnabled());
+    for (const panel of ['bookmarks', 'highlights', 'notes'] as const) {
+      expect(screen.queryByRole('button', { name: catalogs.en.reader[panel] })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.options }));
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader[panel] }));
+      expect(screen.getByRole('complementary', { name: catalogs.en.reader[panel] })).toHaveFocus();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.close }));
+      expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: catalogs.en.reader.options })).toHaveFocus();
+    }
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.contents }));
+    expect(screen.getByRole('button', { name: 'Chapter' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.contents }));
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
   });
 
   it('debounces relocation and still sends the last cfi when leaving', async () => {
     const { emit, puts } = install();
     const view = renderReader('en');
-    expect(await screen.findByRole('combobox', { name: catalogs.en.reader.fontSize })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeEnabled());
     emit('epubcfi(/6/2!/4/1:0)');
     emit(movedCfi);
     expect(puts).toEqual([]);
@@ -217,7 +301,7 @@ describe('epub reader', () => {
       }),
     );
     renderReader('en');
-    expect(await screen.findByRole('combobox', { name: catalogs.en.reader.fontSize })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: catalogs.en.reader.mode })).toBeEnabled());
     harness.emit(movedCfi);
     await waitFor(() => expect(puts).toEqual([expect.objectContaining({ locator: movedCfi, revision: 4 })]));
     expect(await screen.findByText(catalogs.en.reader.newerKept)).toBeInTheDocument();
