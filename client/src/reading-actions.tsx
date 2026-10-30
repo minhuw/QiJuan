@@ -95,61 +95,48 @@ export function ReadingActions({
   }
 
   return (
-    <section className="panel reading-panel">
-      <div className="panel-head">
-        <div>
-          <p className="section-kicker">{t('reading.status')}</p>
-          <h2>{t('reading.title')}</h2>
-        </div>
-        {reading.rating ? (
-          <span className="rating-summary" aria-hidden="true">
-            <Star size={14} fill="currentColor" />
-            {reading.rating}/5
-          </span>
-        ) : null}
-      </div>
+    <section className="reading-panel" aria-label={t('reading.title')}>
       {error ? (
         <div className="alert alert-error" role="alert">
           {errorText(t, error)}
         </div>
       ) : null}
 
-      <div className="status-segments" role="group" aria-label={t('reading.title')}>
+      <select
+        className="reading-status"
+        aria-label={t('reading.status')}
+        value={reading.status ?? ''}
+        disabled={pending}
+        onChange={(event) => void save({ status: (event.target.value || null) as ReadingStatus | null })}
+      >
+        <option value="">{t('reading.none')}</option>
         {STATUSES.map((status) => (
-          <button
-            key={status}
-            type="button"
-            className={`segment segment-${status}`}
-            aria-pressed={reading.status === status}
-            disabled={pending}
-            onClick={() => void save({ status: reading.status === status ? null : status })}
-          >
-            <span className="status-dot" aria-hidden="true" />
-            {t(`reading.${status}`)}
-          </button>
+          <option key={status} value={status}>{t(`reading.${status}`)}</option>
         ))}
-      </div>
+      </select>
 
       <div className="reading-actions">
         <button
           type="button"
           className={reading.favorite ? 'btn btn-secondary is-on' : 'btn btn-secondary'}
+          aria-label={reading.favorite ? t('reading.unfavorite') : t('reading.favorite')}
+          title={reading.favorite ? t('reading.unfavorite') : t('reading.favorite')}
           aria-pressed={reading.favorite}
           disabled={pending}
           onClick={() => void save({ favorite: !reading.favorite })}
         >
           <Heart size={16} fill={reading.favorite ? 'currentColor' : 'none'} aria-hidden="true" />
-          {reading.favorite ? t('reading.unfavorite') : t('reading.favorite')}
         </button>
         <button
           type="button"
           className={reading.queued ? 'btn btn-secondary is-on' : 'btn btn-secondary'}
+          aria-label={reading.queued ? t('reading.removeQueue') : t('reading.addQueue')}
+          title={reading.queued ? t('reading.removeQueue') : t('reading.addQueue')}
           aria-pressed={reading.queued}
           disabled={pending}
           onClick={() => void save({ queued: !reading.queued })}
         >
           <ListPlus size={16} aria-hidden="true" />
-          {reading.queued ? t('reading.removeQueue') : t('reading.addQueue')}
         </button>
         <div className="rating-control" role="group" aria-label={t('reading.rating')}>
           {[1, 2, 3, 4, 5].map((score) => (
@@ -168,8 +155,8 @@ export function ReadingActions({
         </div>
       </div>
 
-      <div className="shelf-block">
-        <h3>{t('reading.shelves')}</h3>
+      <details className="shelf-block reading-shelves">
+        <summary>{t('reading.shelves')}</summary>
         {reading.shelves.length === 0 ? <p className="hint">{t('library.shelvesEmpty')}</p> : null}
         {reading.shelves.length > 0 ? (
           <ul className="reading-shelf-list">
@@ -207,7 +194,7 @@ export function ReadingActions({
             {t('reading.createShelf')}
           </button>
         </form>
-      </div>
+      </details>
     </section>
   );
 }

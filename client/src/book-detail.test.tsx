@@ -63,13 +63,29 @@ function installFetch(extra?: (url: string, init?: RequestInit) => Response | Pr
   );
 }
 
+async function openEditor() {
+  fireEvent.click(await screen.findByText(catalogs.en.book.editDetails));
+}
+
+function openFiles() {
+  fireEvent.click(screen.getByText(catalogs.en.book.filesExports));
+}
+
 describe('book detail', () => {
-  it('shows editable fields, formats, and a read link without merge or delete', async () => {
+  it('keeps editors and files closed until opened, with editable fields and read links in both locales', async () => {
     installFetch();
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
 
     expect(await screen.findByRole('heading', { name: 'The Tale' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: catalogs.en.book.title })).not.toBeVisible();
+    expect(screen.getByRole('button', { name: catalogs.en.book.runAgent })).not.toBeVisible();
+    expect(screen.getByRole('link', { name: `${catalogs.en.book.read} PDF` })).not.toBeVisible();
+    expect(screen.getByRole('link', { name: `${catalogs.en.book.readNow} EPUB` })).toHaveAttribute('href', '/books/3/read/9');
+    await openEditor();
+    openFiles();
+    expect(screen.getByRole('textbox', { name: catalogs.en.book.title })).toBeVisible();
+    expect(screen.getByRole('button', { name: catalogs.en.book.runAgent })).toBeVisible();
     expect(screen.getByLabelText(catalogs.en.book.title)).toHaveValue('The Tale');
     expect(screen.getByLabelText(catalogs.en.book.sortTitle)).toHaveValue('The Tale');
     expect(screen.getByLabelText(catalogs.en.book.alternateTitles)).toHaveValue('Story');
@@ -105,7 +121,9 @@ describe('book detail', () => {
     window.history.pushState({}, '', '/books/3');
     cleanup();
     render(<App locale="en" />);
-    expect(await screen.findByLabelText(catalogs.en.book.title)).toBeInTheDocument();
+    await openEditor();
+    openFiles();
+    expect(screen.getByLabelText(catalogs.en.book.title)).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
       target: { value: 'zh-Hans' },
     });
@@ -154,7 +172,8 @@ describe('book detail', () => {
     });
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
-    fireEvent.click(await screen.findByRole('button', { name: catalogs.en.book.runAgent }));
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.runAgent }));
     expect(await screen.findByText(catalogs.en.book.lookupRunning)).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
       target: { value: 'zh-Hans' },
@@ -253,7 +272,8 @@ describe('book detail', () => {
     });
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
-    const title = await screen.findByLabelText(catalogs.en.book.title);
+    await openEditor();
+    const title = screen.getByLabelText(catalogs.en.book.title);
     fireEvent.change(title, { target: { value: ' ' } });
     fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.save }));
     expect(screen.getByRole('alert')).toHaveTextContent(catalogs.en.errors.invalid_request);
@@ -345,7 +365,8 @@ describe('book detail', () => {
     });
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
-    const lookup = await screen.findByRole('button', { name: catalogs.en.book.runAgent });
+    await openEditor();
+    const lookup = screen.getByRole('button', { name: catalogs.en.book.runAgent });
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     try {
@@ -407,26 +428,153 @@ describe('book detail', () => {
     expect(await screen.findByRole('heading', { name: 'The Tale' })).toBeInTheDocument();
     expect(screen.getAllByText('Lin Qi').length).toBeGreaterThan(0);
     expect(screen.getAllByText('A short book.').length).toBeGreaterThan(0);
+    openFiles();
+    expect(screen.getByRole('button', { name: 'Add Weekend' })).not.toBeVisible();
+    fireEvent.click(screen.getByText(catalogs.en.reading.shelves));
     expect(screen.getByRole('heading', { name: catalogs.en.book.formats })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: `${catalogs.en.book.read} EPUB` })).toBeInTheDocument();
     expect(document.querySelector('img')).toBeNull();
     expect(screen.getByRole('link', { name: 'Previous: Earlier' })).toHaveAttribute('href', '/books/2');
     expect(screen.getByRole('link', { name: 'Next: Later' })).toHaveAttribute('href', '/books/8');
-    expect(screen.getByRole('button', { name: 'Add Weekend' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add Weekend' })).toBeVisible();
     expect(screen.getByRole('button', { name: catalogs.en.reading.favorite })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: `${catalogs.en.reading.rating} 5` })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reading.want }));
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.reading.status }), { target: { value: 'want' } });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: catalogs.en.reading.want })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('combobox', { name: catalogs.en.reading.status })).toHaveValue('want');
     });
     expect(bodies[0]).toContain('"status":"want"');
 
     fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
       target: { value: 'zh-Hans' },
     });
-    expect(screen.getByRole('button', { name: catalogs['zh-Hans'].reading.want })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: catalogs['zh-Hans'].reading.status })).toHaveValue('want');
     expect(screen.getByRole('link', { name: `${catalogs['zh-Hans'].reading.next}: Later` })).toBeInTheDocument();
     view.unmount();
   });
+
+  it('saves and clears status, toggles favorite, queue and rating, and manages shelves through the disclosure', async () => {
+    let current: EditionDetail = {
+      ...edition,
+      reading: {
+        status: null,
+        rating: null,
+        favorite: false,
+        queued: false,
+        shelves: [{ id: 4, name: 'Weekend', included: false }],
+      },
+    };
+    const requests: { url: string; method: string; body?: unknown }[] = [];
+    let releaseStatus: (response: Response) => void = () => {};
+    installFetch((url, init) => {
+      if (url === '/api/editions/3' && (!init?.method || init.method === 'GET')) return json({ edition: current });
+      if (!init?.method || init.method === 'GET') return null;
+      const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      requests.push({ url, method: init.method, body });
+      if (url === '/api/editions/3/reading') {
+        current = { ...current, reading: { ...current.reading!, ...body } };
+        if (body?.status === 'want') return new Promise<Response>((resolve) => { releaseStatus = resolve; });
+        return json({ edition: current });
+      }
+      if (url === '/api/shelves/4/items' || url === '/api/shelves/4/items/3') {
+        current = {
+          ...current,
+          reading: { ...current.reading!, shelves: [{ id: 4, name: 'Weekend', included: init.method === 'POST' }] },
+        };
+        return json({ edition: current });
+      }
+      if (url === '/api/shelves') {
+        current = {
+          ...current,
+          reading: { ...current.reading!, shelves: [...current.reading!.shelves, { id: 5, name: String(body?.name), included: true }] },
+        };
+        return json({ edition: current });
+      }
+      return null;
+    });
+    window.history.pushState({}, '', '/books/3');
+    render(<App locale="en" />);
+    const status = await screen.findByRole('combobox', { name: catalogs.en.reading.status });
+    expect(status).toHaveValue('');
+    expect(screen.getByRole('option', { name: catalogs.en.reading.none })).toBeInTheDocument();
+    fireEvent.change(status, { target: { value: 'want' } });
+    expect(status).toBeDisabled();
+    expect(screen.getByRole('button', { name: catalogs.en.reading.favorite })).toBeDisabled();
+    releaseStatus(json({ edition: current }));
+    await waitFor(() => expect(status).toHaveValue('want'));
+    expect(status).toBeEnabled();
+    fireEvent.change(status, { target: { value: '' } });
+    await waitFor(() => expect(status).toHaveValue(''));
+    expect(requests.slice(0, 2)).toEqual([
+      { url: '/api/editions/3/reading', method: 'PATCH', body: { status: 'want' } },
+      { url: '/api/editions/3/reading', method: 'PATCH', body: { status: null } },
+    ]);
+
+    for (const [off, on] of [
+      [catalogs.en.reading.favorite, catalogs.en.reading.unfavorite],
+      [catalogs.en.reading.addQueue, catalogs.en.reading.removeQueue],
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name: off }));
+      const active = await screen.findByRole('button', { name: on });
+      expect(active).toHaveAttribute('aria-pressed', 'true');
+      expect(active).toHaveAttribute('title', on);
+      fireEvent.click(active);
+      expect(await screen.findByRole('button', { name: off })).toHaveAttribute('aria-pressed', 'false');
+    }
+    const rating = screen.getByRole('button', { name: `${catalogs.en.reading.rating} 5` });
+    fireEvent.click(rating);
+    await waitFor(() => expect(rating).toHaveAttribute('aria-pressed', 'true'));
+    fireEvent.click(rating);
+    await waitFor(() => expect(rating).toHaveAttribute('aria-pressed', 'false'));
+    expect(requests.slice(-2).map((request) => request.body)).toEqual([{ rating: 5 }, { rating: null }]);
+
+    expect(screen.getByRole('button', { name: 'Add Weekend' })).not.toBeVisible();
+    fireEvent.click(screen.getByText(catalogs.en.reading.shelves));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Weekend' }));
+    const remove = await screen.findByRole('button', { name: 'Remove Weekend' });
+    expect(remove).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(remove);
+    expect(await screen.findByRole('button', { name: 'Add Weekend' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText(catalogs.en.reading.newShelf), { target: { value: '  Travel  ' } });
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reading.createShelf }));
+    expect(await screen.findByRole('button', { name: 'Remove Travel' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText(catalogs.en.reading.newShelf)).toHaveValue('');
+    expect(requests.slice(-3)).toEqual([
+      { url: '/api/shelves/4/items', method: 'POST', body: { editionId: 3 } },
+      { url: '/api/shelves/4/items/3', method: 'DELETE', body: undefined },
+      { url: '/api/shelves', method: 'POST', body: { name: 'Travel', editionId: 3 } },
+    ]);
+  });
+
+  it('keeps cover replacement and exports available to readers, and hides empty related sections', async () => {
+    let current = { ...edition, suggestions: [] };
+    let uploaded: FormData | null = null;
+    installFetch((url, init) => {
+      if (url === '/api/me') return json({ ...admin, user: { ...admin.user, role: 'reader' } });
+      if (url === '/api/editions/3' && (!init?.method || init.method === 'GET')) return json({ edition: current });
+      if (url === '/api/editions/3/cover' && init?.method === 'POST') {
+        uploaded = init.body as FormData;
+        current = { ...current, cover: { mediaType: 'image/png' } };
+        return json({ edition: current });
+      }
+      return null;
+    });
+    window.history.pushState({}, '', '/books/3');
+    render(<App locale="en" />);
+    expect(await screen.findByRole('heading', { name: 'The Tale' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: catalogs.en.reading.neighbors })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: catalogs.en.book.suggestions })).not.toBeInTheDocument();
+    await openEditor();
+    expect(screen.queryByRole('button', { name: catalogs.en.book.runAgent })).not.toBeInTheDocument();
+    const cover = new File(['cover'], 'cover.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText(catalogs.en.book.replaceCover), { target: { files: [cover] } });
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.replaceCover }));
+    expect(await screen.findByText(catalogs.en.book.saved)).toBeInTheDocument();
+    expect(uploaded!.get('cover')).toEqual(cover);
+    openFiles();
+    expect(screen.getByRole('link', { name: catalogs.en.book.exportMarkdown })).toHaveAttribute('href', '/api/editions/3/annotations?format=markdown');
+    expect(screen.getByRole('link', { name: catalogs.en.book.exportJson })).toHaveAttribute('href', '/api/editions/3/annotations?format=json');
+  });
+
 });

@@ -199,7 +199,9 @@
     "media": "Media",
     "files": "Files",
     "related": "Related",
-    "readNow": "Start reading"
+    "readNow": "Start reading",
+    "editDetails": "Edit details",
+    "filesExports": "Files and exports"
   },
   "library": {
     "search": "Search",
@@ -252,7 +254,8 @@
     "previous": "Previous",
     "next": "Next",
     "noNeighbors": "No other books in this series.",
-    "status": "Status"
+    "status": "Status",
+    "none": "No status"
   },
   "reader": {
     "backToBook": "Back to book",

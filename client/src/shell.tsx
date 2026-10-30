@@ -281,6 +281,7 @@ export function Shell({ locale, children }: { locale?: string; children?: ReactN
 
   const chrome = useMemo(() => ({ account, setAccount }), [account, setAccount]);
   const readerMode = Boolean(account) && /^\/books\/[1-9]\d*\/read\/[1-9]\d*$/.test(path);
+  const bookMode = Boolean(account) && /^\/books\/[1-9]\d*$/.test(path);
 
   const skip = (
     <a className="skip-link" href="#content">
@@ -292,15 +293,9 @@ export function Shell({ locale, children }: { locale?: string; children?: ReactN
     <LocaleContext.Provider value={value}>
       <AccountChromeContext.Provider value={chrome}>
         <div
-          className={
-            account
-              ? readerMode
-                ? 'app-shell reader-mode'
-                : menuOpen
-                  ? 'app-shell app-shell-nav-open'
-                  : 'app-shell'
-              : 'auth-shell'
-          }
+          className={account
+            ? `app-shell${readerMode ? ' reader-mode' : bookMode ? ' book-mode' : ''}${menuOpen && !readerMode ? ' app-shell-nav-open' : ''}`
+            : 'auth-shell'}
         >
           {skip}
           <div className="shell-chrome">

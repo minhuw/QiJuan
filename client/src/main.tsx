@@ -4,6 +4,7 @@ import { App } from './App';
 import './styles/tokens.css';
 import './styles/globals.css';
 import './styles/app.css';
+import './styles/book-reader.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Root element #root is missing');
