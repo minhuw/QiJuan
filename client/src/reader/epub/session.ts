@@ -1,4 +1,5 @@
 import ePub from 'epubjs';
+import { createPageScroll } from '../page-scroll';
 import { isSavedEpubLocator, locatorFromRelocation } from './cfi';
 import { onReaderKey, type ReaderKeyEvent } from './keys';
 import { isArchivedStylesheet, isFontOrImage, isRemoteUrl, neutralizeRemoteAssets, rewriteArchivedText, substituteFor } from './remote';
@@ -37,7 +38,10 @@ interface LooseRendition {
     underline: (cfi: string, data: object, cb: undefined, className: string, styles: object) => void;
     remove: (cfi: string, type: string) => void;
   };
-  hooks: { content: { register: (fn: (contents: LooseContents) => void) => void } };
+  hooks: {
+    content: { register: (fn: (contents: LooseContents) => void) => void };
+    unloaded: { register: (fn: (view: { document?: Document; contents?: LooseContents }) => void) => void };
+  };
   display: (target?: string) => Promise<unknown>;
   next: () => Promise<unknown>;
   prev: () => Promise<unknown>;
@@ -169,6 +173,8 @@ export async function openEpubSession(
   let currentCfi = options.initialCfi && isSavedEpubLocator(options.initialCfi) ? options.initialCfi : null;
   let rendition: LooseRendition;
   let destroyed = false;
+  let changingFlow = false;
+  let stopPageScroll = () => {};
   const relocated = new Set<(cfi: string) => void>();
   const selected = new Set<(cfi: string, quote: string) => void>();
   const marks = new Map<string, 'highlight' | 'underline'>();
@@ -190,8 +196,25 @@ export async function openEpubSession(
   }
 
   function wire(target: LooseRendition) {
+    const pageScroll = createPageScroll({
+      horizontal: true,
+      direction: facts.direction,
+      enabled: () => !destroyed && !changingFlow && mode === 'paginated',
+      canTurn: () => true,
+      turn: (turn) => turn === 'next' ? target.next() : target.prev(),
+    });
+    stopPageScroll = pageScroll.destroy;
+    const chapters = new WeakMap<Document, () => void>();
+    pageScroll.attach(element);
+    target.hooks.unloaded.register((view) => {
+      const document = view.document ?? view.contents?.document;
+      if (!document) return;
+      chapters.get(document)?.();
+      chapters.delete(document);
+    });
     target.hooks.content.register((contents) => {
       if (!contents.document) return;
+      if (mode === 'paginated') chapters.set(contents.document, pageScroll.attach(contents.document));
       try {
         neutralizeRemoteAssets(contents.document);
       } catch {
@@ -267,14 +290,26 @@ export async function openEpubSession(
     async setFlow(next: ReaderFlow) {
       if (destroyed || next === mode) return;
       mode = next;
+      changingFlow = true;
       const cfi = currentCfi;
+      stopPageScroll();
       try {
         rendition.destroy();
       } catch {
         // The previous view is already gone.
       }
-      rendition = mount(next);
-      await show(cfi);
+      try {
+        rendition = mount(next);
+        await show(cfi);
+        if (!destroyed) {
+          // epub.js can clear its views on resize before its first location report.
+          // Display again so a mode change that alters the toolbar height keeps the page visible.
+          rendition.resize(element.clientWidth || 320, element.clientHeight || 480, currentCfi ?? undefined);
+          await show(currentCfi);
+        }
+      } finally {
+        changingFlow = false;
+      }
     },
     async applyTypography(next: Typography, cfi: string | null) {
       typography = next;
@@ -285,7 +320,7 @@ export async function openEpubSession(
       if (target) await rendition.display(target);
     },
     resize(width: number, height: number, cfi: string | null) {
-      if (destroyed || width < 1 || height < 1) return;
+      if (destroyed || changingFlow || width < 1 || height < 1) return;
       const target = cfi && isSavedEpubLocator(cfi) ? cfi : undefined;
       rendition.resize(width, height, target);
     },
@@ -337,6 +372,7 @@ export async function openEpubSession(
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      stopPageScroll();
       relocated.clear();
       selected.clear();
       try {

@@ -51,8 +51,12 @@ function keyEvent(key: string, target: EventTarget | null = null) {
 
 function installBook(direction: 'ltr' | 'rtl') {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const contentHooks: Array<(contents: { document: Document }) => void> = [];
+  const unloadHooks: Array<(view: { document: Document }) => void> = [];
   const next = vi.fn(async () => {});
   const prev = vi.fn(async () => {});
+  const display = vi.fn(async () => {});
+  const resize = vi.fn();
   const rendition = {
     settings: { allowScriptedContent: false },
     themes: {
@@ -63,11 +67,14 @@ function installBook(direction: 'ltr' | 'rtl') {
       override: () => {},
     },
     annotations: { highlight: () => {}, underline: () => {}, remove: () => {} },
-    hooks: { content: { register: () => {} } },
-    display: async () => {},
+    hooks: {
+      content: { register: (hook: (contents: { document: Document }) => void) => { contentHooks.push(hook); } },
+      unloaded: { register: (hook: (view: { document: Document }) => void) => { unloadHooks.push(hook); } },
+    },
+    display,
     next,
     prev,
-    resize: () => {},
+    resize,
     direction: () => {},
     on(event: string, listener: (...args: unknown[]) => void) {
       const list = listeners.get(event) ?? [];
@@ -76,6 +83,8 @@ function installBook(direction: 'ltr' | 'rtl') {
     },
     destroy() {
       listeners.clear();
+      contentHooks.length = 0;
+      unloadHooks.length = 0;
     },
     emit(event: string, ...args: unknown[]) {
       for (const listener of [...(listeners.get(event) ?? [])]) listener(...args);
@@ -108,7 +117,15 @@ function installBook(direction: 'ltr' | 'rtl') {
     },
   };
   epubHarness.create = () => book;
-  return { archive, rendition, next, prev };
+  return {
+    archive, rendition, next, prev, display, resize,
+    loadChapter(document: Document) {
+      for (const hook of contentHooks) hook({ document });
+    },
+    unloadChapter(document: Document) {
+      for (const hook of unloadHooks) hook({ document });
+    },
+  };
 }
 
 async function openFake(direction: 'ltr' | 'rtl', flow: ReaderFlow = 'paginated') {
@@ -270,6 +287,89 @@ describe('epub adapter', () => {
     rendition.emit('keydown', keyEvent('ArrowRight'));
     expect(next).toHaveBeenCalledTimes(4);
     session.destroy();
+  });
+
+  it('turns pages from wheel gestures inside chapter frames and leaves continuous mode native', async () => {
+    let now = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { session, loadChapter, next, prev } = await openFake('ltr');
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    const chapter = frame.contentDocument!;
+    loadChapter(chapter);
+    const scroll = (deltaY: number) => {
+      const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
+      chapter.body.dispatchEvent(event);
+      return event;
+    };
+    try {
+      expect(scroll(100).defaultPrevented).toBe(true);
+      await Promise.resolve();
+      for (let i = 0; i < 8; i++) scroll(80);
+      expect(next).toHaveBeenCalledTimes(1);
+      now += 200;
+      scroll(-100);
+      expect(prev).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+
+      await session.setFlow('continuous');
+      loadChapter(chapter);
+      now += 200;
+      expect(scroll(100).defaultPrevented).toBe(false);
+      expect(next).toHaveBeenCalledTimes(1);
+      await session.setFlow('paginated');
+      loadChapter(chapter);
+      now += 200;
+      expect(scroll(100).defaultPrevented).toBe(true);
+      expect(next).toHaveBeenCalledTimes(2);
+      session.destroy();
+      expect(scroll(100).defaultPrevented).toBe(false);
+    } finally {
+      session.destroy();
+      frame.remove();
+      clock.mockRestore();
+    }
+  });
+
+  it.each(['ltr', 'rtl'] as const)('handles horizontal chapter wheels in %s reading order', async (direction) => {
+    const { session, loadChapter, next, prev } = await openFake(direction);
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    loadChapter(frame.contentDocument!);
+    frame.contentDocument!.body.dispatchEvent(new WheelEvent('wheel', { deltaX: 100, bubbles: true, cancelable: true }));
+    expect(direction === 'ltr' ? next : prev).toHaveBeenCalledTimes(1);
+    session.destroy();
+    frame.remove();
+  });
+
+  it('defers resize until a changed flow has finished mounting', async () => {
+    const { session, display, resize } = await openFake('ltr');
+    let finish!: () => void;
+    display.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const changing = session.setFlow('continuous');
+    session.resize(900, 600, null);
+    expect(resize).not.toHaveBeenCalled();
+    finish();
+    await changing;
+    expect(resize).toHaveBeenLastCalledWith(320, 480, undefined);
+    session.resize(900, 600, null);
+    expect(resize).toHaveBeenLastCalledWith(900, 600, undefined);
+    session.destroy();
+  });
+
+  it('detaches an unloaded chapter without disabling the active reader', async () => {
+    const { session, loadChapter, unloadChapter, next } = await openFake('ltr');
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    const chapter = frame.contentDocument!;
+    loadChapter(chapter);
+    unloadChapter(chapter);
+    const oldWheel = new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true });
+    chapter.body.dispatchEvent(oldWheel);
+    expect(oldWheel.defaultPrevented).toBe(false);
+    expect(next).not.toHaveBeenCalled();
+    loadChapter(chapter);
+    chapter.body.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }));
+    expect(next).toHaveBeenCalledTimes(1);
+    session.destroy();
+    frame.remove();
   });
 
   it('swaps horizontal arrows for an rtl book on the rendition keydown path', async () => {
