@@ -1,9 +1,14 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
-import { AlertCircle, CheckCircle2, Clock, Files, Loader2, Upload } from 'lucide-react';
-import { api, apiForm, type ImportJob, type LibraryInfo } from './api';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Link } from 'react-router';
+import { AlertCircle, Check, CheckCircle2, Clock, Loader2, Upload } from 'lucide-react';
+import { api, apiForm, type EditionDetail, type ImportItem, type ImportJob, type LibraryInfo } from './api';
 import { FileField } from './components/ui/file-field';
+import { schemeLabel } from './components/ui/identifiers';
+import { Entry } from './components/ui/entry';
 import { PageHeader } from './components/ui/page-header';
+import { StateTag, jobTone } from './components/ui/status-mark';
 import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
+import { TrajectoryDisclosure } from './components/ui/trajectory';
 import { useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -28,21 +33,59 @@ const ITEM_ERRORS = new Set([
   'metadata_incomplete',
   'metadata_assistant_unconfigured',
 ]);
-const ITEM_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'duplicate'] as const;
+const ITEM_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'duplicate', 'needs_confirmation'] as const;
+const CONFLICTS = new Set(['title', 'authors', 'format', 'ambiguous']);
+
+type ResolveAction = 'merge' | 'keep-separate';
 
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
   return t(`errors.${known}`);
 }
 
-function StatusIcon({ status }: { status: ImportJob['status'] }) {
-  if (status === 'succeeded') return <CheckCircle2 size={14} aria-hidden="true" />;
-  if (status === 'failed') return <AlertCircle size={14} aria-hidden="true" />;
-  if (status === 'running') return <Loader2 className="spin" size={14} aria-hidden="true" />;
-  return <Clock size={14} aria-hidden="true" />;
+/** "Keep private from the metadata agent" for one import batch. */
+function PrivateField({
+  checked,
+  hintId,
+  onChange,
+}: {
+  checked: boolean;
+  hintId: string;
+  onChange: (value: boolean) => void;
+}) {
+  const { t } = useLocale();
+  return (
+    <div className="private-field">
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={checked}
+          aria-describedby={hintId}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span>{t('metadataPrivate.label')}</span>
+      </label>
+      <p className="hint" id={hintId}>
+        {t('metadataPrivate.hint')}
+      </p>
+    </div>
+  );
 }
 
-export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
+function StatusIcon({ status }: { status: ImportJob['status'] }) {
+  if (status === 'succeeded') return <CheckCircle2 size={13} strokeWidth={1.5} aria-hidden="true" />;
+  if (status === 'failed') return <AlertCircle size={13} strokeWidth={1.5} aria-hidden="true" />;
+  if (status === 'running') return <Loader2 className="spin" size={13} strokeWidth={1.5} aria-hidden="true" />;
+  return <Clock size={13} strokeWidth={1.5} aria-hidden="true" />;
+}
+
+export function ImportScreen({
+  libraries,
+  role = 'reader',
+}: {
+  libraries: LibraryInfo[];
+  role?: 'admin' | 'reader';
+}) {
   const { t } = useLocale();
   const [jobs, setJobs] = useState<ImportJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,10 +93,23 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
   const [generation, setGeneration] = useState(0);
   const [libraryId, setLibraryId] = useState(libraries[0]?.id ?? 0);
   const [folder, setFolder] = useState('');
+  /** The batch's choice: keep these files away from the metadata assistant. */
+  const [keepPrivate, setKeepPrivate] = useState(false);
   const [pending, setPending] = useState(false);
+  const [resolving, setResolving] = useState<{ itemId: number; action: ResolveAction } | null>(null);
+  const [resolveError, setResolveError] = useState<{ itemId: number; code: string } | null>(null);
+  /** Decisions made on this screen, shown on their rows after the block closes. */
+  const [resolved, setResolved] = useState<Record<number, string>>({});
+  const [announcement, setAnnouncement] = useState('');
+  /** The books waiting items matched, for the side-by-side comparison. */
+  const [candidates, setCandidates] = useState<Record<number, EditionDetail | 'error'>>({});
+  const requested = useRef(new Set<number>());
+  const focusResolved = useRef<number | null>(null);
   const fileId = useId();
   const libraryFieldId = useId();
   const folderId = useId();
+  const resolvedId = useId();
+  const privateHintId = useId();
 
   const selected = libraries.find((library) => library.id === libraryId) ?? libraries[0];
   const running = jobs?.some((job) => job.status === 'queued' || job.status === 'running') ?? false;
@@ -74,6 +130,29 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
       active = false;
     };
   }, [generation]);
+
+  useEffect(() => {
+    if (role !== 'admin' || !jobs) return;
+    for (const job of jobs) {
+      for (const item of job.items) {
+        const id = item.status === 'needs_confirmation' ? item.candidateEditionId : null;
+        if (!id || requested.current.has(id)) continue;
+        requested.current.add(id);
+        void api<{ edition: EditionDetail }>(`/api/editions/${id}`).then((result) => {
+          const edition = result.data?.edition;
+          setCandidates((current) => ({ ...current, [id]: edition ?? 'error' }));
+        });
+      }
+    }
+  }, [jobs, role]);
+
+  // After a decision the block closes; keep focus on the note that replaced it.
+  useEffect(() => {
+    const itemId = focusResolved.current;
+    if (itemId === null) return;
+    focusResolved.current = null;
+    document.getElementById(`${resolvedId}-${itemId}`)?.focus();
+  }, [resolved, resolvedId]);
 
   useEffect(() => {
     if (!running) return;
@@ -97,7 +176,8 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
     for (const file of files) body.append('files', file);
     setPending(true);
     setFormError(null);
-    const result = await apiForm<{ job: ImportJob }>(`/api/imports?libraryId=${selected.id}`, body);
+    const query = `libraryId=${selected.id}${keepPrivate ? '&private=1' : ''}`;
+    const result = await apiForm<{ job: ImportJob }>(`/api/imports?${query}`, body);
     setPending(false);
     if (result.error || !result.data) {
       setFormError(result.error ?? 'internal');
@@ -121,7 +201,7 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
     setFormError(null);
     const result = await api<{ job: ImportJob }>('/api/imports/folder', {
       method: 'POST',
-      body: { libraryId: selected.id, path: folder.trim() },
+      body: { libraryId: selected.id, path: folder.trim(), ...(keepPrivate ? { private: true } : {}) },
     });
     setPending(false);
     if (result.error || !result.data) {
@@ -132,15 +212,33 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
     setGeneration((value) => value + 1);
   }
 
+  async function resolve(job: ImportJob, item: ImportItem, action: ResolveAction) {
+    setResolving({ itemId: item.id, action });
+    setResolveError(null);
+    setAnnouncement('');
+    const result = await api<{ job: ImportJob }>(`/api/jobs/${job.id}/items/${item.id}/${action}`, { method: 'POST' });
+    setResolving(null);
+    if (result.error) {
+      setResolveError({ itemId: item.id, code: result.error });
+      return;
+    }
+    const candidate = item.candidateEditionId ? candidates[item.candidateEditionId] : undefined;
+    const title = candidate && candidate !== 'error' ? candidate.title : '';
+    const note =
+      action === 'merge'
+        ? t('import.resolve.merged').replace('{title}', title || `#${item.candidateEditionId ?? ''}`)
+        : t('import.resolve.separated');
+    focusResolved.current = item.id;
+    setResolved((current) => ({ ...current, [item.id]: note }));
+    setAnnouncement(note);
+    const next = result.data?.job;
+    if (next) setJobs((current) => current?.map((entry) => (entry.id === next.id ? next : entry)) ?? current);
+    setGeneration((value) => value + 1);
+  }
+
   return (
     <div className="import-page">
       <PageHeader
-        eyebrow={
-          <span className="eyebrow">
-            <Upload size={13} aria-hidden="true" />
-            {t('import.eyebrow')}
-          </span>
-        }
         title={t('import.title')}
         description={t('import.subtitle')}
       />
@@ -156,22 +254,21 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
       ) : null}
 
       <div className="import-layout">
-        <section className="panel import-form-panel" aria-labelledby="import-form-heading">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('import.upload')}</p>
-              <h2 id="import-form-heading">{t('import.newImport')}</h2>
-            </div>
-            {running ? (
-              <span className="status-pill status-pill-running">
-                <Loader2 className="spin" size={12} aria-hidden="true" />
+        <Entry
+          title={t('import.newImport')}
+          titleId="import-form-heading"
+          className="import-form-panel"
+          meta={
+            running ? (
+              <StateTag tone="warning">
+                <Loader2 className="spin" size={12} strokeWidth={1.5} aria-hidden="true" />
                 {t('import.status.running')}
-              </span>
-            ) : null}
-          </div>
-
+              </StateTag>
+            ) : null
+          }
+        >
           {libraries.length === 0 ? (
-            <EmptyState icon={<Files size={22} />} title={t('import.noLibraries')} />
+            <EmptyState compact title={t('import.noLibraries')} />
           ) : (
             <>
               <div className="field">
@@ -210,8 +307,13 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
                     emptyLabel={t('import.none')}
                     multiple
                   />
-                  <button className="btn btn-primary btn-block" type="submit" disabled={pending}>
-                    <Upload size={16} aria-hidden="true" />
+                  <PrivateField
+                    checked={keepPrivate}
+                    hintId={privateHintId}
+                    onChange={setKeepPrivate}
+                  />
+                  <button className="btn btn-primary" type="submit" disabled={pending}>
+                    <Upload size={15} strokeWidth={1.5} aria-hidden="true" />
                     {t('import.upload')}
                   </button>
                 </form>
@@ -229,54 +331,61 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
                     />
                     <p className="hint">{t('import.folderHint')}</p>
                   </div>
-                  <button className="btn btn-primary btn-block" type="submit" disabled={pending}>
-                    <Upload size={16} aria-hidden="true" />
+                  <PrivateField
+                    checked={keepPrivate}
+                    hintId={privateHintId}
+                    onChange={setKeepPrivate}
+                  />
+                  <button className="btn btn-primary" type="submit" disabled={pending}>
+                    <Upload size={15} strokeWidth={1.5} aria-hidden="true" />
                     {t('import.folderSubmit')}
                   </button>
                 </form>
               )}
             </>
           )}
-        </section>
+        </Entry>
 
-        <section className="panel import-history-panel" aria-labelledby="import-history-heading">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('import.progress')}</p>
-              <h2 id="import-history-heading">{t('import.history')}</h2>
-            </div>
-            {jobs ? <span className="section-count">{jobs.length}</span> : null}
-          </div>
+        <Entry
+          title={t('import.history')}
+          titleId="import-history-heading"
+          className="import-history-panel"
+          meta={jobs ? <span className="num">{jobs.length}</span> : null}
+        >
           {running ? (
             <p className="alert alert-info" role="status">
-              <Loader2 className="spin" size={16} aria-hidden="true" />
+              <Loader2 className="spin" size={16} strokeWidth={1.5} aria-hidden="true" />
               {t('import.running')}
             </p>
           ) : null}
+          <p className="visually-hidden" role="status" aria-live="polite">
+            {announcement}
+          </p>
           {jobs === null && !error ? <LoadingState /> : null}
           {jobs && jobs.length === 0 ? (
             <EmptyState
-              icon={<Files size={22} />}
+              compact
               title={t('import.empty')}
               description={t('import.emptyHint')}
             />
           ) : null}
           {jobs?.map((job) => {
-            const done = job.summary.succeeded + job.summary.failed + job.summary.duplicate;
+            const done =
+              job.summary.succeeded + job.summary.failed + job.summary.duplicate + (job.summary.needs_confirmation ?? 0);
             const percent = job.summary.total > 0 ? Math.round((done / job.summary.total) * 100) : 0;
             return (
               <article key={job.id} className="job-card">
                 <div className="job-head">
                   <div>
-                    <p className="section-kicker">
+                    <h3>{t('import.summary')}</h3>
+                    <p className="job-source">
                       {t('import.source')} · {job.source}
                     </p>
-                    <h2>{t('import.summary')}</h2>
                   </div>
-                  <span className={`status-pill status-pill-${job.status}`}>
+                  <StateTag tone={jobTone(job.status)}>
                     <StatusIcon status={job.status} />
                     {t(`import.status.${job.status}`)}
-                  </span>
+                  </StateTag>
                 </div>
                 <div className="progress-track" aria-hidden="true">
                   <span className={`progress-fill progress-${job.status}`} style={{ width: `${percent}%` }} />
@@ -284,11 +393,11 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
                 <dl className="summary-grid">
                   {ITEM_STATUSES.map((status) => (
                     <div key={status} className="summary-cell">
-                      <dt>
-                        <span className={`status-dot status-dot-${status}`} aria-hidden="true" />
-                        {t(`import.status.${status}`)}
-                      </dt>
-                      <dd className={`status-${status}`}>{job.summary[status]}</dd>
+                      <dt>{t(`import.status.${status}`)}</dt>
+                      {/* A state colour only marks a count that is there; a zero stays ink. */}
+                      <dd className={(job.summary[status] ?? 0) > 0 ? `num status-${status}` : 'num'}>
+                        {job.summary[status] ?? 0}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -299,15 +408,219 @@ export function ImportScreen({ libraries }: { libraries: LibraryInfo[] }) {
                       <span className={`import-status status-${item.status}`}>
                         {t(`import.status.${item.status}`)}
                         {item.error && ITEM_ERRORS.has(item.error) ? ` · ${t(`import.fileError.${item.error}`)}` : ''}
+                        {item.status === 'succeeded' && item.merged ? ` · ${t('import.merged')}` : ''}
+                        {item.error === 'metadata_assistant_unconfigured' && role === 'admin' ? (
+                          <>
+                            {' · '}
+                            <Link className="text-link import-settings-link" to="/settings">
+                              {t('import.settingsLink')}
+                            </Link>
+                          </>
+                        ) : null}
                       </span>
+                      {item.status === 'needs_confirmation' ? (
+                        role === 'admin' ? (
+                          <ConfirmMatch
+                            item={item}
+                            candidate={item.candidateEditionId ? candidates[item.candidateEditionId] : undefined}
+                            pending={resolving?.itemId === item.id ? resolving.action : null}
+                            disabled={resolving !== null}
+                            error={resolveError?.itemId === item.id ? resolveError.code : null}
+                            onResolve={(action) => void resolve(job, item, action)}
+                          />
+                        ) : (
+                          <div className="import-resolve">
+                            <p className="hint">
+                              {item.candidateEditionId ? (
+                                <Link className="text-link" to={`/books/${item.candidateEditionId}`}>
+                                  {t('import.resolve.candidate').replace('{id}', String(item.candidateEditionId))}
+                                </Link>
+                              ) : null}
+                              {(item.conflicts ?? [])
+                                .filter((reason) => CONFLICTS.has(reason))
+                                .map((reason) => ` · ${t(`import.conflict.${reason}`)}`)
+                                .join('')}
+                            </p>
+                            <p className="hint">{t('import.resolve.waiting')}</p>
+                          </div>
+                        )
+                      ) : null}
+                      {resolved[item.id] && item.status !== 'needs_confirmation' ? (
+                        <p className="import-resolved" id={`${resolvedId}-${item.id}`} tabIndex={-1}>
+                          <Check size={14} strokeWidth={1.5} aria-hidden="true" />
+                          {resolved[item.id]}
+                        </p>
+                      ) : null}
+                      {item.trajectoryId ? (
+                        <TrajectoryDisclosure
+                          trajectoryId={item.trajectoryId}
+                          stepCount={item.trajectoryStepCount}
+                          active={item.status === 'running' || item.status === 'queued'}
+                        />
+                      ) : null}
                     </li>
                   ))}
                 </ul>
               </article>
             );
           })}
-        </section>
+        </Entry>
       </div>
+    </div>
+  );
+}
+
+/** The file's format: from the server's summary, else from the file name. */
+function incomingFormat(item: ImportItem): string | null {
+  if (item.incoming) return item.incoming.format.toUpperCase();
+  const match = /\.(epub|pdf)$/i.exec(item.filename);
+  return match ? match[1]!.toUpperCase() : null;
+}
+
+/** Plain-language lede for a match that was not merged on its own. */
+function confirmLede(t: (key: string) => string, item: ImportItem): string[] {
+  const scheme = item.incoming ? schemeLabel(t, item.incoming.identifier.scheme) : t('import.confirm.anyScheme');
+  const conflicts = new Set(item.conflicts ?? []);
+  const key =
+    conflicts.has('title') && conflicts.has('authors')
+      ? 'both'
+      : conflicts.has('title')
+        ? 'title'
+        : conflicts.has('authors')
+          ? 'authors'
+          : 'same';
+  const sentences = [t(`import.confirm.${key}`).replace('{scheme}', scheme)];
+  const format = incomingFormat(item);
+  if (conflicts.has('format') && format) sentences.push(t('import.confirm.format').replace('{format}', format));
+  if (conflicts.has('ambiguous')) sentences.push(t('import.confirm.ambiguous'));
+  return sentences;
+}
+
+/**
+ * A file that shares an identifier with a book in the library but differs from
+ * it: the two side by side, the differing fields marked, and the two decisions.
+ */
+function ConfirmMatch({
+  item,
+  candidate,
+  pending,
+  disabled,
+  error,
+  onResolve,
+}: {
+  item: ImportItem;
+  candidate: EditionDetail | 'error' | undefined;
+  pending: ResolveAction | null;
+  disabled: boolean;
+  error: string | null;
+  onResolve: (action: ResolveAction) => void;
+}) {
+  const { t } = useLocale();
+  const ledeId = useId();
+  const conflicts = new Set(item.conflicts ?? []);
+  const existing = candidate && candidate !== 'error' ? candidate : null;
+  const incoming = item.incoming;
+  const unknown = <span className="confirm-unknown">{t('import.confirm.unknown')}</span>;
+  const existingFormats = existing
+    ? [...new Set(existing.assets.map((asset) => asset.format.toUpperCase()))].join(' · ')
+    : null;
+  const rows: Array<{ key: string; label: string; conflict: boolean; mine: ReactNode; theirs: ReactNode }> = [
+    {
+      key: 'title',
+      label: t('book.title'),
+      conflict: conflicts.has('title'),
+      mine: incoming?.title ?? (incoming ? unknown : item.filename),
+      theirs: existing ? (
+        <Link className="text-link confirm-title" to={`/books/${existing.id}`}>
+          {existing.title}
+        </Link>
+      ) : null,
+    },
+    {
+      key: 'authors',
+      label: t('book.authors'),
+      conflict: conflicts.has('authors'),
+      mine: incoming && incoming.authors.length > 0 ? incoming.authors.join(', ') : unknown,
+      theirs: existing ? existing.authors.join(', ') || unknown : null,
+    },
+    {
+      key: 'format',
+      label: t('import.confirm.format_label'),
+      conflict: conflicts.has('format'),
+      mine: <span className="format-text">{incomingFormat(item) ?? ''}</span>,
+      theirs: existing ? <span className="format-text">{existingFormats}</span> : null,
+    },
+  ];
+  const errorMessage = error === 'not_found' ? t('import.resolve.gone') : t('import.resolve.error');
+  return (
+    <div
+      className="confirm-block"
+      role="group"
+      aria-labelledby={ledeId}
+      aria-busy={pending ? true : undefined}
+    >
+      <p className="confirm-lede" id={ledeId}>
+        {confirmLede(t, item).join(' ')}
+      </p>
+      {candidate === 'error' ? null : (
+        <table className="confirm-compare">
+          <thead>
+            <tr>
+              <td />
+              <th scope="col">{t('import.confirm.incoming')}</th>
+              <th scope="col">{t('import.confirm.existing')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key} className={row.conflict ? 'confirm-conflict' : undefined}>
+                <th scope="row">
+                  <span className="confirm-mark" aria-hidden="true" />
+                  {row.label}
+                  {row.conflict ? <span className="visually-hidden"> ({t('import.confirm.differs')})</span> : null}
+                </th>
+                <td>{row.mine}</td>
+                <td>{existing ? row.theirs : <span className="confirm-unknown">{t('import.confirm.loading')}</span>}</td>
+              </tr>
+            ))}
+            {incoming ? (
+              <tr className="confirm-matched">
+                <th scope="row">
+                  <span className="confirm-mark" aria-hidden="true" />
+                  {t('import.confirm.matched')}
+                </th>
+                <td colSpan={2}>
+                  <span className="confirm-scheme">{schemeLabel(t, incoming.identifier.scheme)}</span>{' '}
+                  <span className="num">{incoming.identifier.value}</span>
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      )}
+      <div className="confirm-actions">
+        <button className="btn btn-sm" type="button" disabled={disabled} onClick={() => onResolve('merge')}>
+          {pending === 'merge' ? <Loader2 className="spin" size={14} strokeWidth={1.5} aria-hidden="true" /> : null}
+          {t('import.resolve.merge')}
+        </button>
+        <button className="btn btn-sm" type="button" disabled={disabled} onClick={() => onResolve('keep-separate')}>
+          {pending === 'keep-separate' ? (
+            <Loader2 className="spin" size={14} strokeWidth={1.5} aria-hidden="true" />
+          ) : null}
+          {t('import.resolve.separate')}
+        </button>
+        {item.candidateEditionId ? (
+          <Link className="text-link confirm-open" to={`/books/${item.candidateEditionId}`}>
+            {t('import.confirm.open')}
+          </Link>
+        ) : null}
+        {pending ? <span className="hint-inline">{t('import.resolve.pending')}</span> : null}
+      </div>
+      {error ? (
+        <p className="alert alert-error" role="alert">
+          {errorMessage}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -1,27 +1,27 @@
 @import 'tailwindcss';
 
 @theme inline {
-  --font-sans: var(--font-ui);
+  --font-sans: var(--font-serif);
   --font-serif: var(--font-serif);
-  --color-background: var(--paper);
+  --color-background: var(--stock);
   --color-foreground: var(--ink);
-  --color-card: var(--paper-raised);
+  --color-card: var(--stock);
   --color-card-foreground: var(--ink);
-  --color-primary: var(--jade);
-  --color-primary-foreground: #fffdfa;
-  --color-secondary: var(--surface-muted);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--stock);
+  --color-secondary: var(--stock-raised);
   --color-secondary-foreground: var(--ink);
-  --color-muted: var(--surface-muted);
+  --color-muted: var(--stock-shade);
   --color-muted-foreground: var(--ink-muted);
-  --color-accent: var(--jade-soft);
-  --color-accent-foreground: var(--jade);
-  --color-destructive: var(--vermilion);
-  --color-border: var(--line);
-  --color-input: var(--line);
-  --color-ring: var(--focus-ring);
-  --radius-lg: 1rem;
-  --radius-md: 0.75rem;
-  --radius-sm: 0.5rem;
+  --color-accent: var(--stock-shade);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--vermilion-text);
+  --color-border: var(--hairline);
+  --color-input: var(--ink);
+  --color-ring: var(--ink);
+  --radius-lg: 2px;
+  --radius-md: 2px;
+  --radius-sm: 2px;
 }
 
 @layer base {
@@ -34,18 +34,28 @@
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
+    scrollbar-color: var(--hairline) transparent;
+    scrollbar-width: thin;
   }
 
   body {
     min-height: 100vh;
     margin: 0;
-    background: var(--paper);
+    background: var(--stock);
     color: var(--ink);
-    font-family: var(--font-ui);
-    font-size: 0.9375rem;
-    line-height: 1.55;
+    caret-color: var(--ink);
+    font-family: var(--font-serif);
+    font-size: var(--text);
+    font-optical-sizing: auto;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  :lang(zh),
+  :lang(zh-Hans) {
+    letter-spacing: 0;
+    word-spacing: 0;
   }
 
   h1,
@@ -58,6 +68,8 @@
 
   a {
     color: inherit;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.22em;
   }
 
   button,
@@ -82,7 +94,23 @@
   }
 
   ::selection {
-    background: color-mix(in srgb, var(--jade) 24%, transparent);
+    background: var(--selection);
+    color: var(--ink);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid var(--stock);
+    border-radius: var(--radius);
+    background: var(--hairline);
   }
 
   :focus:not(:focus-visible) {

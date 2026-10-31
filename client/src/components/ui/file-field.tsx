@@ -58,11 +58,9 @@ export function FileField({
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
       >
-        <span className="file-drop-icon" aria-hidden="true">
-          <UploadCloud size={22} />
-        </span>
+        <UploadCloud className="file-drop-icon" size={20} strokeWidth={1.5} aria-hidden="true" />
         <div className="file-drop-copy">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => inputRef.current?.click()}>
+          <button type="button" className="btn btn-sm" onClick={() => inputRef.current?.click()}>
             {chooseLabel}
           </button>
           <span className="file-drop-name">{summary}</span>

@@ -7,13 +7,13 @@ import {
   FlaskConical,
   Globe,
   KeyRound,
+  ListRestart,
   Loader2,
   Lock,
   Save,
   ShieldCheck,
   Trash2,
   User,
-  Users,
 } from 'lucide-react';
 import {
   api,
@@ -26,7 +26,9 @@ import {
 } from './api';
 import { BackupScreen } from './backup-screen';
 import { BookDetail, ReaderPage } from './book-detail';
+import { Entry } from './components/ui/entry';
 import { PageHeader } from './components/ui/page-header';
+import { StateTag } from './components/ui/status-mark';
 import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { ImportScreen } from './import-screen';
 import { LibraryBrowser } from './library';
@@ -50,6 +52,9 @@ const ASSISTANT_ERROR_CODES = new Set([
   'metadata_assistant_unconfigured',
   'assistant_unauthorized',
   'assistant_invalid_response',
+  'assistant_models_unsupported',
+  'assistant_timeout',
+  'assistant_base_url_invalid',
   'metadata_unavailable',
 ]);
 
@@ -69,6 +74,25 @@ function pathId(value: string): number | null {
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
   return t(`errors.${known}`);
+}
+
+type WebSearchMode = MetadataAssistantInfo['webSearch'];
+
+function fill(text: string, values: Record<string, string>): string {
+  return text.replace(/\{(\w+)\}/g, (match, key: string) => values[key] ?? match);
+}
+
+/** Mirrors the server: DeepSeek's own key serves Search and Fetch only for api.deepseek.com. */
+function isDeepSeekUrl(value: string): boolean {
+  try {
+    return new URL(value.trim()).hostname.toLowerCase() === 'api.deepseek.com';
+  } catch {
+    return false;
+  }
+}
+
+function defaultWebSearch(baseUrl: string): WebSearchMode {
+  return isDeepSeekUrl(baseUrl) ? 'deepseek' : 'off';
 }
 
 function assistantErrorText(t: (key: string) => string, code: string | null): string {
@@ -168,7 +192,7 @@ export function Gate() {
   }
 
   if (location.pathname === '/import') {
-    return <ImportScreen libraries={phase.libraries} />;
+    return <ImportScreen libraries={phase.libraries} role={phase.user.role} />;
   }
 
   const readMatch = location.pathname.match(/^\/books\/([1-9]\d*)\/read\/([1-9]\d*)$/);
@@ -191,12 +215,10 @@ export function Gate() {
 }
 
 function AuthLayout({
-  eyebrow,
   title,
   description,
   children,
 }: {
-  eyebrow: string;
   title: string;
   description?: string;
   children: ReactNode;
@@ -215,18 +237,17 @@ function AuthLayout({
             人有闲读。
           </p>
           <div className="auth-spines" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-            <span />
-            <span />
+            <span className="plate-vermilion" />
+            <span className="plate-ultramarine" />
+            <span className="plate-ochre" />
+            <span className="plate-emerald" />
+            <span className="plate-umber" />
           </div>
           <p className="auth-story-foot">{t('auth.media')}</p>
         </div>
       </section>
       <section className="auth-panel-wrap">
         <div className="auth-panel">
-          <p className="eyebrow">{eyebrow}</p>
           <h1>{title}</h1>
           {description ? <p className="auth-lede">{description}</p> : null}
           {children}
@@ -270,7 +291,7 @@ function SetupForm({ onDone }: { onDone: (user: Account, library: LibraryInfo) =
   }
 
   return (
-    <AuthLayout eyebrow={t('setup.eyebrow')} title={t('setup.title')} description={t('setup.description')}>
+    <AuthLayout title={t('setup.title')} description={t('setup.description')}>
       <form className="form" noValidate onSubmit={(event) => void submit(event)}>
         {error ? (
           <div className="alert alert-error" role="alert">
@@ -338,7 +359,7 @@ function LoginForm({ onDone }: { onDone: (user: Account, libraries: LibraryInfo[
   }
 
   return (
-    <AuthLayout eyebrow={t('brand.tagline')} title={t('login.title')} description={t('login.description')}>
+    <AuthLayout title={t('login.title')} description={t('login.description')}>
       <form className="form" noValidate onSubmit={(event) => void submit(event)}>
         {error ? (
           <div className="alert alert-error" role="alert">
@@ -462,12 +483,6 @@ function Settings() {
   return (
     <div className="settings-page">
       <PageHeader
-        eyebrow={
-          <span className="eyebrow">
-            <Users size={13} aria-hidden="true" />
-            {t('settings.eyebrow')}
-          </span>
-        }
         title={t('settings.title')}
         description={t('settings.subtitle')}
       />
@@ -477,13 +492,7 @@ function Settings() {
       ) : null}
 
       <div className="settings-grid">
-        <section className="panel create-reader-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('settings.accounts')}</p>
-              <h2>{t('settings.newReader')}</h2>
-            </div>
-          </div>
+        <Entry title={t('settings.newReader')} className="create-reader-panel">
           <p className="panel-lede">{t('settings.readerHint')}</p>
           <form className="form" noValidate onSubmit={(event) => void create(event)}>
             <TextField
@@ -507,30 +516,27 @@ function Settings() {
               {t('settings.create')}
             </button>
           </form>
-        </section>
+        </Entry>
 
-        <section className="panel readers-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('settings.access')}</p>
-              <h2>{t('settings.allReaders')}</h2>
-            </div>
-            {users ? <span className="section-count">{readers.length}</span> : null}
-          </div>
+        <Entry
+          title={t('settings.allReaders')}
+          className="readers-panel"
+          meta={users ? <span className="num">{readers.length}</span> : null}
+        >
           {users === null ? (
             <LoadingState />
           ) : readers.length === 0 ? (
-            <EmptyState icon={<Users size={22} />} title={t('settings.empty')} />
+            <EmptyState compact title={t('settings.empty')} />
           ) : (
             <ul className="reader-list">
               {readers.map((reader) => (
                 <li key={reader.id} className="reader-row">
                   <div className="reader-head">
-                    <span className="avatar avatar-light" aria-hidden="true">
+                    <span className="account-initial" aria-hidden="true">
                       {reader.username.charAt(0).toLocaleUpperCase()}
                     </span>
                     <div>
-                      <h2>{reader.username}</h2>
+                      <h3>{reader.username}</h3>
                       <p className="hint">{t('account.reader')}</p>
                     </div>
                   </div>
@@ -543,7 +549,7 @@ function Settings() {
                           <span className="grant-library">{library.name}</span>
                           <button
                             type="button"
-                            className={granted ? 'btn btn-secondary btn-sm grant-on' : 'btn btn-ghost btn-sm'}
+                            className={granted ? 'btn btn-sm btn-pressed' : 'btn btn-sm'}
                             aria-label={`${action} ${library.name} ${reader.username}`}
                             aria-pressed={granted}
                             onClick={() => void toggle(reader.id, library.id, granted)}
@@ -558,7 +564,7 @@ function Settings() {
               ))}
             </ul>
           )}
-        </section>
+        </Entry>
       </div>
 
       <AssistantPanel />
@@ -572,16 +578,25 @@ function AssistantPanel() {
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
+  // Untouched, the web search choice follows the base URL; once chosen, it is sent as is.
+  const [webSearchChoice, setWebSearchChoice] = useState<WebSearchMode | null>(null);
+  const [searchApiKey, setSearchApiKey] = useState('');
+  const [googleBooksApiKey, setGoogleBooksApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState<'save' | 'test' | 'remove' | null>(null);
+  const [pending, setPending] = useState<'save' | 'test' | 'remove' | 'models' | null>(null);
+  const [models, setModels] = useState<string[] | null>(null);
+  const modelListId = useId();
 
   function applyAssistant(next: MetadataAssistantInfo) {
     setAssistant(next);
     setBaseUrl(next.baseUrl ?? '');
     setModel(next.model ?? '');
     setApiKey('');
+    setWebSearchChoice(null);
+    setSearchApiKey('');
+    setGoogleBooksApiKey('');
   }
 
   async function load() {
@@ -604,6 +619,32 @@ function AssistantPanel() {
 
   const configured = assistant?.configured === true;
   const canSave = baseUrl.trim() !== '' && model.trim() !== '';
+  const canFetchModels = baseUrl.trim() !== '';
+  const baseUrlChanged = baseUrl.trim().replace(/\/+$/, '') !== (assistant?.baseUrl ?? '');
+  const webSearch: WebSearchMode =
+    webSearchChoice ??
+    (assistant && configured && !baseUrlChanged ? assistant.webSearch : defaultWebSearch(baseUrl));
+  // The agent's own key serves Search and Fetch only when the agent itself is DeepSeek.
+  const needsSearchKey = webSearch === 'deepseek' && !isDeepSeekUrl(baseUrl);
+
+  async function fetchModels() {
+    if (!canFetchModels) return;
+    setPending('models');
+    setError(null);
+    setNotice(null);
+    setModels(null);
+    const result = await api<{ models: string[] }>('/api/metadata/assistant/models', {
+      method: 'POST',
+      body: { baseUrl: baseUrl.trim(), apiKey },
+    });
+    setPending(null);
+    if (result.error || !result.data) {
+      // The form values are not saved yet, so a 400 here means the base URL itself.
+      setError(result.error === 'invalid_request' ? 'assistant_base_url_invalid' : (result.error ?? 'internal'));
+      return;
+    }
+    setModels(result.data.models);
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -617,7 +658,14 @@ function AssistantPanel() {
     setNotice(null);
     const result = await api<{ assistant: MetadataAssistantInfo }>('/api/metadata/assistant', {
       method: 'PUT',
-      body: { baseUrl: baseUrl.trim(), model: model.trim(), apiKey },
+      body: {
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+        apiKey,
+        ...(webSearchChoice !== null || baseUrlChanged ? { webSearch } : {}),
+        searchApiKey,
+        googleBooksApiKey,
+      },
     });
     setPending(null);
     if (result.error || !result.data) {
@@ -656,18 +704,18 @@ function AssistantPanel() {
   }
 
   return (
-    <section className="panel assistant-panel" aria-busy={loading || pending !== null}>
-      <div className="panel-head">
-        <div>
-          <p className="section-kicker">{t('settings.assistant.kicker')}</p>
-          <h2>{t('settings.assistant.title')}</h2>
-        </div>
-        {assistant ? (
-          <span className={configured ? 'status-pill status-pill-succeeded' : 'status-pill status-pill-queued'}>
+    <Entry
+      title={t('settings.assistant.title')}
+      className="assistant-panel"
+      busy={loading || pending !== null}
+      meta={
+        assistant ? (
+          <StateTag tone={configured ? 'success' : 'quiet'}>
             {configured ? t('settings.assistant.configured') : t('settings.assistant.notConfigured')}
-          </span>
-        ) : null}
-      </div>
+          </StateTag>
+        ) : null
+      }
+    >
 
       {loading ? (
         <LoadingState />
@@ -684,9 +732,10 @@ function AssistantPanel() {
           ) : null}
           {configured && assistant.model ? (
             <div className="assistant-summary">
-              <span className="chip chip-accent">{assistant.model}</span>
+              <span className="tag">{assistant.model}</span>
+              {assistant.webSearchAvailable ? <span className="tag">{t('settings.assistant.webSearchOn')}</span> : null}
               {assistant.apiKeyConfigured && assistant.apiKeyHint ? (
-                <span className="chip chip-mono">••••{assistant.apiKeyHint}</span>
+                <span className="tag num">••••{assistant.apiKeyHint}</span>
               ) : null}
             </div>
           ) : null}
@@ -701,7 +750,10 @@ function AssistantPanel() {
                 placeholder="https://api.deepseek.com/v1"
                 icon={<Globe size={16} />}
                 disabled={pending !== null}
-                onChange={setBaseUrl}
+                onChange={(next) => {
+                  setBaseUrl(next);
+                  setModels(null);
+                }}
               />
               <TextField
                 label={t('settings.assistant.model')}
@@ -712,7 +764,39 @@ function AssistantPanel() {
                 icon={<Cpu size={16} />}
                 disabled={pending !== null}
                 onChange={setModel}
+                list={models && models.length > 0 ? modelListId : undefined}
+                action={
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={pending !== null || !canFetchModels}
+                    onClick={() => void fetchModels()}
+                  >
+                    {pending === 'models' ? (
+                      <Loader2 className="spin" size={15} aria-hidden="true" />
+                    ) : (
+                      <ListRestart size={15} aria-hidden="true" />
+                    )}
+                    {t('settings.assistant.fetchModels')}
+                  </button>
+                }
+                status={
+                  models === null ? null : models.length > 0 ? (
+                    <>
+                      {t('settings.assistant.modelsFound')} · <span className="num">{models.length}</span>
+                    </>
+                  ) : (
+                    t('settings.assistant.modelsNone')
+                  )
+                }
               />
+              {models && models.length > 0 ? (
+                <datalist id={modelListId}>
+                  {models.map((id) => (
+                    <option key={id} value={id} />
+                  ))}
+                </datalist>
+              ) : null}
             </div>
             <TextField
               label={t('settings.assistant.apiKey')}
@@ -727,6 +811,57 @@ function AssistantPanel() {
               icon={<KeyRound size={16} />}
               disabled={pending !== null}
               onChange={setApiKey}
+            />
+            <fieldset className="field radio-field" disabled={pending !== null}>
+              <legend>{t('settings.assistant.webSearch')}</legend>
+              <div className="segmented">
+                {(['deepseek', 'off'] as const).map((mode) => (
+                  <label className="segment" key={mode}>
+                    <input
+                      type="radio"
+                      name="webSearch"
+                      value={mode}
+                      checked={webSearch === mode}
+                      onChange={() => setWebSearchChoice(mode)}
+                    />
+                    <span>{t(`settings.assistant.webSearchMode.${mode}`)}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="hint">
+                {webSearch === 'deepseek' ? t('settings.assistant.webSearchHint') : t('settings.assistant.webSearchOffHint')}
+              </p>
+              {webSearch === 'deepseek' ? <p className="hint">{t('settings.assistant.webSearchCost')}</p> : null}
+            </fieldset>
+            {needsSearchKey ? (
+              <TextField
+                label={t('settings.assistant.searchApiKey')}
+                type="password"
+                value={searchApiKey}
+                autoComplete="off"
+                hint={
+                  assistant.searchApiKeyConfigured
+                    ? fill(t('settings.assistant.searchKeyKept'), { hint: assistant.searchApiKeyHint ?? '' })
+                    : t('settings.assistant.searchKeyRequired')
+                }
+                icon={<KeyRound size={16} />}
+                disabled={pending !== null}
+                onChange={setSearchApiKey}
+              />
+            ) : null}
+            <TextField
+              label={t('settings.assistant.googleBooksApiKey')}
+              type="password"
+              value={googleBooksApiKey}
+              autoComplete="off"
+              hint={
+                assistant.googleBooksApiKeyConfigured
+                  ? fill(t('settings.assistant.googleKeyKept'), { hint: assistant.googleBooksApiKeyHint ?? '' })
+                  : t('settings.assistant.googleKeyOptional')
+              }
+              icon={<KeyRound size={16} />}
+              disabled={pending !== null}
+              onChange={setGoogleBooksApiKey}
             />
             <div className="form-footer assistant-actions">
               <button className="btn btn-primary" type="submit" disabled={pending !== null || !canSave}>
@@ -767,7 +902,7 @@ function AssistantPanel() {
           </form>
         </>
       )}
-    </section>
+    </Entry>
   );
 }
 
@@ -781,6 +916,9 @@ function TextField({
   icon,
   disabled,
   onChange,
+  list,
+  action,
+  status,
 }: {
   label: string;
   type: 'text' | 'password';
@@ -791,32 +929,51 @@ function TextField({
   icon?: ReactNode;
   disabled?: boolean;
   onChange: (value: string) => void;
+  list?: string;
+  action?: ReactNode;
+  status?: ReactNode;
 }) {
   const hintId = useId();
   const inputId = useId();
+  const control = (
+    <div className={icon ? 'input-with-icon' : undefined}>
+      {icon ? (
+        <span className="input-icon" aria-hidden="true">
+          {icon}
+        </span>
+      ) : null}
+      <input
+        id={inputId}
+        type={type}
+        value={value}
+        name={type === 'password' ? 'password' : label}
+        autoComplete={autoComplete}
+        autoCapitalize={type === 'text' ? 'none' : undefined}
+        spellCheck={false}
+        placeholder={placeholder}
+        disabled={disabled}
+        list={list}
+        aria-describedby={hint ? hintId : undefined}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
+  );
   return (
     <div className="field">
       <label htmlFor={inputId}>{label}</label>
-      <div className={icon ? 'input-with-icon' : undefined}>
-        {icon ? (
-          <span className="input-icon" aria-hidden="true">
-            {icon}
-          </span>
-        ) : null}
-        <input
-          id={inputId}
-          type={type}
-          value={value}
-          name={type === 'password' ? 'password' : label}
-          autoComplete={autoComplete}
-          autoCapitalize={type === 'text' ? 'none' : undefined}
-          spellCheck={false}
-          placeholder={placeholder}
-          disabled={disabled}
-          aria-describedby={hint ? hintId : undefined}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </div>
+      {action ? (
+        <div className="field-with-action">
+          {control}
+          {action}
+        </div>
+      ) : (
+        control
+      )}
+      {action ? (
+        <p className="hint" role="status">
+          {status}
+        </p>
+      ) : null}
       {hint ? (
         <p className="hint" id={hintId}>
           {hint}

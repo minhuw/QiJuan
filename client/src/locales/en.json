@@ -12,8 +12,6 @@
     "skip": "Skip to content",
     "navigation": "Navigation",
     "version": "Version",
-    "workspace": "Workspace",
-    "admin": "Administration",
     "openMenu": "Open navigation",
     "closeMenu": "Close navigation"
   },
@@ -22,12 +20,10 @@
     "placeholder": "Nothing here yet.",
     "libraries": "Your libraries",
     "noAccess": "No library has been granted yet.",
-    "subtitle": "Your private shelf, at a glance.",
     "books": "Books",
     "inProgress": "In progress",
     "shelvesCount": "Shelves",
-    "addBooks": "Add books",
-    "allBooks": "All books"
+    "addBooks": "Add books"
   },
   "setup": {
     "title": "Set up this library",
@@ -35,7 +31,6 @@
     "password": "Password",
     "libraryName": "Library name",
     "submit": "Create administrator",
-    "eyebrow": "First run",
     "description": "Create the administrator account and the first library."
   },
   "login": {
@@ -63,16 +58,12 @@
     "grant": "Grant",
     "revoke": "Revoke",
     "empty": "No readers yet.",
-    "eyebrow": "Household",
     "subtitle": "Reader accounts and library access.",
-    "accounts": "Accounts",
     "newReader": "New reader",
     "readerHint": "Readers can browse, read, and keep their own place.",
-    "access": "Library access",
     "allReaders": "All readers",
     "assistant": {
       "title": "Metadata agent",
-      "kicker": "Metadata",
       "hint": "The model receives the filename and bibliographic fields, never book text, OCR, or file contents.",
       "baseUrl": "Base URL",
       "model": "Model",
@@ -87,10 +78,31 @@
       "testOk": "Connection test succeeded.",
       "saved": "Metadata agent saved.",
       "removed": "Metadata agent removed.",
+      "fetchModels": "Fetch models",
+      "modelsFound": "Models listed",
+      "modelsNone": "The server lists no models. Type the model name instead.",
+      "webSearchOn": "Web search on",
+      "webSearch": "Web search",
+      "webSearchMode": {
+        "deepseek": "DeepSeek",
+        "off": "Off"
+      },
+      "webSearchHint": "The agent may search the web and read pages through DeepSeek when Open Library lacks a book. Queries contain the title, authors, filename, or ISBN, never book text.",
+      "webSearchOffHint": "The agent uses Open Library and Google Books only.",
+      "webSearchCost": "From 1 November 2026, DeepSeek charges for each web search and page read.",
+      "searchApiKey": "DeepSeek search key",
+      "searchKeyKept": "A DeepSeek key ending in {hint} is saved. Leave this blank to keep it.",
+      "searchKeyRequired": "Required for web search, because the model server above is not DeepSeek.",
+      "googleBooksApiKey": "Google Books API key",
+      "googleKeyKept": "A Google Books key ending in {hint} is saved. Leave this blank to keep it.",
+      "googleKeyOptional": "Optional. Without a key, lookups share an anonymous quota that is often used up.",
       "errors": {
         "metadata_assistant_unconfigured": "Set a base URL and model first.",
         "assistant_unauthorized": "The model server rejected the API key.",
         "assistant_invalid_response": "The model server returned an unexpected response.",
+        "assistant_models_unsupported": "This server doesn't list its models. Type the model name instead.",
+        "assistant_timeout": "The model server took too long to answer. Try again, or type the model name.",
+        "assistant_base_url_invalid": "Check the base URL. It must be an http or https address with no query or fragment.",
         "metadata_unavailable": "The model server could not be reached."
       }
     }
@@ -117,7 +129,8 @@
       "running": "Running",
       "succeeded": "Succeeded",
       "failed": "Failed",
-      "duplicate": "Duplicate"
+      "duplicate": "Duplicate",
+      "needs_confirmation": "Needs confirmation"
     },
     "fileError": {
       "unsupported": "Unsupported file",
@@ -126,15 +139,50 @@
       "metadata_incomplete": "Metadata incomplete",
       "metadata_assistant_unconfigured": "Metadata agent not configured"
     },
-    "eyebrow": "Library intake",
     "subtitle": "Add EPUB and PDF files, then follow each import.",
     "newImport": "New import",
     "managedHint": "Files are copied into the managed library.",
     "indexedHint": "Files stay in place and are indexed from the folder.",
-    "progress": "Activity",
     "history": "Import history",
     "emptyHint": "Uploads and folder imports will appear here.",
-    "source": "Source"
+    "source": "Source",
+    "settingsLink": "Open settings",
+    "conflict": {
+      "title": "title differs",
+      "authors": "no shared author",
+      "format": "format already present",
+      "ambiguous": "matches several books"
+    },
+    "resolve": {
+      "candidate": "Same identifier as book #{id}",
+      "merge": "Add to this book",
+      "separate": "Keep as a separate book",
+      "error": "The decision could not be saved. Try again.",
+      "gone": "That book is no longer in the library. Keep this file as a separate book instead.",
+      "pending": "Saving the decision…",
+      "merged": "Added to “{title}”. The import will finish in a moment.",
+      "separated": "Kept as a separate book. The import will finish in a moment.",
+      "waiting": "Waiting for an admin to decide."
+    },
+    "merged": "Added to an existing book",
+    "confirm": {
+      "same": "This file has the same {scheme} as a book you already have.",
+      "title": "This file has the same {scheme} as a book you already have, but the titles differ.",
+      "authors": "This file has the same {scheme} as a book you already have, but the authors differ.",
+      "both": "This file has the same {scheme} as a book you already have, but the titles and authors differ.",
+      "format": "That book already has a {format} file.",
+      "ambiguous": "Its identifiers also match other books in this library.",
+      "anyScheme": "identifier",
+      "incoming": "This file",
+      "existing": "In your library",
+      "field": "Field",
+      "format_label": "Format",
+      "matched": "Matched by",
+      "differs": "differs",
+      "unknown": "Not in the file",
+      "open": "Open that book",
+      "loading": "Loading the book in your library…"
+    }
   },
   "catalog": {
     "edit": "Edit several books",
@@ -146,7 +194,8 @@
     "tagsHint": "Separate tags with commas.",
     "series": "Series",
     "apply": "Apply to selected",
-    "editHint": "Select several books and apply the same value."
+    "editHint": "Select several books and apply the same value.",
+    "selected": "Selected"
   },
   "book": {
     "back": "Back to library",
@@ -164,13 +213,18 @@
     "publishedDate": "Publication date",
     "language": "Language",
     "identifiers": "Identifiers",
-    "identifiersHint": "One per line: scheme|value.",
+    "identifiersHint": "Choose a scheme and enter the value. Leave a row empty to drop it.",
     "tags": "Tags",
     "tagsHint": "Separate tags with commas.",
     "save": "Save",
     "saved": "Saved.",
+    "format": "Format",
     "formats": "Formats",
+    "published": "Published",
+    "atAGlance": "At a glance",
     "read": "Read",
+    "download": "Download",
+    "originalFilename": "Original file name",
     "cover": "Cover",
     "replaceCover": "Replace cover",
     "chooseCover": "Choose image",
@@ -184,11 +238,19 @@
     "applyRunning": "Applying the selected fields…",
     "preview": "Suggested changes",
     "previewSource": "AI agent",
-    "coverProposed": "New cover image available",
+    "coverCurrent": "Current",
+    "coverFound": "Found",
+    "coverFrom": "from",
+    "noCover": "No cover",
+    "noCoverFound": "No cover found",
     "kept": "Kept",
     "unchanged": "Unchanged",
     "confirm": "Apply selected",
     "noSuggestion": "No suggestion.",
+    "lookupPendingOne": "A metadata lookup found 1 change",
+    "lookupPendingMany": "A metadata lookup found {count} changes",
+    "lookupReview": "Review",
+    "discardPreview": "Discard suggestions",
     "readPlaceholder": "The reader is not here yet.",
     "missing": "Missing",
     "exportMarkdown": "Export highlights and notes (Markdown)",
@@ -201,7 +263,54 @@
     "related": "Related",
     "readNow": "Start reading",
     "editDetails": "Edit details",
-    "filesExports": "Files and exports"
+    "filesExports": "Files and exports",
+    "detailsTitle": "Details",
+    "overview": "Overview",
+    "tabsLabel": "Book sections",
+    "translatedBy": "Translated by {names}",
+    "suggestionReason": {
+      "identifier": "Same identifier: {identifier}",
+      "identifierAny": "Same identifier",
+      "title_author": "Similar title and author"
+    }
+  },
+  "ratings": {
+    "label": "Ratings elsewhere",
+    "provider": {
+      "douban": "Douban",
+      "goodreads": "Goodreads",
+      "open_library": "Open Library",
+      "google_books": "Google Books",
+      "worldcat": "WorldCat"
+    },
+    "count": "{count} ratings",
+    "countOne": "{count} rating",
+    "alsoOn": "Also on",
+    "refresh": "Refresh ratings",
+    "refreshing": "Fetching ratings…",
+    "refreshFailed": "Ratings could not be refreshed. Try again.",
+    "updated": "Updated {date}"
+  },
+  "identifiers": {
+    "scheme": {
+      "isbn": "ISBN",
+      "issn": "ISSN",
+      "doi": "DOI",
+      "oclc": "OCLC",
+      "lccn": "LCCN",
+      "olid": "Open Library",
+      "google_books": "Google Books",
+      "douban": "Douban"
+    },
+    "unidentified": "Unidentified",
+    "locked": "Locked",
+    "add": "Add identifier",
+    "remove": "Remove {scheme} identifier",
+    "schemeField": "Scheme",
+    "valueField": "Value",
+    "none": "No identifiers yet.",
+    "invalid": "This is not a valid {scheme}. Check it and save again.",
+    "lockedHint": "Kept as they are when metadata is refreshed."
   },
   "library": {
     "search": "Search",
@@ -232,20 +341,31 @@
     "resume": "Resume",
     "filters": "Filters",
     "clearFilters": "Clear filters",
-    "of": "of"
+    "of": "of",
+    "thumbIndex": "Thumb index",
+    "indexCjk": "CJK",
+    "indexOther": "Numbers and symbols",
+    "lastRead": "Last read",
+    "catalogue": "Catalogue",
+    "identifier": "Identifier",
+    "identifierAny": "Any identifier",
+    "identified": "Identified",
+    "unidentified": "Unidentified"
   },
   "reading": {
     "title": "Reading",
-    "want": "Want to Read",
+    "want": "Want to read",
     "reading": "Reading",
     "finished": "Finished",
-    "on_hold": "On Hold",
+    "on_hold": "On hold",
     "favorite": "Favorite",
     "unfavorite": "Remove favorite",
     "rating": "Rating",
     "addQueue": "Add to queue",
     "removeQueue": "Remove from queue",
     "shelves": "Shelves",
+    "shelvesOne": "Shelves: {name}",
+    "shelvesMany": "Shelves: {count}",
     "newShelf": "New shelf",
     "createShelf": "Create shelf",
     "add": "Add",
@@ -254,8 +374,15 @@
     "previous": "Previous",
     "next": "Next",
     "noNeighbors": "No other books in this series.",
-    "status": "Status",
-    "none": "No status"
+    "statusGroup": "Reading status",
+    "noStatus": "No status",
+    "stageWant": "Want",
+    "stageReading": "Reading",
+    "stageDone": "Done",
+    "previousStatus": "Previous status",
+    "nextStatus": "Next status",
+    "previousStatusTo": "Previous status: {status}",
+    "nextStatusTo": "Next status: {status}"
   },
   "reader": {
     "backToBook": "Back to book",
@@ -388,22 +515,12 @@
     "restoreTest": "Test restore",
     "restoreTestHint": "A restore test copies the newest snapshot into a temporary folder and checks it. It does not replace this library. That is separate from an integrity check.",
     "lastRestoreTest": "Last restore test",
-    "eyebrow": "Protection",
     "subtitle": "Encrypted snapshots to storage you control.",
     "overview": "Overview",
     "configured": "Configured",
     "notConfigured": "Not configured",
     "active": "Active",
-    "paused": "Paused",
-    "kicker": {
-      "storage": "Storage",
-      "status": "Status",
-      "secrets": "Secrets",
-      "automation": "Automation",
-      "snapshots": "Snapshots",
-      "health": "Health",
-      "recovery": "Recovery"
-    }
+    "paused": "Paused"
   },
   "errors": {
     "invalid_request": "Check the fields and try again.",
@@ -427,7 +544,9 @@
     "backup_in_progress": "A backup is already running.",
     "backup_not_configured": "Set a destination and recovery password first.",
     "destination_unreachable": "The backup destination could not be reached.",
-    "incompatible_snapshot": "This snapshot cannot be restored."
+    "incompatible_snapshot": "This snapshot cannot be restored.",
+    "invalid_identifier": "An identifier is not valid for its scheme. Check its digits and form.",
+    "metadata_private": "This book is kept private from the metadata agent."
   },
   "status": {
     "loading": "Loading…",
@@ -435,5 +554,61 @@
   },
   "auth": {
     "media": "EPUB · PDF · Private shelves"
+  },
+  "trajectory": {
+    "title": "Trajectory",
+    "loading": "Loading the trajectory…",
+    "error": "The trajectory could not be loaded.",
+    "gone": "This trajectory is no longer kept. Runs are kept for 30 days.",
+    "empty": "No steps were recorded.",
+    "working": "Working…",
+    "raw": "Raw",
+    "omitted": "Shortened to fit the stored size.",
+    "truncated": "Some steps were shortened or left out to keep this record small.",
+    "results": "{count} results",
+    "oneResult": "1 result",
+    "noResults": "No results",
+    "images": "{count} images",
+    "oneImage": "1 image",
+    "noImages": "No images",
+    "missing": "Missing: {fields}",
+    "toolError": "Error: {code}",
+    "totals": "{turns} turns · {toolCalls} tool calls · {time}",
+    "step": {
+      "input": "Given to the model",
+      "note": "Model note",
+      "turn": "Model turn {turn}",
+      "search": "Searched Open Library",
+      "record": "Opened record",
+      "tool": "Called {name}",
+      "submitted": "Submitted",
+      "rejected": "Rejected",
+      "dropped": "Dropped invalid identifiers",
+      "pipeline": "Import note",
+      "webSearch": "Searched the web",
+      "fetchPage": "Read page",
+      "googleBooks": "Looked up Google Books",
+      "pageImages": "Found images on page",
+      "cover": "Cover check"
+    },
+    "outcome": {
+      "accepted": "Accepted",
+      "failed": "Failed",
+      "timeout": "Ran out of time",
+      "limit": "Reached the step limit"
+    },
+    "volumes": "{count} volumes",
+    "oneVolume": "1 volume",
+    "noVolumes": "No volumes",
+    "untitled": "Untitled page",
+    "wrapUp": "Search budget used up; asked the model to submit what it found.",
+    "coverAutoApplied": "The book had no cover, so this one was applied automatically."
+  },
+  "metadataPrivate": {
+    "label": "Keep private from the metadata agent",
+    "hint": "Details come from the file itself and can be edited by hand.",
+    "mark": "Private",
+    "markDescription": "Not sent to the metadata agent.",
+    "lookupOff": "This book is kept private, so the metadata agent is not used for it."
   }
 }

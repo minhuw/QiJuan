@@ -5,11 +5,12 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { Link, useLocation } from 'react-router';
-import { BookOpen, CloudUpload, LogOut, Menu, Settings2, Upload, X } from 'lucide-react';
+import { LogOut, Menu, X } from 'lucide-react';
 import { api } from './api';
 import { catalogs, localeIds, resolveLocale, translate } from './i18n';
 
@@ -52,29 +53,17 @@ export function LibraryHome() {
   const { t } = useLocale();
   return (
     <div className="empty-page">
-      <div className="empty-page-mark" aria-hidden="true">
-        <BookOpen size={30} strokeWidth={1.5} />
-      </div>
-      <p className="eyebrow">{t('brand.tagline')}</p>
       <h1>{t('home.title')}</h1>
       <p className="placeholder">{t('home.placeholder')}</p>
     </div>
   );
 }
 
-function LanguageSelect({
-  value,
-  onChange,
-  tone = 'default',
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  tone?: 'default' | 'inverse';
-}) {
+function LanguageSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const { t } = useLocale();
   const id = useId();
   return (
-    <label className={tone === 'inverse' ? 'language-select language-select-inverse' : 'language-select'} htmlFor={id}>
+    <label className="language-select" htmlFor={id}>
       <span className="visually-hidden">{t('shell.language')}</span>
       <select id={id} value={value} aria-label={t('shell.language')} onChange={(event) => onChange(event.target.value)}>
         {localeIds().map((locale) => (
@@ -87,144 +76,133 @@ function LanguageSelect({
   );
 }
 
-function Brand({ compact = false }: { compact?: boolean }) {
+function Brand() {
   const { t } = useLocale();
   return (
-    <Link className={compact ? 'brand brand-compact' : 'brand'} to="/" aria-label={`${t('brand.name')} — ${t('home.title')}`}>
-      <span className="brand-seal" lang="zh-Hans" aria-hidden="true">
+    <Link className="brand" to="/" aria-label={`${t('brand.name')} — ${t('home.title')}`}>
+      <span className="brand-mark" lang="zh-Hans" aria-hidden="true">
         {t('brand.mark')}
       </span>
-      <span className="brand-copy">
-        <span className="brand-name">{t('brand.name')}</span>
-        {compact ? null : <span className="brand-tagline">{t('brand.tagline')}</span>}
-      </span>
+      <span className="brand-name">{t('brand.name')}</span>
     </Link>
+  );
+}
+
+function Revision({ revision }: { revision: string }) {
+  const { t } = useLocale();
+  return (
+    <p className="build-chip" title={revision}>
+      {t('shell.version')} <span className="build-chip-id">{revision.slice(0, 12)}</span>
+    </p>
   );
 }
 
 function NavItem({
   to,
   label,
-  icon,
   active,
+  admin = false,
   onNavigate,
 }: {
   to: string;
   label: string;
-  icon: ReactNode;
   active: boolean;
+  admin?: boolean;
   onNavigate: () => void;
 }) {
+  const className = ['nav-item', admin ? 'nav-item-admin' : '', active ? 'nav-item-active' : ''].filter(Boolean).join(' ');
   return (
-    <Link
-      className={active ? 'nav-item nav-item-active' : 'nav-item'}
-      to={to}
-      aria-current={active ? 'page' : undefined}
-      onClick={onNavigate}
-    >
-      <span className="nav-icon" aria-hidden="true">
-        {icon}
-      </span>
-      <span className="nav-label">{label}</span>
+    <Link className={className} to={to} aria-current={active ? 'page' : undefined} onClick={onNavigate}>
+      {label}
     </Link>
   );
 }
 
-function Sidebar({
+function AppBar({
   account,
   path,
-  revision,
   active,
+  menuOpen,
   onLocale,
-  onClose,
+  onMenu,
 }: {
   account: AccountChrome;
   path: string;
-  revision: string | null;
   active: string;
+  menuOpen: boolean;
   onLocale: (value: string) => void;
-  onClose: () => void;
+  onMenu: (open: boolean) => void;
 }) {
   const { t } = useLocale();
+  const menuButton = useRef<HTMLButtonElement>(null);
   const admin = account.role === 'admin';
   const onLibrary = path === '/' || path.startsWith('/books/');
   const initial = account.username.trim().charAt(0).toLocaleUpperCase() || '?';
+  const close = () => onMenu(false);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      onMenu(false);
+      menuButton.current?.focus();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen, onMenu]);
 
   return (
-    <aside className="sidebar" id="app-navigation">
-      <div className="sidebar-brand">
+    <>
+      <header className="app-bar">
         <Brand />
-        <button type="button" className="icon-button sidebar-close" onClick={onClose} aria-label={t('shell.closeMenu')}>
-          <X size={18} aria-hidden="true" />
+        <button
+          ref={menuButton}
+          type="button"
+          className="icon-button menu-button"
+          aria-label={menuOpen ? t('shell.closeMenu') : t('shell.openMenu')}
+          aria-expanded={menuOpen}
+          aria-controls="app-navigation"
+          onClick={() => onMenu(!menuOpen)}
+        >
+          {menuOpen ? <X size={20} strokeWidth={1.5} aria-hidden="true" /> : <Menu size={20} strokeWidth={1.5} aria-hidden="true" />}
         </button>
-      </div>
-
-      <nav className="sidebar-nav" aria-label={t('shell.navigation')}>
-        <p className="nav-section">{t('shell.workspace')}</p>
-        <NavItem
-          to="/"
-          label={t('home.title')}
-          icon={<BookOpen size={18} />}
-          active={onLibrary}
-          onNavigate={onClose}
-        />
-        <NavItem
-          to="/import"
-          label={t('import.open')}
-          icon={<Upload size={18} />}
-          active={path === '/import'}
-          onNavigate={onClose}
-        />
-
-        {admin ? (
-          <>
-            <p className="nav-section nav-section-spaced">{t('shell.admin')}</p>
-            <NavItem
-              to="/settings"
-              label={t('settings.open')}
-              icon={<Settings2 size={18} />}
-              active={path === '/settings'}
-              onNavigate={onClose}
-            />
-            <NavItem
-              to="/backup"
-              label={t('backup.open')}
-              icon={<CloudUpload size={18} />}
-              active={path === '/backup'}
-              onNavigate={onClose}
-            />
-          </>
-        ) : null}
-      </nav>
-
-      <div className="sidebar-footer">
-        {revision ? (
-          <p className="build-chip" title={revision}>
-            <span className="visually-hidden">{t('shell.version')} </span>
-            {revision.slice(0, 12)}
-          </p>
-        ) : null}
-        <LanguageSelect value={active} onChange={onLocale} tone="inverse" />
-        <div className="account-card">
-          <span className="avatar" aria-hidden="true">
-            {initial}
-          </span>
-          <span className="account-copy">
-            <span className="account-name">{account.username}</span>
-            <span className="account-role">{t(admin ? 'account.admin' : 'account.reader')}</span>
-          </span>
-          <button
-            type="button"
-            className="icon-button account-signout"
-            onClick={account.onSignOut}
-            aria-label={t('account.signOut')}
-            title={t('account.signOut')}
-          >
-            <LogOut size={17} aria-hidden="true" />
-          </button>
+        <div className={menuOpen ? 'app-bar-panel app-bar-panel-open' : 'app-bar-panel'} id="app-navigation">
+          <nav className="app-nav" aria-label={t('shell.navigation')}>
+            <NavItem to="/" label={t('home.title')} active={onLibrary} onNavigate={close} />
+            <NavItem to="/import" label={t('import.open')} active={path === '/import'} onNavigate={close} />
+            {admin ? (
+              <>
+                <span className="app-nav-divider" aria-hidden="true" />
+                <NavItem to="/settings" label={t('settings.open')} active={path === '/settings'} admin onNavigate={close} />
+                <NavItem to="/backup" label={t('backup.open')} active={path === '/backup'} admin onNavigate={close} />
+              </>
+            ) : null}
+          </nav>
+          <div className="app-bar-end">
+            <LanguageSelect value={active} onChange={onLocale} />
+            <div className="account">
+              <span className="account-initial" aria-hidden="true">
+                {initial}
+              </span>
+              <span className="account-copy">
+                <span className="account-name">{account.username}</span>
+                <span className="account-role">{t(admin ? 'account.admin' : 'account.reader')}</span>
+              </span>
+              <button
+                type="button"
+                className="icon-button account-signout"
+                onClick={account.onSignOut}
+                aria-label={t('account.signOut')}
+                title={t('account.signOut')}
+              >
+                <LogOut size={17} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-    </aside>
+      </header>
+      {menuOpen ? <div className="sheet-scrim" aria-hidden="true" onClick={close} /> : null}
+    </>
   );
 }
 
@@ -248,15 +226,6 @@ export function Shell({ locale, children }: { locale?: string; children?: ReactN
   useEffect(() => {
     setMenuOpen(false);
   }, [path]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') setMenuOpen(false);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [menuOpen]);
 
   const value = useMemo<LocaleValue>(
     () => ({
@@ -298,82 +267,42 @@ export function Shell({ locale, children }: { locale?: string; children?: ReactN
             : 'auth-shell'}
         >
           {skip}
-          <div className="shell-chrome">
-            {account && !readerMode ? (
-              <>
-                <button
-                  type="button"
-                  className="sidebar-scrim"
-                  aria-label={t('shell.closeMenu')}
-                  tabIndex={menuOpen ? 0 : -1}
-                  onClick={() => setMenuOpen(false)}
-                />
-                <Sidebar
-                  account={account}
-                  path={path}
-                  revision={revision}
-                  active={active}
-                  onLocale={setActive}
-                  onClose={() => setMenuOpen(false)}
-                />
-              </>
-            ) : null}
-          </div>
-          <div className={account ? 'app-body' : 'auth-body'}>
-            {account ? (
-              readerMode ? null : (
-                <header className="mobile-bar">
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={t('shell.openMenu')}
-                    aria-expanded={menuOpen}
-                    aria-controls="app-navigation"
-                    onClick={() => setMenuOpen(true)}
-                  >
-                    <Menu size={20} aria-hidden="true" />
-                  </button>
-                  <span className="mobile-seal" lang="zh-Hans" aria-hidden="true">
-                    {t('brand.mark')}
-                  </span>
-                  <span className="mobile-bar-spacer" />
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={t('account.signOut')}
-                    title={t('account.signOut')}
-                    onClick={account.onSignOut}
-                  >
-                    <LogOut size={18} aria-hidden="true" />
-                  </button>
-                </header>
-              )
-            ) : (
-              <header className="site-header">
-                <div className="site-header-inner">
-                  <Brand compact />
-                  <div className="site-header-end">
-                    {revision ? (
-                      <p className="build-chip build-chip-light" title={revision}>
-                        <span className="visually-hidden">{t('shell.version')} </span>
-                        {revision.slice(0, 12)}
-                      </p>
-                    ) : null}
-                    <LanguageSelect value={active} onChange={setActive} />
-                  </div>
-                </div>
-              </header>
-            )}
-            <main
-              className={account ? (readerMode ? 'reader-content' : 'page-container') : 'auth-main'}
-              id="content"
-            >
-              {children ?? <LibraryHome />}
-            </main>
-          </div>
+          {account ? (
+            readerMode ? null : (
+              <AppBar
+                account={account}
+                path={path}
+                active={active}
+                menuOpen={menuOpen}
+                onLocale={setActive}
+                onMenu={setMenuOpen}
+              />
+            )
+          ) : (
+            <header className="site-header">
+              <Brand />
+              <div className="site-header-end">
+                {revision ? <Revision revision={revision} /> : null}
+                <LanguageSelect value={active} onChange={setActive} />
+              </div>
+            </header>
+          )}
+          <main
+            className={account ? (readerMode ? 'reader-content' : 'page-container') : 'auth-main'}
+            id="content"
+          >
+            {children ?? <LibraryHome />}
+          </main>
+          {account && !readerMode ? (
+            <footer className="folio">
+              <p className="folio-tagline" lang="zh-Hans">
+                {t('brand.tagline')}
+              </p>
+              {revision ? <Revision revision={revision} /> : null}
+            </footer>
+          ) : null}
         </div>
       </AccountChromeContext.Provider>
     </LocaleContext.Provider>
   );
-
 }

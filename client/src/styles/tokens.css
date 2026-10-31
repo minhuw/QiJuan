@@ -1,118 +1,100 @@
 :root {
   color-scheme: light;
 
-  /* Canvas and surfaces */
-  --paper: #f5f2eb;
-  --paper-raised: #fffdfa;
-  --paper-sunken: #eee9df;
-  --surface: #fffdfa;
-  --surface-muted: #f8f5ef;
-  --surface-hover: #f1ece3;
+  /* Ground and ink */
+  --stock: #f1ebdd;
+  --stock-raised: #f7f2e6;
+  --stock-shade: #e9e2d2;
+  --ink: #141210;
+  --ink-muted: #665e52;
+  --hairline: #b9af9c;
+  --scrim: rgb(20 18 16 / 32%);
+  --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 3.5 5 7l3.5-3.5' fill='none' stroke='%23141210' stroke-width='1.3'/%3E%3C/svg%3E");
 
-  /* Ink */
-  --ink: #1e1b16;
-  --ink-muted: #645d52;
-  --ink-faint: #948c7f;
+  /* State colours: base hue for marks and rules, deeper tone for text */
+  --vermilion: #c23b22;
+  --vermilion-text: #b5341d;
+  --emerald: #3d7a4e;
+  --emerald-text: #356f45;
+  --ochre: #b07d25;
+  --ochre-text: #8a6216;
+  --on-vermilion: #fbf6ec;
+  --selection: color-mix(in srgb, var(--ochre) 30%, var(--stock));
 
-  /* Brand */
-  --jade: #245a49;
-  --jade-strong: #194539;
-  --jade-soft: #e6f0ea;
-  --vermilion: #ad4630;
-  --vermilion-soft: #f8e8e2;
-  --gold: #a5771d;
-  --gold-soft: #f8f0da;
+  /* Plate fills: the only saturated surfaces */
+  --plate-vermilion: #ba3820;
+  --plate-ultramarine: #2f4c8a;
+  --plate-emerald: #3a744a;
+  --plate-ochre: #8a6216;
+  --plate-umber: #5b4433;
+  --plate-plum: #6a3550;
+  --plate-teal: #2d6468;
+  --plate-ink: #f1ebdd;
 
-  /* Lines and controls */
-  --line: #e5dfd3;
-  --line-strong: #d5ccbd;
-  --input-bg: #fffefb;
-  --focus-ring: #2c6a57;
-
-  /* Sidebar */
-  --sidebar-bg: #17251f;
-  --sidebar-ink: #eef2ee;
-  --sidebar-muted: #a4b5ac;
-  --sidebar-faint: #70847a;
-  --sidebar-line: rgb(255 255 255 / 9%);
-  --sidebar-active: rgb(255 255 255 / 9%);
-  --sidebar-accent: #9cd1b9;
-
-  /* Depth */
-  --shadow-xs: 0 1px 2px rgb(30 27 22 / 5%);
-  --shadow-sm: 0 1px 3px rgb(30 27 22 / 7%), 0 1px 2px rgb(30 27 22 / 4%);
-  --shadow-md: 0 10px 24px -14px rgb(30 27 22 / 24%), 0 2px 6px rgb(30 27 22 / 5%);
-  --shadow-lg: 0 30px 60px -30px rgb(30 27 22 / 30%), 0 12px 24px -18px rgb(30 27 22 / 18%);
-  --shadow-cover: 0 12px 24px -12px rgb(30 27 22 / 35%), 0 2px 4px rgb(30 27 22 / 10%);
+  /* Rating sources: one 2px rule each on the book page's rating cards, nowhere else. Restrained
+     approximations of each site's colour, not its exact brand values. */
+  --provider-douban: #3a7d3f;
+  --provider-goodreads: #5b4320;
+  --provider-open-library: #1f5f99;
+  --provider-google-books: #2f63c4;
 
   /* Type */
-  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", "Iowan Old Style", Palatino, serif;
-  --font-ui: "Inter", "SF Pro Text", "Segoe UI", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-serif: "Source Serif 4 Variable", "Source Serif 4", "Noto Serif SC", "Source Han Serif SC",
+    "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+  --font-cjk: "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", serif;
+  --text-small: 0.78125rem;
+  --text: 0.9375rem;
+  --text-head: 1.375rem;
+  --text-display: 2.125rem;
+  --tracking-caps: 0.08em;
 
-  /* Shape */
-  --radius-xs: 0.375rem;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1.25rem;
-  --radius-pill: 999px;
+  /* Rules */
+  --rule-hair: 0.5px;
+  --rule: 1px;
+  --rule-heavy: 1.5px;
+  --radius: 2px;
 
   /* Layout */
-  --sidebar-width: 16.75rem;
+  --bar-height: 58px;
+  --gutter: clamp(1rem, 2.8vw, 2.5rem);
+  --margin-column: 190px;
+  --thumb-width: 48px;
   --page-width: 90rem;
-  --measure: 42rem;
-  --header-height: 3.75rem;
+  --measure: 65ch;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
 
-    --paper: #11130f;
-    --paper-raised: #1a1c17;
-    --paper-sunken: #0c0e0b;
-    --surface: #191b16;
-    --surface-muted: #151712;
-    --surface-hover: #22251e;
+    --stock: #16140f;
+    --stock-raised: #1f1c16;
+    --stock-shade: #29251d;
+    --ink: #ede6d6;
+    --ink-muted: #a79e8e;
+    --hairline: #4a443a;
+    --scrim: rgb(0 0 0 / 50%);
+    --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 3.5 5 7l3.5-3.5' fill='none' stroke='%23ede6d6' stroke-width='1.3'/%3E%3C/svg%3E");
 
-    --ink: #f2eee5;
-    --ink-muted: #b7b0a3;
-    --ink-faint: #877f72;
+    --vermilion: #d9553b;
+    --vermilion-text: #e87a62;
+    --emerald: #5f9c6f;
+    --emerald-text: #7fb98e;
+    --ochre: #c99a45;
+    --ochre-text: #d8a64c;
+    --on-vermilion: #16140f;
+    --selection: color-mix(in srgb, var(--ochre) 34%, var(--stock));
 
-    --jade: #8fcab3;
-    --jade-strong: #ace0cb;
-    --jade-soft: #1b2c25;
-    --vermilion: #e39280;
-    --vermilion-soft: #33211c;
-    --gold: #dfb35e;
-    --gold-soft: #2e2819;
-
-    --line: #2c2f27;
-    --line-strong: #3c4036;
-    --input-bg: #141611;
-    --focus-ring: #9ed3be;
-
-    --sidebar-bg: #0d130f;
-    --sidebar-ink: #edf2ee;
-    --sidebar-muted: #9aaca2;
-    --sidebar-faint: #687b70;
-    --sidebar-line: rgb(255 255 255 / 8%);
-    --sidebar-active: rgb(255 255 255 / 8%);
-    --sidebar-accent: #9cd1b9;
-
-    --shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
-    --shadow-sm: 0 1px 3px rgb(0 0 0 / 35%), 0 1px 2px rgb(0 0 0 / 20%);
-    --shadow-md: 0 12px 28px -16px rgb(0 0 0 / 65%), 0 2px 6px rgb(0 0 0 / 25%);
-    --shadow-lg: 0 30px 70px -32px rgb(0 0 0 / 75%), 0 12px 24px -18px rgb(0 0 0 / 40%);
-    --shadow-cover: 0 14px 28px -14px rgb(0 0 0 / 70%), 0 2px 4px rgb(0 0 0 / 30%);
+    --provider-douban: #6cb877;
+    --provider-goodreads: #c4a57a;
+    --provider-open-library: #6fa3d8;
+    --provider-google-books: #7aa5f0;
   }
 }
 
 :focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

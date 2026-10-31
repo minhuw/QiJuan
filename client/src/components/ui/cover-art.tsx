@@ -1,11 +1,14 @@
-import type { CSSProperties } from 'react';
+const PLATES = ['vermilion', 'ultramarine', 'emerald', 'ochre', 'umber', 'plum', 'teal'] as const;
+const CJK_ONLY = /^[\p{Script=Han}\u3000-\u303f\uff00-\uffef\u00b7\u30fb]+$/u;
 
-function coverHue(title: string): number {
-  let hash = 0;
-  for (let index = 0; index < title.length; index += 1) {
-    hash = (hash * 31 + title.charCodeAt(index)) % 360;
-  }
-  return hash;
+function plateFor(editionId: number): (typeof PLATES)[number] {
+  const index = Math.abs(Math.trunc(editionId)) % PLATES.length;
+  return PLATES[index] ?? 'umber';
+}
+
+function setsVertically(title: string): boolean {
+  const trimmed = title.trim();
+  return CJK_ONLY.test(trimmed) && Array.from(trimmed).length <= 8;
 }
 
 export function CoverArt({
@@ -23,9 +26,9 @@ export function CoverArt({
   variant?: 'card' | 'detail' | 'thumb';
   eager?: boolean;
 }) {
-  const style = { '--cover-hue': coverHue(title) } as CSSProperties;
+  const vertical = setsVertically(title);
   return (
-    <span className={`cover-art cover-art-${variant}`} style={style}>
+    <span className={`plate cover-art cover-art-${variant}`}>
       {hasCover ? (
         <img
           className="cover-image"
@@ -35,13 +38,14 @@ export function CoverArt({
           decoding="async"
         />
       ) : (
-        <span className="cover-fallback">
-          <span className="cover-fallback-rule" aria-hidden="true" />
-          <span className="cover-fallback-title">{title}</span>
-          {author ? <span className="cover-fallback-author">{author}</span> : null}
-          <span className="cover-fallback-mark" lang="zh-Hans" aria-hidden="true">
-            栖卷
+        <span className={`cover-fallback plate-${plateFor(editionId)}`}>
+          <span
+            className={vertical ? 'cover-fallback-title cover-fallback-title-vertical' : 'cover-fallback-title'}
+            lang={vertical ? 'zh-Hans' : undefined}
+          >
+            {title}
           </span>
+          {author ? <span className="cover-fallback-author">{author}</span> : null}
         </span>
       )}
     </span>

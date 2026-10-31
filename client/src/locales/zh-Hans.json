@@ -12,8 +12,6 @@
     "skip": "跳到内容",
     "navigation": "导航",
     "version": "版本",
-    "workspace": "工作台",
-    "admin": "管理",
     "openMenu": "打开导航",
     "closeMenu": "关闭导航"
   },
@@ -22,12 +20,10 @@
     "placeholder": "这里还没有书。",
     "libraries": "你的书库",
     "noAccess": "还没有获得书库权限。",
-    "subtitle": "你的私人书架，一目了然。",
     "books": "藏书",
     "inProgress": "在读",
     "shelvesCount": "书架",
-    "addBooks": "添加书籍",
-    "allBooks": "全部书籍"
+    "addBooks": "添加书籍"
   },
   "setup": {
     "title": "初次设置",
@@ -35,7 +31,6 @@
     "password": "密码",
     "libraryName": "书库名称",
     "submit": "创建管理员",
-    "eyebrow": "初次使用",
     "description": "创建管理员账户和第一个书库。"
   },
   "login": {
@@ -63,16 +58,12 @@
     "grant": "授予",
     "revoke": "收回",
     "empty": "还没有读者。",
-    "eyebrow": "家庭",
     "subtitle": "读者账户与书库权限。",
-    "accounts": "账户",
     "newReader": "新建读者",
     "readerHint": "读者可以浏览、阅读，并保有自己的阅读进度。",
-    "access": "书库权限",
     "allReaders": "所有读者",
     "assistant": {
       "title": "元数据助手",
-      "kicker": "元数据",
       "hint": "模型只会收到文件名和书目字段，不会收到书籍正文、OCR 或文件内容。",
       "baseUrl": "接口地址",
       "model": "模型",
@@ -87,10 +78,31 @@
       "testOk": "连接测试成功。",
       "saved": "元数据助手已保存。",
       "removed": "元数据助手已移除。",
+      "fetchModels": "获取模型列表",
+      "modelsFound": "可选模型",
+      "modelsNone": "服务器没有列出模型。请直接填写模型名称。",
+      "webSearchOn": "联网搜索已开启",
+      "webSearch": "联网搜索",
+      "webSearchMode": {
+        "deepseek": "DeepSeek",
+        "off": "关闭"
+      },
+      "webSearchHint": "当 Open Library 查不到某本书时，代理可通过 DeepSeek 搜索网页并读取页面。查询只包含书名、作者、文件名或 ISBN，绝不包含书籍正文。",
+      "webSearchOffHint": "代理只使用 Open Library 和 Google Books。",
+      "webSearchCost": "自 2026 年 11 月 1 日起，DeepSeek 对每次网页搜索和页面读取收费。",
+      "searchApiKey": "DeepSeek 搜索密钥",
+      "searchKeyKept": "已保存一个以 {hint} 结尾的 DeepSeek 密钥。留空即保留。",
+      "searchKeyRequired": "联网搜索需要此密钥，因为上方的模型服务器不是 DeepSeek。",
+      "googleBooksApiKey": "Google Books API 密钥",
+      "googleKeyKept": "已保存一个以 {hint} 结尾的 Google Books 密钥。留空即保留。",
+      "googleKeyOptional": "可选。没有密钥时，查询共用一个经常耗尽的匿名配额。",
       "errors": {
         "metadata_assistant_unconfigured": "请先填写接口地址和模型。",
         "assistant_unauthorized": "模型服务器拒绝了这个 API 密钥。",
         "assistant_invalid_response": "模型服务器返回了无法识别的响应。",
+        "assistant_models_unsupported": "这个服务器不提供模型列表。请直接填写模型名称。",
+        "assistant_timeout": "模型服务器响应超时。请重试，或直接填写模型名称。",
+        "assistant_base_url_invalid": "请检查接口地址：须为 http 或 https 地址，且不含查询参数或片段。",
         "metadata_unavailable": "无法连接模型服务器。"
       }
     }
@@ -117,7 +129,8 @@
       "running": "进行中",
       "succeeded": "成功",
       "failed": "失败",
-      "duplicate": "重复"
+      "duplicate": "重复",
+      "needs_confirmation": "待确认"
     },
     "fileError": {
       "unsupported": "不支持的文件",
@@ -126,15 +139,50 @@
       "metadata_incomplete": "书目信息不完整",
       "metadata_assistant_unconfigured": "未配置元数据助手"
     },
-    "eyebrow": "书库入库",
     "subtitle": "添加 EPUB 与 PDF 文件，并跟踪每次导入。",
     "newImport": "新建导入",
     "managedHint": "文件会复制到受管理的书库中。",
     "indexedHint": "文件保留在原处，并从该文件夹建立索引。",
-    "progress": "动态",
     "history": "导入记录",
     "emptyHint": "上传与文件夹导入会显示在这里。",
-    "source": "来源"
+    "source": "来源",
+    "settingsLink": "打开设置",
+    "conflict": {
+      "title": "书名不同",
+      "authors": "没有共同作者",
+      "format": "已有该格式",
+      "ambiguous": "匹配到多本书"
+    },
+    "resolve": {
+      "candidate": "与第 {id} 号书的标识符相同",
+      "merge": "并入这本书",
+      "separate": "保留为单独的书",
+      "error": "未能保存这一决定，请重试。",
+      "gone": "那本书已不在书库中。请把这个文件保留为单独的书。",
+      "pending": "正在保存决定…",
+      "merged": "已并入《{title}》。导入稍后完成。",
+      "separated": "已保留为单独的书。导入稍后完成。",
+      "waiting": "等待管理员决定。"
+    },
+    "merged": "已并入现有的书",
+    "confirm": {
+      "same": "这个文件的 {scheme} 与书库中的一本书相同。",
+      "title": "这个文件的 {scheme} 与书库中的一本书相同，但书名不同。",
+      "authors": "这个文件的 {scheme} 与书库中的一本书相同，但作者不同。",
+      "both": "这个文件的 {scheme} 与书库中的一本书相同，但书名和作者都不同。",
+      "format": "那本书已经有 {format} 文件。",
+      "ambiguous": "它的标识还与书库中其他的书相符。",
+      "anyScheme": "标识",
+      "incoming": "这个文件",
+      "existing": "书库中的书",
+      "field": "字段",
+      "format_label": "格式",
+      "matched": "相同的标识",
+      "differs": "不同",
+      "unknown": "文件中没有",
+      "open": "打开那本书",
+      "loading": "正在载入书库中的书…"
+    }
   },
   "catalog": {
     "edit": "批量修改",
@@ -146,7 +194,8 @@
     "tagsHint": "用逗号分隔标签。",
     "series": "丛书",
     "apply": "应用到所选",
-    "editHint": "选中多本书，批量应用同一个值。"
+    "editHint": "选中多本书，批量应用同一个值。",
+    "selected": "已选"
   },
   "book": {
     "back": "返回书库",
@@ -164,13 +213,18 @@
     "publishedDate": "出版日期",
     "language": "语言",
     "identifiers": "标识",
-    "identifiersHint": "一行一个：类型|值。",
+    "identifiersHint": "选择类型并填写值。留空的行不会保存。",
     "tags": "标签",
     "tagsHint": "用逗号分隔标签。",
     "save": "保存",
     "saved": "已保存。",
+    "format": "格式",
     "formats": "格式",
+    "published": "出版",
+    "atAGlance": "概要",
     "read": "阅读",
+    "download": "下载",
+    "originalFilename": "原始文件名",
     "cover": "封面",
     "replaceCover": "更换封面",
     "chooseCover": "选择图片",
@@ -184,11 +238,19 @@
     "applyRunning": "正在应用所选字段…",
     "preview": "建议的修改",
     "previewSource": "AI 智能体",
-    "coverProposed": "有可用的新封面",
+    "coverCurrent": "当前",
+    "coverFound": "找到的",
+    "coverFrom": "来自",
+    "noCover": "没有封面",
+    "noCoverFound": "没有找到封面",
     "kept": "保留",
     "unchanged": "没有变化",
     "confirm": "应用所选",
     "noSuggestion": "没有建议。",
+    "lookupPendingOne": "元数据查找发现 1 处修改",
+    "lookupPendingMany": "元数据查找发现 {count} 处修改",
+    "lookupReview": "查看",
+    "discardPreview": "放弃这些建议",
     "readPlaceholder": "阅读器尚未提供。",
     "missing": "缺失",
     "exportMarkdown": "导出划线与笔记（Markdown）",
@@ -201,7 +263,54 @@
     "related": "相关",
     "readNow": "开始阅读",
     "editDetails": "编辑书籍信息",
-    "filesExports": "文件与导出"
+    "filesExports": "文件与导出",
+    "detailsTitle": "详情",
+    "overview": "概览",
+    "tabsLabel": "本书内容",
+    "translatedBy": "{names} 译",
+    "suggestionReason": {
+      "identifier": "标识相同：{identifier}",
+      "identifierAny": "标识相同",
+      "title_author": "书名与作者相近"
+    }
+  },
+  "ratings": {
+    "label": "外部评分",
+    "provider": {
+      "douban": "豆瓣",
+      "goodreads": "Goodreads",
+      "open_library": "Open Library",
+      "google_books": "Google 图书",
+      "worldcat": "WorldCat"
+    },
+    "count": "{count} 人评价",
+    "countOne": "{count} 人评价",
+    "alsoOn": "另见",
+    "refresh": "刷新评分",
+    "refreshing": "正在获取评分…",
+    "refreshFailed": "评分未能刷新，请重试。",
+    "updated": "更新于 {date}"
+  },
+  "identifiers": {
+    "scheme": {
+      "isbn": "ISBN",
+      "issn": "ISSN",
+      "doi": "DOI",
+      "oclc": "OCLC",
+      "lccn": "LCCN",
+      "olid": "Open Library",
+      "google_books": "Google 图书",
+      "douban": "豆瓣"
+    },
+    "unidentified": "未识别",
+    "locked": "已锁定",
+    "add": "添加标识",
+    "remove": "移除 {scheme} 标识",
+    "schemeField": "类型",
+    "valueField": "值",
+    "none": "还没有标识。",
+    "invalid": "这不是有效的 {scheme}。请检查后再保存。",
+    "lockedHint": "刷新书目时保持不变。"
   },
   "library": {
     "search": "搜索",
@@ -232,7 +341,16 @@
     "resume": "继续阅读",
     "filters": "筛选",
     "clearFilters": "清除筛选",
-    "of": "共"
+    "of": "共",
+    "thumbIndex": "书名索引",
+    "indexCjk": "中文",
+    "indexOther": "数字与符号",
+    "lastRead": "上次阅读",
+    "catalogue": "书目",
+    "identifier": "标识",
+    "identifierAny": "全部标识",
+    "identified": "已识别",
+    "unidentified": "未识别"
   },
   "reading": {
     "title": "阅读",
@@ -246,6 +364,8 @@
     "addQueue": "加入队列",
     "removeQueue": "移出队列",
     "shelves": "书架",
+    "shelvesOne": "书架：{name}",
+    "shelvesMany": "书架：{count} 个",
     "newShelf": "新书架",
     "createShelf": "创建书架",
     "add": "放入",
@@ -254,8 +374,15 @@
     "previous": "上一本",
     "next": "下一本",
     "noNeighbors": "这套书里没有其他书。",
-    "status": "状态",
-    "none": "未设置状态"
+    "statusGroup": "阅读状态",
+    "noStatus": "未设置状态",
+    "stageWant": "想读",
+    "stageReading": "在读",
+    "stageDone": "读完",
+    "previousStatus": "上一个状态",
+    "nextStatus": "下一个状态",
+    "previousStatusTo": "上一个状态：{status}",
+    "nextStatusTo": "下一个状态：{status}"
   },
   "reader": {
     "backToBook": "返回这本书",
@@ -388,22 +515,12 @@
     "restoreTest": "测试恢复",
     "restoreTestHint": "恢复测试会把最新快照复制到临时目录并检查。它不会替换当前书库。这和完整性检查不是一回事。",
     "lastRestoreTest": "上次恢复测试",
-    "eyebrow": "数据保护",
     "subtitle": "加密快照，存入你自己掌控的存储。",
     "overview": "概览",
     "configured": "已配置",
     "notConfigured": "未配置",
     "active": "启用",
-    "paused": "暂停",
-    "kicker": {
-      "storage": "存储",
-      "status": "状态",
-      "secrets": "密钥",
-      "automation": "自动化",
-      "snapshots": "快照",
-      "health": "健康",
-      "recovery": "恢复"
-    }
+    "paused": "暂停"
   },
   "errors": {
     "invalid_request": "请检查填写内容后再试。",
@@ -427,7 +544,9 @@
     "backup_in_progress": "已经有一个备份在运行。",
     "backup_not_configured": "请先设置目的地和恢复密码。",
     "destination_unreachable": "无法连接备份目的地。",
-    "incompatible_snapshot": "这份快照无法恢复。"
+    "incompatible_snapshot": "这份快照无法恢复。",
+    "invalid_identifier": "有标识符不符合其类型的格式，请检查数字与写法。",
+    "metadata_private": "此书对元数据助手保持私密。"
   },
   "status": {
     "loading": "正在加载…",
@@ -435,5 +554,61 @@
   },
   "auth": {
     "media": "EPUB · PDF · 私人书架"
+  },
+  "trajectory": {
+    "title": "运行记录",
+    "loading": "正在加载运行记录…",
+    "error": "无法加载运行记录。",
+    "gone": "这条运行记录已不再保留。记录保留 30 天。",
+    "empty": "没有记录到步骤。",
+    "working": "进行中…",
+    "raw": "原始数据",
+    "omitted": "为控制存储大小，已缩短。",
+    "truncated": "为保持记录精简，部分步骤已缩短或省略。",
+    "results": "{count} 条结果",
+    "oneResult": "1 条结果",
+    "noResults": "没有结果",
+    "images": "{count} 张图片",
+    "oneImage": "1 张图片",
+    "noImages": "没有图片",
+    "missing": "缺少：{fields}",
+    "toolError": "错误：{code}",
+    "totals": "{turns} 轮 · {toolCalls} 次工具调用 · {time}",
+    "step": {
+      "input": "提供给模型的内容",
+      "note": "模型说明",
+      "turn": "模型第 {turn} 轮",
+      "search": "搜索 Open Library",
+      "record": "打开记录",
+      "tool": "调用 {name}",
+      "submitted": "已提交",
+      "rejected": "已退回",
+      "dropped": "已丢弃无效标识符",
+      "pipeline": "导入说明",
+      "webSearch": "搜索网页",
+      "fetchPage": "读取页面",
+      "googleBooks": "查询 Google Books",
+      "pageImages": "在页面上找到图片",
+      "cover": "封面检查"
+    },
+    "outcome": {
+      "accepted": "已采纳",
+      "failed": "失败",
+      "timeout": "超时",
+      "limit": "达到步骤上限"
+    },
+    "volumes": "{count} 个版本",
+    "oneVolume": "1 个版本",
+    "noVolumes": "没有找到版本",
+    "untitled": "无标题页面",
+    "wrapUp": "检索次数已用完，请模型提交已找到的信息。",
+    "coverAutoApplied": "这本书没有封面，已自动应用此封面。"
+  },
+  "metadataPrivate": {
+    "label": "不交给元数据助手（保持私密）",
+    "hint": "书目信息取自文件本身，可以手动编辑。",
+    "mark": "私密",
+    "markDescription": "不会发送给元数据助手。",
+    "lookupOff": "此书保持私密，不使用元数据助手。"
   }
 }

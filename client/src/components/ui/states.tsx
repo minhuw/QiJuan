@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
-import { AlertCircle, Inbox, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { useLocale } from '../../shell';
 
 export function LoadingState({ label }: { label?: string }) {
   const { t } = useLocale();
   return (
     <div className="state-block" role="status">
-      <Loader2 className="spin" size={22} aria-hidden="true" />
+      <Loader2 className="spin" size={18} strokeWidth={1.5} aria-hidden="true" />
       <p>{label ?? t('status.loading')}</p>
     </div>
   );
@@ -44,11 +44,11 @@ export function ErrorNotice({
   const { t } = useLocale();
   return (
     <div className="alert alert-error" role="alert">
-      <AlertCircle size={18} aria-hidden="true" />
+      <AlertCircle size={17} strokeWidth={1.5} aria-hidden="true" />
       <p>{message}</p>
       {onRetry ? (
-        <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
-          <RefreshCw size={14} aria-hidden="true" />
+        <button type="button" className="btn btn-sm" onClick={onRetry}>
+          <RefreshCw size={14} strokeWidth={1.5} aria-hidden="true" />
           {retryLabel ?? t('status.retry')}
         </button>
       ) : null}
@@ -57,13 +57,11 @@ export function ErrorNotice({
 }
 
 export function EmptyState({
-  icon,
   title,
   description,
   action,
   compact = false,
 }: {
-  icon?: ReactNode;
   title: string;
   description?: string;
   action?: ReactNode;
@@ -71,9 +69,6 @@ export function EmptyState({
 }) {
   return (
     <div className={compact ? 'empty-state empty-state-compact' : 'empty-state'}>
-      <span className="empty-state-icon" aria-hidden="true">
-        {icon ?? <Inbox size={22} />}
-      </span>
       <p className="empty-state-title">{title}</p>
       {description ? <p className="empty-state-description">{description}</p> : null}
       {action ? <div className="empty-state-action">{action}</div> : null}

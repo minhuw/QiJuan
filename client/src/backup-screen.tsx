@@ -1,22 +1,19 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
-  CalendarClock,
   CheckCircle2,
-  Database,
   Download,
   FlaskConical,
-  HardDrive,
-  History,
   KeyRound,
   Loader2,
   Play,
-  RotateCcw,
   Save,
   ShieldCheck,
 } from 'lucide-react';
 import { api, type LibraryInfo } from './api';
+import { Entry } from './components/ui/entry';
 import { PageHeader } from './components/ui/page-header';
+import { StateTag, jobTone } from './components/ui/status-mark';
 import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { useLocale } from './shell';
 
@@ -117,7 +114,8 @@ const EMPTY_DESTINATION: DestinationForm = {
 };
 
 export function BackupScreen() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const when = (value: string | null | undefined, fallback: string) => <When value={value} locale={locale} fallback={fallback} />;
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [destination, setDestination] = useState<DestinationForm>(EMPTY_DESTINATION);
   const [secretConfigured, setSecretConfigured] = useState(false);
@@ -386,12 +384,6 @@ export function BackupScreen() {
   return (
     <div className="backup-page">
       <PageHeader
-        eyebrow={
-          <span className="eyebrow">
-            <ShieldCheck size={13} aria-hidden="true" />
-            {t('backup.eyebrow')}
-          </span>
-        }
         title={t('backup.title')}
         description={t('backup.subtitle')}
         actions={
@@ -402,7 +394,7 @@ export function BackupScreen() {
               disabled={pending || !schedule}
               onClick={() => void runBackup('managed')}
             >
-              <Play size={15} aria-hidden="true" />
+              <Play size={15} strokeWidth={1.5} aria-hidden="true" />
               {t('backup.run')}
             </button>
             <button
@@ -431,62 +423,47 @@ export function BackupScreen() {
         </p>
       ) : null}
 
-      <section className="stat-row backup-stats" aria-label={t('backup.overview')}>
-        <div className="stat-card stat-card-wide">
-          <span className="stat-icon" aria-hidden="true">
-            <CheckCircle2 size={18} />
-          </span>
-          <span className="stat-value stat-value-small">
-            {status?.lastSuccess ? status.lastSuccess.finishedAt : t('backup.none')}
-          </span>
-          <span className="stat-label">{t('backup.lastSuccess')}</span>
-          {status?.lastSuccess ? <p className="stat-foot">{scopeNote(status.lastSuccess.scope, t)}</p> : null}
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon" aria-hidden="true">
-            <CalendarClock size={18} />
-          </span>
-          <span className="stat-value stat-value-small">
-            {status?.schedule.nextRunAt ?? t('backup.notScheduled')}
-          </span>
-          <span className="stat-label">{t('backup.next')}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon" aria-hidden="true">
-            <HardDrive size={18} />
-          </span>
-          <span className="stat-value stat-value-small">
-            {formatBytes(status?.usage.repositoryBytes, t('backup.unavailable'))}
-          </span>
-          <span className="stat-label">{t('backup.repositorySize')}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon" aria-hidden="true">
-            <Database size={18} />
-          </span>
-          <span className="stat-value stat-value-small">
-            {status?.usage.lastTransfer
-              ? `${formatBytes(status.usage.lastTransfer.bytesAdded, t('backup.unavailable'))} / ${formatBytes(
-                  status.usage.lastTransfer.bytesProcessed,
-                  t('backup.unavailable'),
-                )}`
-              : t('backup.unavailable')}
-          </span>
-          <span className="stat-label">{t('backup.transferred')}</span>
-        </div>
-      </section>
+      <Entry title={t('backup.overview')} className="backup-overview">
+        <dl className="detail-list">
+          <div>
+            <dt>{t('backup.lastSuccess')}</dt>
+            <dd>
+              {when(status?.lastSuccess?.finishedAt, t('backup.none'))}
+              {status?.lastSuccess ? <span className="detail-note">{scopeNote(status.lastSuccess.scope, t)}</span> : null}
+            </dd>
+          </div>
+          <div>
+            <dt>{t('backup.next')}</dt>
+            <dd>{when(status?.schedule.nextRunAt, t('backup.notScheduled'))}</dd>
+          </div>
+          <div>
+            <dt>{t('backup.repositorySize')}</dt>
+            <dd className="num">{formatBytes(status?.usage.repositoryBytes, t('backup.unavailable'))}</dd>
+          </div>
+          <div>
+            <dt>{t('backup.transferred')}</dt>
+            <dd className="num">
+              {status?.usage.lastTransfer
+                ? `${formatBytes(status.usage.lastTransfer.bytesAdded, t('backup.unavailable'))} / ${formatBytes(
+                    status.usage.lastTransfer.bytesProcessed,
+                    t('backup.unavailable'),
+                  )}`
+                : t('backup.unavailable')}
+            </dd>
+          </div>
+        </dl>
+      </Entry>
 
       <div className="backup-layout">
-        <section className="panel backup-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.storage')}</p>
-              <h2>{t('backup.destination')}</h2>
-            </div>
-            <span className={status?.destination ? 'status-pill status-pill-succeeded' : 'status-pill status-pill-queued'}>
+        <Entry
+          title={t('backup.destination')}
+          className="backup-panel"
+          meta={
+            <StateTag tone={status?.destination ? 'success' : 'quiet'}>
               {status?.destination ? t('backup.configured') : t('backup.notConfigured')}
-            </span>
-          </div>
+            </StateTag>
+          }
+        >
           <p className="hint">{t('backup.guide')}</p>
           <form className="form" onSubmit={(event) => void saveDestination(event)}>
             <div className="preset-row">
@@ -546,18 +523,15 @@ export function BackupScreen() {
               </button>
             </div>
           </form>
-        </section>
+        </Entry>
 
-        <section className="panel backup-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.status')}</p>
-              <h2>{t('backup.progress')}</h2>
-            </div>
-            {status?.active ? (
-              <span className={`status-pill status-pill-${status.active.status}`}>{status.active.status}</span>
-            ) : null}
-          </div>
+        <Entry
+          title={t('backup.progress')}
+          className="backup-panel"
+          meta={
+            status?.active ? <StateTag tone={jobTone(status.active.status)}>{status.active.status}</StateTag> : null
+          }
+        >
           {status?.active && (status.active.status === 'queued' || status.active.status === 'running') ? (
             <p className="alert alert-info" role="status">
               <Loader2 className="spin" size={16} aria-hidden="true" />
@@ -593,16 +567,9 @@ export function BackupScreen() {
               }}
             />
           </div>
-        </section>
+        </Entry>
 
-        <section className="panel backup-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.secrets')}</p>
-              <h2>{t('backup.recovery')}</h2>
-            </div>
-            <KeyRound size={18} aria-hidden="true" />
-          </div>
+        <Entry title={t('backup.recovery')} className="backup-panel">
           <p className="hint">{t('backup.recoveryHint')}</p>
           {shownPassword ? (
             <p className="alert alert-warning" role="status">
@@ -639,20 +606,19 @@ export function BackupScreen() {
               ) : null}
             </div>
           </form>
-        </section>
+        </Entry>
 
-        <section className="panel backup-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.automation')}</p>
-              <h2>{t('backup.schedule')}</h2>
-            </div>
-            {schedule ? (
-              <span className={schedule.enabled ? 'status-pill status-pill-succeeded' : 'status-pill status-pill-queued'}>
-                {schedule.enabled ? t('backup.active') : t('backup.paused')}
-              </span>
-            ) : null}
-          </div>
+        <Entry
+          title={t('backup.schedule')}
+          className="backup-panel"
+          meta={
+            schedule ? (
+            <StateTag tone={schedule.enabled ? 'success' : 'quiet'}>
+              {schedule.enabled ? t('backup.active') : t('backup.paused')}
+            </StateTag>
+          ) : null
+          }
+        >
           <p className="hint">{t('backup.retentionHint')}</p>
           {schedule ? (
             <form className="form" onSubmit={(event) => void saveSchedule(event)}>
@@ -739,57 +705,40 @@ export function BackupScreen() {
           ) : (
             <LoadingState />
           )}
-          <p className="hint">{t('backup.metadataLabel')}</p>
+          {schedule?.scope === 'metadata-only' ? <p className="hint">{t('backup.metadataLabel')}</p> : null}
           <p className="hint">
             {schedule && schedule.indexedLibraryIds.length > 0 && schedule.scope !== 'metadata-only'
               ? t('backup.indexedIncluded')
               : t('backup.indexedExcluded')}
           </p>
-        </section>
+        </Entry>
 
-        <section className="panel backup-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.snapshots')}</p>
-              <h2>{t('backup.history')}</h2>
-            </div>
-            <History size={18} aria-hidden="true" />
-          </div>
+        <Entry title={t('backup.history')} className="backup-panel">
           <p className="hint">{t('backup.deletedKept')}</p>
           {status && status.history.length > 0 ? (
             <ul className="snapshot-list">
               {status.history.map((snapshot) => (
                 <li key={snapshot.id} className="snapshot-row">
-                  <span className="snapshot-icon" aria-hidden="true">
-                    <History size={15} />
-                  </span>
                   <span className="snapshot-copy">
-                    <span className="snapshot-id">{snapshot.shortId}</span>
-                    <span className="hint">{snapshot.time}</span>
+                    <span className="snapshot-id num">{snapshot.shortId}</span>
+                    <span className="hint">{when(snapshot.time, snapshot.time)}</span>
                   </span>
-                  {snapshot.scope ? <span className="chip">{snapshot.scope}</span> : null}
+                  {snapshot.scope ? <span className="tag">{snapshot.scope}</span> : null}
                 </li>
               ))}
             </ul>
           ) : (
-            <EmptyState compact icon={<History size={20} />} title={t('backup.noSnapshots')} />
+            <EmptyState compact title={t('backup.noSnapshots')} />
           )}
-        </section>
+        </Entry>
 
-        <section className="panel backup-panel">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.health')}</p>
-              <h2>{t('backup.integrity')}</h2>
-            </div>
-            <ShieldCheck size={18} aria-hidden="true" />
-          </div>
+        <Entry title={t('backup.integrity')} className="backup-panel">
           <p className="hint">{t('backup.integrityHint')}</p>
           <dl className="detail-list">
             <div>
               <dt>{t('backup.lastCheck')}</dt>
               <dd>
-                {status?.integrityCheck.finishedAt ?? t('backup.none')}
+                {when(status?.integrityCheck.finishedAt, t('backup.none'))}
                 {status?.integrityCheck.status ? ` · ${status.integrityCheck.status}` : ''}
               </dd>
             </div>
@@ -801,12 +750,12 @@ export function BackupScreen() {
             ) : null}
             <div>
               <dt>{t('backup.nextCheck')}</dt>
-              <dd>{status?.integrityCheck.nextRunAt ?? t('backup.notScheduled')}</dd>
+              <dd>{when(status?.integrityCheck.nextRunAt, t('backup.notScheduled'))}</dd>
             </div>
             <div>
               <dt>{t('backup.lastRestoreTest')}</dt>
               <dd>
-                {status?.restoreTest.finishedAt ?? t('backup.none')}
+                {when(status?.restoreTest.finishedAt, t('backup.none'))}
                 {status?.restoreTest.status ? ` · ${status.restoreTest.status}` : ''}
               </dd>
             </div>
@@ -832,16 +781,9 @@ export function BackupScreen() {
               {t('backup.restoreTest')}
             </button>
           </div>
-        </section>
+        </Entry>
 
-        <section className="panel backup-panel backup-restore">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('backup.kicker.recovery')}</p>
-              <h2>{t('backup.restore')}</h2>
-            </div>
-            <RotateCcw size={18} aria-hidden="true" />
-          </div>
+        <Entry title={t('backup.restore')} className="backup-panel backup-restore">
           <form
             className="form restore-form"
             onSubmit={(event) => {
@@ -873,7 +815,7 @@ export function BackupScreen() {
                 <select value={snapshotId} onChange={(event) => setSnapshotId(event.target.value)}>
                   {snapshots.map((snapshot) => (
                     <option key={snapshot.id} value={snapshot.id}>
-                      {snapshot.shortId} · {snapshot.time}
+                      {snapshot.shortId} · {formatDateTime(snapshot.time, locale) ?? snapshot.time}
                       {snapshot.scope ? ` · ${snapshot.scope}` : ''}
                     </option>
                   ))}
@@ -934,10 +876,23 @@ export function BackupScreen() {
               </button>
             </div>
           ) : null}
-        </section>
+        </Entry>
       </div>
     </div>
   );
+}
+
+/** Locale date and time for an ISO timestamp; null when the value does not parse. */
+function formatDateTime(value: string, locale: string): string | null {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function When({ value, locale, fallback }: { value: string | null | undefined; locale: string; fallback: string }) {
+  const text = value ? formatDateTime(value, locale) : null;
+  if (!value || !text) return <>{value || fallback}</>;
+  return <time dateTime={value}>{text}</time>;
 }
 
 function scopeNote(scope: string, t: (key: string) => string): string {

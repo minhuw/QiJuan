@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
+import { thumbBands } from './library';
 import type { HomePayload, LibraryPage } from './api';
 import { catalogs } from './i18n';
 
@@ -181,6 +182,46 @@ describe('library browser', () => {
     expect(screen.getAllByText('River').length).toBeGreaterThan(0);
   });
 
+  it('filters by identifier and marks Unidentified books quietly in both views', async () => {
+    const unidentified = { ...hill, identified: false };
+    const identified = { ...river, identified: true };
+    const calls = installFetch((url) =>
+      url.startsWith('/api/library')
+        ? json({ ...library, editions: [identified, unidentified] })
+        : route(url, emptyHome, library),
+    );
+    render(<App locale="en" />);
+    const results = await screen.findByRole('list', { name: catalogs.en.library.results });
+    // Grid: a mark under the caption of the Unidentified book only.
+    expect(within(within(results).getByRole('link', { name: /Hill/ })).getByText(catalogs.en.library.unidentified)).toBeInTheDocument();
+    expect(within(within(results).getByRole('link', { name: /River/ })).queryByText(catalogs.en.library.unidentified)).toBeNull();
+    expect(calls.filter((url) => url.startsWith('/api/library')).at(-1)).not.toContain('identified=');
+
+    const filter = screen.getByLabelText(catalogs.en.library.identifier);
+    expect(within(filter).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      catalogs.en.library.identifierAny,
+      catalogs.en.library.identified,
+      catalogs.en.library.unidentified,
+    ]);
+    fireEvent.change(filter, { target: { value: '0' } });
+    await waitFor(() => expect(calls.filter((url) => url.startsWith('/api/library')).at(-1)).toContain('identified=0'));
+    fireEvent.change(filter, { target: { value: '1' } });
+    await waitFor(() => expect(calls.filter((url) => url.startsWith('/api/library')).at(-1)).toContain('identified=1'));
+
+    // List: the same status-mark form, in the status column.
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.library.list }));
+    const rows = screen.getByRole('list', { name: catalogs.en.library.results });
+    const hillRow = within(rows).getByRole('link', { name: 'Hill' }).closest('li')!;
+    expect(hillRow.querySelector('.status-mark-unidentified')).toHaveTextContent(catalogs.en.library.unidentified);
+    expect(within(rows).getByRole('link', { name: 'River' }).closest('li')!.querySelector('.status-mark-unidentified')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.library.clearFilters }));
+    await waitFor(() => expect(calls.filter((url) => url.startsWith('/api/library')).at(-1)).not.toContain('identified='));
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), { target: { value: 'zh-Hans' } });
+    expect(screen.getByLabelText(catalogs['zh-Hans'].library.identifier)).toBeInTheDocument();
+    expect(screen.getByText(catalogs['zh-Hans'].identifiers.unidentified, { selector: '.status-mark-label' })).toBeInTheDocument();
+  });
+
   it('uses the focus ring tokens and 44px targets without stretching covers', () => {
     const dir = path.dirname(fileURLToPath(import.meta.url));
     const css = readFileSync(path.join(dir, 'styles/app.css'), 'utf8');
@@ -191,5 +232,75 @@ describe('library browser', () => {
     expect(css).not.toMatch(/\.cover-image\s*\{[^}]*object-fit:\s*(?:cover|fill)/s);
     expect(css).toContain('.cover-fallback');
     expect(css).toMatch(/\.cover-fallback\s*\{[^}]*font-family:\s*var\(--font-serif\)/s);
+  });
+
+  it('folds recurring index runs into one band per initial, with CJK as a single band', () => {
+    const bands = thumbBands(
+      [
+        { key: '#', offset: 0, count: 1 },
+        { key: 'A', offset: 1, count: 30 },
+        { key: 'W', offset: 31, count: 2 },
+        { key: 'A', offset: 33, count: 1 },
+        { key: 'cjk', offset: 34, count: 20 },
+      ],
+      24,
+      24,
+    );
+    expect(bands.map((band) => band.key)).toEqual(['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'cjk']);
+    const byKey = new Map(bands.map((band) => [band.key, band]));
+    expect(byKey.get('A')).toEqual({ key: 'A', target: 1, inView: true, current: true });
+    expect(byKey.get('W')).toMatchObject({ target: 31, inView: true, current: false });
+    expect(byKey.get('cjk')).toMatchObject({ target: 34, inView: true, current: false });
+    expect(byKey.get('#')).toMatchObject({ target: 0, inView: false, current: false });
+    expect(byKey.get('B')).toEqual({ key: 'B', target: null, inView: false, current: false });
+  });
+
+  it('renders the thumb index as letter bands that jump to the page holding their first book', async () => {
+    const indexed: LibraryPage = {
+      ...library,
+      total: 60,
+      index: [
+        { key: '#', offset: 0, count: 2 },
+        { key: 'A', offset: 2, count: 30 },
+        { key: 'R', offset: 32, count: 10 },
+        { key: 'cjk', offset: 42, count: 18 },
+      ],
+    };
+    const calls = installFetch((url) => route(url, home, indexed));
+    render(<App locale="en" />);
+    const nav = await screen.findByRole('navigation', { name: catalogs.en.library.thumbIndex });
+    const other = within(nav).getByRole('button', { name: catalogs.en.library.indexOther });
+    expect(other).toHaveAttribute('aria-current', 'location');
+    expect(other).toHaveClass('thumb-tab-current', 'thumb-tab-in');
+    expect(within(nav).getByRole('button', { name: 'A' })).not.toHaveAttribute('aria-current');
+    expect(within(nav).getByRole('button', { name: 'B' })).toBeDisabled();
+    expect(within(nav).getByRole('button', { name: 'Z' })).toBeDisabled();
+    const cjk = within(nav).getByRole('button', { name: catalogs.en.library.indexCjk });
+    expect(cjk).toBeEnabled();
+    expect(within(nav).getAllByRole('button').at(-1)).toBe(cjk);
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'R' }));
+    await waitFor(() => {
+      expect(calls.filter((url) => url.startsWith('/api/library')).at(-1)).toContain('offset=24');
+    });
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: catalogs.en.library.catalogue }));
+    fireEvent.click(within(nav).getByRole('button', { name: 'B' }));
+    expect(calls.filter((url) => url.startsWith('/api/library')).at(-1)).toContain('offset=24');
+
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
+      target: { value: 'zh-Hans' },
+    });
+    expect(
+      within(screen.getByRole('navigation', { name: catalogs['zh-Hans'].library.thumbIndex })).getByRole('button', {
+        name: catalogs['zh-Hans'].library.indexCjk,
+      }),
+    ).toBeEnabled();
+  });
+
+  it('omits the thumb index when the server sends no index', async () => {
+    installFetch((url) => route(url, home, library));
+    render(<App locale="en" />);
+    expect(await screen.findByRole('heading', { name: catalogs.en.library.catalogue })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: catalogs.en.library.thumbIndex })).not.toBeInTheDocument();
   });
 });

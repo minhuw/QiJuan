@@ -37,6 +37,12 @@ const UNCONFIGURED_ASSISTANT: MetadataAssistantInfo = {
   model: null,
   apiKeyConfigured: false,
   apiKeyHint: null,
+  webSearch: 'off',
+  webSearchAvailable: false,
+  searchApiKeyConfigured: false,
+  searchApiKeyHint: null,
+  googleBooksApiKeyConfigured: false,
+  googleBooksApiKeyHint: null,
 };
 
 const CONFIGURED_ASSISTANT: MetadataAssistantInfo = {
@@ -45,6 +51,21 @@ const CONFIGURED_ASSISTANT: MetadataAssistantInfo = {
   model: 'deepseek-chat',
   apiKeyConfigured: true,
   apiKeyHint: 'abcd',
+  webSearch: 'deepseek',
+  webSearchAvailable: true,
+  searchApiKeyConfigured: false,
+  searchApiKeyHint: null,
+  googleBooksApiKeyConfigured: false,
+  googleBooksApiKeyHint: null,
+};
+
+const OPENAI_ASSISTANT: MetadataAssistantInfo = {
+  ...CONFIGURED_ASSISTANT,
+  baseUrl: 'https://api.openai.com/v1',
+  model: 'gpt-test',
+  apiKeyHint: 'efgh',
+  webSearch: 'off',
+  webSearchAvailable: false,
 };
 
 interface RecordedCall {
@@ -58,6 +79,7 @@ function installSettingsFetch(
     role?: 'admin' | 'reader';
     assistant?: MetadataAssistantInfo;
     test?: () => Response;
+    models?: () => Response;
   } = {},
 ) {
   const role = options.role ?? 'admin';
@@ -81,6 +103,11 @@ function installSettingsFetch(
       calls.push({ url, method, body: null });
       return options.test ? options.test() : json({ ok: true, model: 'deepseek-chat' });
     }
+    if (url === '/api/metadata/assistant/models' && method === 'POST') {
+      const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+      calls.push({ url, method, body });
+      return options.models ? options.models() : json({ models: ['deepseek-chat', 'deepseek-reasoner'] });
+    }
     if (url === '/api/metadata/assistant') {
       const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null;
       calls.push({ url, method, body });
@@ -90,13 +117,27 @@ function installSettingsFetch(
         return json({ assistant: state.assistant });
       }
       if (method === 'PUT' && body) {
-        const typedKey = typeof body.apiKey === 'string' ? body.apiKey : '';
+        const typed = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+        const typedKey = typed(body.apiKey);
+        const searchKey = typed(body.searchApiKey);
+        const googleKey = typed(body.googleBooksApiKey);
+        const baseUrl = String(body.baseUrl ?? '');
+        const webSearch =
+          body.webSearch === 'deepseek' || body.webSearch === 'off' ? body.webSearch : state.assistant.webSearch;
+        const searchApiKeyHint = searchKey ? searchKey.slice(-4) : state.assistant.searchApiKeyHint;
         state.assistant = {
           configured: true,
-          baseUrl: String(body.baseUrl ?? ''),
+          baseUrl,
           model: String(body.model ?? ''),
           apiKeyConfigured: typedKey.length > 0 || state.assistant.apiKeyConfigured,
           apiKeyHint: typedKey.length > 0 ? typedKey.slice(-4) : state.assistant.apiKeyHint,
+          webSearch,
+          webSearchAvailable:
+            webSearch === 'deepseek' && (baseUrl.includes('api.deepseek.com') || searchApiKeyHint !== null),
+          searchApiKeyConfigured: searchApiKeyHint !== null,
+          searchApiKeyHint,
+          googleBooksApiKeyConfigured: googleKey.length > 0 || state.assistant.googleBooksApiKeyConfigured,
+          googleBooksApiKeyHint: googleKey ? googleKey.slice(-4) : state.assistant.googleBooksApiKeyHint,
         };
         return json({ assistant: state.assistant });
       }
@@ -284,6 +325,10 @@ describe('settings metadata agent', () => {
       baseUrl: 'https://api.deepseek.com/v1',
       model: 'deepseek-chat',
       apiKey: 'testkey9876',
+      // A new DeepSeek base URL sends its default web search choice.
+      webSearch: 'deepseek',
+      searchApiKey: '',
+      googleBooksApiKey: '',
     });
     expect(screen.getByLabelText(catalogs.en.settings.assistant.apiKey)).toHaveValue('');
     expect(screen.getByText('••••9876')).toBeInTheDocument();
@@ -303,6 +348,8 @@ describe('settings metadata agent', () => {
       baseUrl: CONFIGURED_ASSISTANT.baseUrl,
       model: 'deepseek-reasoner',
       apiKey: '',
+      searchApiKey: '',
+      googleBooksApiKey: '',
     });
     expect(screen.getByLabelText(catalogs.en.settings.assistant.model)).toHaveValue('deepseek-reasoner');
     expect(screen.getByText('••••abcd')).toBeInTheDocument();
@@ -333,6 +380,55 @@ describe('settings metadata agent', () => {
     );
   });
 
+  it('fetches models from the unsaved form values into a datalist', async () => {
+    const server = installSettingsFetch();
+    renderSettings();
+
+    const fetchButton = await screen.findByRole('button', { name: catalogs.en.settings.assistant.fetchModels });
+    expect(fetchButton).toBeDisabled();
+
+    const model = screen.getByLabelText(catalogs.en.settings.assistant.model);
+    fireEvent.change(model, { target: { value: 'my-model' } });
+    fireEvent.change(screen.getByLabelText(catalogs.en.settings.assistant.baseUrl), {
+      target: { value: ' https://api.deepseek.com/v1 ' },
+    });
+    fireEvent.change(screen.getByLabelText(catalogs.en.settings.assistant.apiKey), {
+      target: { value: 'typed-key' },
+    });
+    expect(fetchButton).toBeEnabled();
+    fireEvent.click(fetchButton);
+
+    const status = await screen.findByText(catalogs.en.settings.assistant.modelsFound, { exact: false });
+    expect(status).toHaveAttribute('role', 'status');
+    expect(status).toHaveTextContent('2');
+    expect(server.calls.find((call) => call.url === '/api/metadata/assistant/models')?.body).toEqual({
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'typed-key',
+    });
+    expect(server.calls.some((call) => call.method === 'PUT')).toBe(false);
+
+    const listId = model.getAttribute('list');
+    expect(listId).toBeTruthy();
+    const options = Array.from(document.getElementById(listId!)?.querySelectorAll('option') ?? []);
+    expect(options.map((option) => option.getAttribute('value'))).toEqual(['deepseek-chat', 'deepseek-reasoner']);
+    expect(model).toHaveValue('my-model');
+  });
+
+  it('says when the server does not list its models', async () => {
+    installSettingsFetch({
+      assistant: CONFIGURED_ASSISTANT,
+      models: () => json({ error: 'assistant_models_unsupported' }, 502),
+    });
+    renderSettings();
+
+    fireEvent.click(await screen.findByRole('button', { name: catalogs.en.settings.assistant.fetchModels }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      catalogs.en.settings.assistant.errors.assistant_models_unsupported,
+    );
+    expect(screen.getByLabelText(catalogs.en.settings.assistant.model)).not.toHaveAttribute('list');
+    expect(screen.getByLabelText(catalogs.en.settings.assistant.model)).toHaveValue('deepseek-chat');
+  });
+
   it('removes the saved configuration', async () => {
     const server = installSettingsFetch({ assistant: CONFIGURED_ASSISTANT });
     renderSettings();
@@ -346,6 +442,75 @@ describe('settings metadata agent', () => {
     expect(
       server.calls.some((call) => call.url === '/api/metadata/assistant' && call.method === 'DELETE'),
     ).toBe(true);
+  });
+
+  it('shows web search on for DeepSeek with the cost note and no separate search key', async () => {
+    installSettingsFetch({ assistant: CONFIGURED_ASSISTANT });
+    renderSettings();
+    const assistant = catalogs.en.settings.assistant;
+
+    const deepseek = await screen.findByRole('radio', { name: assistant.webSearchMode.deepseek });
+    expect(deepseek).toBeChecked();
+    expect(screen.getByRole('radio', { name: assistant.webSearchMode.off })).not.toBeChecked();
+    expect(screen.getByRole('group', { name: assistant.webSearch })).toBeInTheDocument();
+    expect(screen.getByText(assistant.webSearchCost)).toBeInTheDocument();
+    expect(screen.queryByLabelText(assistant.searchApiKey)).toBeNull();
+    const google = screen.getByLabelText(assistant.googleBooksApiKey);
+    expect(google).toHaveAttribute('type', 'password');
+    expect(screen.getByText(assistant.googleKeyOptional)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: assistant.webSearchMode.off }));
+    expect(screen.queryByText(assistant.webSearchCost)).toBeNull();
+    expect(screen.getByText(assistant.webSearchOffHint)).toBeInTheDocument();
+  });
+
+  it('asks for a DeepSeek search key when web search is on for another provider', async () => {
+    const server = installSettingsFetch({ assistant: OPENAI_ASSISTANT });
+    renderSettings();
+    const assistant = catalogs.en.settings.assistant;
+
+    const off = await screen.findByRole('radio', { name: assistant.webSearchMode.off });
+    expect(off).toBeChecked();
+    expect(screen.queryByLabelText(assistant.searchApiKey)).toBeNull();
+
+    fireEvent.click(screen.getByRole('radio', { name: assistant.webSearchMode.deepseek }));
+    const searchKey = screen.getByLabelText(assistant.searchApiKey);
+    expect(searchKey).toHaveAttribute('type', 'password');
+    expect(screen.getByText(assistant.searchKeyRequired)).toBeInTheDocument();
+    expect(screen.getByText(assistant.webSearchCost)).toBeInTheDocument();
+
+    fireEvent.change(searchKey, { target: { value: 'ds-search-2222' } });
+    fireEvent.change(screen.getByLabelText(assistant.googleBooksApiKey), { target: { value: 'gb-key-3333' } });
+    fireEvent.click(screen.getByRole('button', { name: assistant.save }));
+
+    expect(await screen.findByText(assistant.saved)).toBeInTheDocument();
+    expect(server.calls.find((call) => call.method === 'PUT')?.body).toEqual({
+      baseUrl: OPENAI_ASSISTANT.baseUrl,
+      model: 'gpt-test',
+      apiKey: '',
+      webSearch: 'deepseek',
+      searchApiKey: 'ds-search-2222',
+      googleBooksApiKey: 'gb-key-3333',
+    });
+    // Saved keys come back only as hints; the fields clear.
+    expect(screen.getByLabelText(assistant.searchApiKey)).toHaveValue('');
+    expect(screen.getByLabelText(assistant.googleBooksApiKey)).toHaveValue('');
+    expect(screen.getByText(assistant.searchKeyKept.replace('{hint}', '2222'))).toBeInTheDocument();
+    expect(screen.getByText(assistant.googleKeyKept.replace('{hint}', '3333'))).toBeInTheDocument();
+    expect(screen.getByText(assistant.webSearchOn)).toBeInTheDocument();
+  });
+
+  it('follows the base URL for the web search default until the admin chooses', async () => {
+    installSettingsFetch();
+    renderSettings();
+    const assistant = catalogs.en.settings.assistant;
+
+    const base = await screen.findByLabelText(assistant.baseUrl);
+    expect(screen.getByRole('radio', { name: assistant.webSearchMode.off })).toBeChecked();
+    fireEvent.change(base, { target: { value: 'https://api.deepseek.com' } });
+    expect(screen.getByRole('radio', { name: assistant.webSearchMode.deepseek })).toBeChecked();
+    fireEvent.change(base, { target: { value: 'http://localhost:11434/v1' } });
+    expect(screen.getByRole('radio', { name: assistant.webSearchMode.off })).toBeChecked();
   });
 
   it('keeps the panel away from readers', async () => {

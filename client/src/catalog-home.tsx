@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { BookCopy, CheckSquare, ChevronDown } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { api, type EditionSummary } from './api';
 import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { useLocale } from './shell';
@@ -87,26 +87,24 @@ export function CatalogHome() {
   }
 
   return (
-    <details className="batch-panel">
+    <details className="entry batch-panel">
       <summary>
-        <span className="batch-summary-icon" aria-hidden="true">
-          <CheckSquare size={17} />
+        <span className="entry-head batch-summary-head">
+          <span className="batch-summary-title">{t('catalog.edit')}</span>
         </span>
         <span className="batch-summary-copy">
-          <span className="batch-summary-title">{t('catalog.edit')}</span>
           <span className="batch-summary-hint">{t('catalog.editHint')}</span>
+          <ChevronDown className="batch-chevron" size={17} strokeWidth={1.5} aria-hidden="true" />
         </span>
-        <ChevronDown className="batch-chevron" size={17} aria-hidden="true" />
       </summary>
       <div className="batch-body">
         <div className="batch-list">
           <div className="panel-head">
-            <div>
-              <p className="section-kicker">{t('home.books')}</p>
-              <h2>{t('catalog.books')}</h2>
-            </div>
+            <h2>{t('catalog.books')}</h2>
             {editions && editions.length > 0 ? (
-              <span className="section-count">{selected.length}</span>
+              <span className="panel-meta">
+                {t('catalog.selected')} · <span className="num">{selected.length}</span>
+              </span>
             ) : null}
           </div>
           {error ? (
@@ -120,7 +118,7 @@ export function CatalogHome() {
           ) : null}
           {editions === null && !error ? <LoadingState /> : null}
           {editions && editions.length === 0 ? (
-            <EmptyState compact icon={<BookCopy size={20} />} title={t('home.placeholder')} />
+            <EmptyState compact title={t('home.placeholder')} />
           ) : null}
           {editions && editions.length > 0 ? (
             <ul className="batch-book-list">
@@ -133,7 +131,7 @@ export function CatalogHome() {
                       aria-label={`${t('catalog.select')} ${edition.title}`}
                       onChange={() => toggle(edition.id)}
                     />
-                    <span className="book-main">{edition.title}</span>
+                    <span className="batch-book-title">{edition.title}</span>
                   </label>
                   {edition.language ? <span className="hint-inline">{edition.language}</span> : null}
                   <Link className="text-link" to={`/books/${edition.id}`}>
@@ -147,10 +145,7 @@ export function CatalogHome() {
         {editions && editions.length > 0 ? (
           <form className="form batch-form" onSubmit={(event) => void apply(event)}>
             <div className="panel-head">
-              <div>
-                <p className="section-kicker">{t('catalog.edit')}</p>
-                <h2>{t('catalog.apply')}</h2>
-              </div>
+              <h2>{t('catalog.apply')}</h2>
             </div>
             {formError ? (
               <div className="alert alert-error" role="alert">
