@@ -52,6 +52,32 @@ export function rewriteArchivedText(url: string, text: string): string {
   }
 }
 
+/** Resolves local chapter images from the archive, including resources omitted from the OPF manifest. */
+export async function resolveArchivedImages(
+  doc: Document,
+  sectionUrl: string | undefined,
+  archive: { createUrl: (url: string) => Promise<unknown> } | undefined,
+): Promise<void> {
+  if (!archive || !sectionUrl || typeof doc.querySelectorAll !== 'function') return;
+  const pending: Promise<void>[] = [];
+  doc.querySelectorAll('img[src]').forEach((image) => {
+    const source = image.getAttribute('src')?.trim() ?? '';
+    if (!source || source.startsWith('#') || isRemoteUrl(source) || /^(?:data|blob):/i.test(source)) return;
+    let archived: string;
+    try {
+      archived = new URL(source, new URL(sectionUrl, 'https://qijuan.invalid')).pathname;
+    } catch {
+      return;
+    }
+    pending.push(
+      archive.createUrl(archived).then((url) => {
+        if (typeof url === 'string' && url) image.setAttribute('src', url);
+      }),
+    );
+  });
+  await Promise.all(pending);
+}
+
 /**
  * Rewrites remote fonts and images in a parsed chapter so the iframe does not request them.
  * Failures are ignored by the caller. Local chapter files are left alone.

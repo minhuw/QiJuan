@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDebouncedSave } from './debounce';
 import { isSavedEpubLocator, locatorFromRelocation } from './cfi';
-import { neutralizeRemoteAssets, replaceRemoteCssUrls } from './remote';
+import { neutralizeRemoteAssets, replaceRemoteCssUrls, resolveArchivedImages } from './remote';
 import { openEpubSession } from './session';
 import { CJK_SANS, CJK_SERIF, fontStack, mountRendition, renditionOptionsFor, themeCss } from './settings';
 import type { ReaderFlow } from './settings';
@@ -206,6 +206,33 @@ describe('epub adapter', () => {
     expect(remote.getAttribute('src')?.startsWith('data:')).toBe(true);
     expect(sheet.textContent).not.toContain('https://');
     expect(sheet.textContent).toContain('data:');
+  });
+
+  it('loads local chapter images from the archive even when the OPF omits them', async () => {
+    const doc = document.implementation.createHTMLDocument('chapter');
+    const local = doc.createElement('img');
+    local.setAttribute('src', 'images/illustration.jpg');
+    const parent = doc.createElement('img');
+    parent.setAttribute('src', '../cover.jpg');
+    const remote = doc.createElement('img');
+    remote.setAttribute('src', 'https://cdn.example/remote.jpg');
+    const embedded = doc.createElement('img');
+    embedded.setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+    doc.body.append(local, parent, remote, embedded);
+    const requested: string[] = [];
+
+    await resolveArchivedImages(doc, '/OPS/chapter1.html', {
+      async createUrl(url) {
+        requested.push(url);
+        return `blob:${url}`;
+      },
+    });
+
+    expect(requested).toEqual(['/OPS/images/illustration.jpg', '/cover.jpg']);
+    expect(local.getAttribute('src')).toBe('blob:/OPS/images/illustration.jpg');
+    expect(parent.getAttribute('src')).toBe('blob:/cover.jpg');
+    expect(remote.getAttribute('src')).toBe('https://cdn.example/remote.jpg');
+    expect(embedded.getAttribute('src')?.startsWith('data:')).toBe(true);
   });
 
   it('writes the last cfi once after a burst of page turns', () => {

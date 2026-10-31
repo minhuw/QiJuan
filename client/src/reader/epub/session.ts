@@ -2,7 +2,7 @@ import ePub from 'epubjs';
 import { createPageScroll } from '../page-scroll';
 import { isSavedEpubLocator, locatorFromRelocation } from './cfi';
 import { onReaderKey, type ReaderKeyEvent } from './keys';
-import { isArchivedStylesheet, isFontOrImage, isRemoteUrl, neutralizeRemoteAssets, rewriteArchivedText, substituteFor } from './remote';
+import { isArchivedStylesheet, isFontOrImage, isRemoteUrl, neutralizeRemoteAssets, resolveArchivedImages, rewriteArchivedText, substituteFor } from './remote';
 import { fontStack, mountRendition, renditionOptionsFor, themeCss, type ReaderFlow } from './settings';
 import type { BookFacts, EpubSession, OpenEpubOptions, SearchHit, TocItem, Typography } from './types';
 
@@ -14,6 +14,7 @@ interface LooseArchive {
 }
 
 interface LooseSection {
+  url?: string;
   load: (request: unknown) => Promise<unknown>;
   search?: (query: string) => Array<{ cfi?: string; excerpt?: string }>;
   find?: (query: string) => Array<{ cfi?: string; excerpt?: string }>;
@@ -56,7 +57,7 @@ interface LooseBook {
   unarchive: (data: ArrayBuffer, encoding?: string) => Promise<unknown>;
   archive?: LooseArchive;
   spine: {
-    hooks: { content: { register: (fn: (doc: Document) => void) => void } };
+    hooks: { content: { register: (fn: (doc: Document, section?: LooseSection) => unknown) => void } };
     spineItems: LooseSection[];
   };
   packaging?: { metadata?: { language?: string; direction?: string } };
@@ -155,12 +156,13 @@ export async function openEpubSession(
       guardArchive(book.archive);
       return result;
     });
-  book.spine.hooks.content.register((doc) => {
+  book.spine.hooks.content.register((doc, section) => {
     try {
       neutralizeRemoteAssets(doc);
     } catch {
       // A chapter that cannot be rewritten still opens.
     }
+    return resolveArchivedImages(doc, section?.url, book.archive).catch(() => undefined);
   });
   await book.open(data);
 
