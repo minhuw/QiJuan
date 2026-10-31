@@ -27,9 +27,6 @@ export function parseEpub(filePath: string): BookMetadata {
     throw error;
   }
   try {
-    const ordered = [...zip.entries].sort((a, b) => a.localHeaderOffset - b.localHeaderOffset);
-    const first = ordered[0];
-    if (!first || first.name !== 'mimetype') throw new BookError('malformed');
     let mime: string;
     try {
       mime = zip.read('mimetype', 256).toString('utf8');
@@ -37,7 +34,8 @@ export function parseEpub(filePath: string): BookMetadata {
       if (error instanceof ZipError) throw new BookError('malformed');
       throw error;
     }
-    if (mime !== MIME) throw new BookError('malformed');
+    // Many otherwise readable EPUBs place mimetype later or terminate it with a newline.
+    if (mime.trim() !== MIME) throw new BookError('malformed');
 
     const container = readXml(zip, 'META-INF/container.xml');
     const rootfile = findDescendant(container, 'rootfile');

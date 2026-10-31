@@ -56,6 +56,30 @@ describe('book fixtures', () => {
     expect(parsed.cover?.bytes.equals(COVER_PNG)).toBe(true);
   });
 
+  it('accepts a readable EPUB whose mimetype is not first and ends with a newline', () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'reordered.epub');
+    const container = `<?xml version="1.0"?>
+      <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+        <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+      </container>`;
+    const opf = `<?xml version="1.0"?>
+      <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+        <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <dc:title>Reordered Tale</dc:title><dc:language>en</dc:language>
+        </metadata><manifest/><spine/>
+      </package>`;
+    writeFileSync(file, buildZip([
+      { name: 'META-INF/container.xml', data: Buffer.from(container) },
+      { name: 'mimetype', data: Buffer.from('application/epub+zip\r\n') },
+      { name: 'OEBPS/content.opf', data: Buffer.from(opf) },
+    ]));
+
+    const parsed = parseBookFile('reordered.epub', file);
+    expect(parsed.title).toBe('Reordered Tale');
+    expect(parsed.language).toBe('en');
+  });
+
   it('reads a text-layer PDF and an image-only PDF', () => {
     const dir = tempDir();
     const text = buildTextPdf();
