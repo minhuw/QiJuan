@@ -121,7 +121,7 @@ describe('pdf reading place', () => {
     });
     expect(file.statusCode).toBe(200);
     expect(String(file.headers['content-type'])).toContain('application/pdf');
-    expect(String(file.headers['content-disposition'])).toContain('scan.pdf');
+    expect(String(file.headers['content-disposition'])).toContain(`filename*=UTF-8''${encodeURIComponent('扫描件.pdf')}`);
     expect(file.rawPayload.equals(pdf)).toBe(true);
 
     const percent = await started.app.inject({

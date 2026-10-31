@@ -16,7 +16,8 @@ import {
   renderSearchFeed,
 } from './opds.js';
 import { createOpdsToken, listOpdsTokens, parseTokenLabel, revokeOpdsToken } from './opds-tokens.js';
-import { contentDisposition, epubReadStream, openAssetStream, parseByteRange } from './reader.js';
+import { contentDisposition } from './file-names.js';
+import { epubReadStream, openAssetStream, parseByteRange } from './reader.js';
 import type { AuthUser } from './sessions.js';
 
 export function registerOpdsRoutes(app: FastifyInstance, deps: { db: AppDatabase; dataDir: string }): void {
@@ -156,7 +157,7 @@ export function registerOpdsRoutes(app: FastifyInstance, deps: { db: AppDatabase
         return reply.code(416).send({ error: 'invalid_request' });
       }
       reply.header('content-type', pdf ? 'application/pdf' : 'application/epub+zip');
-      reply.header('content-disposition', attachmentDisposition(file.filename, pdf ? 'book.pdf' : 'book.epub'));
+      reply.header('content-disposition', contentDisposition(file.filename, file.format, 'attachment'));
       if (range) {
         reply.header('content-range', `bytes ${range.start}-${range.end}/${file.bytes}`);
         reply.header('content-length', range.end - range.start + 1);
@@ -214,10 +215,6 @@ function parseOffset(query: unknown): number {
   const offset = Number(record.offset);
   if (!Number.isSafeInteger(offset) || offset > 1_000_000) throw new CatalogError('invalid_request');
   return offset;
-}
-
-function attachmentDisposition(filename: string, fallback: string): string {
-  return contentDisposition(filename, fallback).replace(/^inline;/, 'attachment;');
 }
 
 function currentUser(request: FastifyRequest): AuthUser {

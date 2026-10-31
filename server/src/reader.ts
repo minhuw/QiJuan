@@ -8,6 +8,7 @@ import { parsePdfLocator } from './pdf-locator.js';
 import { parsePdfSelectionLocator } from './pdf-annotation.js';
 import type { AppDatabase } from './db.js';
 import { requireLiveEdition } from './editions.js';
+import { assetDisplayFilename } from './file-names.js';
 import { resolveInsideRoot } from './library-files.js';
 import { bookmarks, editions, fileAssets, highlights, libraries, notes, readingPositions } from './schema.js';
 
@@ -63,6 +64,7 @@ export interface ReadingPlace {
 export interface ReadableAsset {
   absolutePath: string;
   bytes: number;
+  /** The display name from file-names.ts, not the name on disk. */
   filename: string;
   format: 'epub' | 'pdf';
 }
@@ -481,7 +483,8 @@ export function openAssetStream(db: AppDatabase, dataDir: string, editionId: num
   try {
     const stat = statSync(absolutePath);
     if (!stat.isFile()) throw new CatalogError('not_found');
-    return { absolutePath, bytes: stat.size, filename: asset.originalFilename, format: asset.format };
+    const filename = assetDisplayFilename(db, editionId, assetId) ?? asset.originalFilename;
+    return { absolutePath, bytes: stat.size, filename, format: asset.format };
   } catch (error) {
     if (error instanceof CatalogError) throw error;
     throw new CatalogError('not_found');
@@ -514,19 +517,6 @@ export function parseByteRange(
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return 'invalid';
   if (start < 0 || start >= size || end < start || end >= size) return 'invalid';
   return { start, end };
-}
-
-export function contentDisposition(filename: string, fallback = 'book.epub'): string {
-  const cleaned = filename.replace(/[\r\n"]/g, '').trim();
-  const safe = cleaned.length > 0 && cleaned.length <= 200 ? cleaned : fallback;
-  // HTTP header values are ASCII. Keep an ASCII filename for old clients and put the
-  // real name in the RFC 5987 filename* parameter.
-  const ascii = /^[\x20-\x7e]+$/.test(safe) ? safe.replace(/["\\]/g, '_') : fallback;
-  const encoded = encodeURIComponent(safe).replace(
-    /['()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 function requireCfi(value: string): string {

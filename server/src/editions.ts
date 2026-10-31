@@ -24,6 +24,7 @@ import {
   replaceTags,
   saveCoverRow,
 } from './edition-fields.js';
+import { editionAssetFilenames } from './file-names.js';
 import { recordIdentifierSuggestions } from './suggestions.js';
 import { editions, fileAssets, libraries, series } from './schema.js';
 import { sniffImage } from './metadata.js';
@@ -40,6 +41,8 @@ export interface EditionAsset {
   id: number;
   format: 'epub' | 'pdf';
   originalFilename: string;
+  /** Computed from current metadata by file-names.ts; never stored. */
+  displayFilename: string;
   bytes: number;
   availability: 'present' | 'missing';
 }
@@ -174,6 +177,7 @@ export function getEditionDetail(
     .where(and(eq(fileAssets.editionId, edition.id), isNull(fileAssets.trashedAt)))
     .orderBy(asc(fileAssets.id))
     .all();
+  const displayNames = editionAssetFilenames(db, edition.id);
   return {
     id: edition.id,
     libraryId: edition.libraryId,
@@ -198,6 +202,7 @@ export function getEditionDetail(
       id: asset.id,
       format: asset.format,
       originalFilename: asset.originalFilename,
+      displayFilename: displayNames.get(asset.id) ?? asset.originalFilename,
       bytes: asset.bytes,
       availability: asset.availability,
     })),

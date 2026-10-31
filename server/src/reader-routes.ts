@@ -4,11 +4,11 @@ import { CatalogError } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { requireLiveEdition } from './editions.js';
 import { exportAnnotations, annotationsMarkdown } from './annotations-export.js';
+import { contentDisposition } from './file-names.js';
 import {
   addBookmark,
   addHighlight,
   addNote,
-  contentDisposition,
   epubReadStream,
   loadReadingPlace,
   openAssetStream,
@@ -43,7 +43,8 @@ export function registerReaderRoutes(app: FastifyInstance, deps: { db: AppDataba
         return reply.code(416).send({ error: 'invalid_request' });
       }
       reply.header('content-type', pdf ? 'application/pdf' : 'application/epub+zip');
-      reply.header('content-disposition', contentDisposition(file.filename, pdf ? 'book.pdf' : 'book.epub'));
+      const download = (request.query as { download?: string }).download === '1';
+      reply.header('content-disposition', contentDisposition(file.filename, file.format, download ? 'attachment' : 'inline'));
       if (range) {
         reply.header('content-range', `bytes ${range.start}-${range.end}/${file.bytes}`);
         reply.header('content-length', range.end - range.start + 1);

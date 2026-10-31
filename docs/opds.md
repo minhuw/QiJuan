@@ -52,7 +52,7 @@ The feed has two search relations, both under the same Basic credential:
 
 Acquisition feed of editions in that library. Each present EPUB has an acquisition link of type `application/epub+zip`. Each present PDF has type `application/pdf`. The relation is `http://opds-spec.org/acquisition/open-access`. A cover, when one is stored, is linked with `http://opds-spec.org/image` and `http://opds-spec.org/image/thumbnail`.
 
-`GET /opds/editions/:editionId/assets/:assetId` downloads that file.
+`GET /opds/editions/:editionId/assets/:assetId` downloads that file as an attachment named from its metadata (see File names in [metadata.md](metadata.md)).
 
 `GET /opds/editions/:editionId/cover` returns the cover image.
 
