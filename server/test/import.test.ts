@@ -402,6 +402,23 @@ describe('batch import', () => {
     const titles = after.prepare('SELECT title FROM editions ORDER BY id').all() as Array<{ title: string }>;
     after.close();
     expect(titles.map((row) => row.title)).toEqual([EPUB_TITLE, TEXT_PDF_TITLE, IMAGE_PDF_TITLE, EPUB_TITLE]);
+
+    // A long CJK filename is shortened without losing the extension that decides the format.
+    const longName = `${'艺术与视知觉 纪念版 Art and visual perception -- 阿恩海姆 '.repeat(6)}.epub`;
+    const longEpub = buildEpub({
+      identifier: 'urn:uuid:99999999-2222-4333-8444-555555555555',
+      english: 'A third edition with a very long file name.',
+    });
+    const long = await app.inject({
+      method: 'POST',
+      url: `/api/imports?libraryId=${libraryId}`,
+      headers: { ...multipart([{ name: 'files', filename: longName, content: longEpub }]).headers, cookie },
+      payload: multipart([{ name: 'files', filename: longName, content: longEpub }]).payload,
+    });
+    const longJob = await waitForJob(app, cookie, long.json().job.id as number);
+    expect(longJob.items[0]?.status).toBe('succeeded');
+    expect(longJob.items[0]?.filename.endsWith('.epub')).toBe(true);
+    expect(Buffer.byteLength(longJob.items[0]?.filename ?? '', 'utf8')).toBeLessThanOrEqual(200);
   });
 
   it('creates an upload edition from the agent proposal instead of embedded metadata', async () => {

@@ -159,9 +159,29 @@ function currentUser(request: FastifyRequest): AuthUser {
 
 function safeFilename(input: string): string {
   const base = path.posix.basename((input || 'file').replaceAll('\\', '/')).replace(/[\u0000-\u001f\u007f]/g, '');
-  const trimmed = base.trim().slice(0, 180);
+  const trimmed = shortenKeepingExtension(base.trim(), MAX_FILENAME_BYTES);
   if (!trimmed || trimmed === '.' || trimmed === '..') return 'file';
   return trimmed;
+}
+
+/** Filesystems cap names at 255 bytes; staging adds a short prefix, so stay well under. */
+const MAX_FILENAME_BYTES = 200;
+
+/** Shortens the stem by whole characters so the UTF-8 name fits, keeping the extension that decides the format. */
+function shortenKeepingExtension(name: string, maxBytes: number): string {
+  if (Buffer.byteLength(name, 'utf8') <= maxBytes) return name;
+  const ext = path.posix.extname(name);
+  const keepExt = ext.length > 1 && ext.length <= 10 ? ext : '';
+  const room = maxBytes - Buffer.byteLength(keepExt, 'utf8');
+  let stem = '';
+  let used = 0;
+  for (const char of Array.from(name.slice(0, name.length - keepExt.length))) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (used + size > room) break;
+    stem += char;
+    used += size;
+  }
+  return `${stem.trimEnd()}${keepExt}`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
