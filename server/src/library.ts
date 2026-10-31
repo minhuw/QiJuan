@@ -4,6 +4,8 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { CatalogError } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { getEditionDetail, requireLiveEdition } from './editions.js';
+import { presentRatings, ratingsQueued } from './ratings.js';
+import { IDENTIFIER_SCHEMES } from './identifiers.js';
 import {
   editions,
   favorites,
@@ -14,6 +16,7 @@ import {
   shelves,
 } from './schema.js';
 import { listOpenSuggestions } from './suggestions.js';
+import { pendingLookup } from './metadata/apply.js';
 import { isUniqueConstraint } from './sql-errors.js';
 
 const CONTINUE_LIMIT = 12;
@@ -65,6 +68,8 @@ export interface LibraryCard {
   status: ReadingStatus | null;
   rating: number | null;
   favorite: boolean;
+  /** False for an Unidentified edition: no identifier in a catalog scheme. */
+  identified: boolean;
 }
 
 export interface ShelfSummary {
@@ -81,8 +86,23 @@ export interface LibraryQuery {
   format: 'epub' | 'pdf' | null;
   status: ReadingStatus | null;
   shelfId: number | null;
+  /** true: has an identifier in a catalog scheme; false: Unidentified; null: either. */
+  identified?: boolean | null;
   limit: number;
   offset: number;
+}
+
+/**
+ * One contiguous run of a title initial in the filtered catalogue order. `key`
+ * is an ASCII letter A–Z, '#' for digits and other marks, or 'cjk' for CJK
+ * initials: sort_title carries no pinyin, so CJK titles are not split by
+ * reading. sort_title orders by code point, so a key can recur ('atlas' sorts
+ * after 'Zola', 'Émile' after both); runs are listed by offset.
+ */
+export interface LibraryIndexEntry {
+  key: string;
+  offset: number;
+  count: number;
 }
 
 export interface LibraryPage {
@@ -92,6 +112,7 @@ export interface LibraryPage {
   offset: number;
   languages: string[];
   shelves: ShelfSummary[];
+  index: LibraryIndexEntry[];
 }
 
 export interface HomePayload {
@@ -108,7 +129,25 @@ interface CardRow {
   status: string | null;
   rating: number | null;
   favorite: number;
+  identified: number;
 }
+
+/** An edition with no identifier in a catalog scheme is Unidentified. */
+const IDENTIFIED_SQL = `EXISTS (
+  SELECT 1 FROM edition_identifiers ei
+  WHERE ei.edition_id = e.id AND ei.scheme IN (${IDENTIFIER_SCHEMES.map((scheme) => `'${scheme}'`).join(', ')})
+)`;
+
+/** First sort_title code point, upper-cased for ASCII only. */
+const INITIAL_CODE_EXPR = 'unicode(upper(substr(e.sort_title, 1, 1)))';
+/** CJK radicals through unified ideographs, compatibility ideographs, and the supplementary ideograph planes. */
+const INITIAL_KEY_EXPR = `CASE
+  WHEN ${INITIAL_CODE_EXPR} BETWEEN 65 AND 90 THEN char(${INITIAL_CODE_EXPR})
+  WHEN ${INITIAL_CODE_EXPR} BETWEEN 11904 AND 40959
+    OR ${INITIAL_CODE_EXPR} BETWEEN 63744 AND 64255
+    OR ${INITIAL_CODE_EXPR} BETWEEN 131072 AND 262143 THEN 'cjk'
+  ELSE '#'
+END`;
 
 function sqliteOf(db: AppDatabase): Database.Database {
   return (db as AppDatabase & { $client: Database.Database }).$client;
@@ -190,7 +229,7 @@ function textMatch(q: string): { sql: string; params: Array<string | number> } {
   const isbn = isbnKey(q);
   if (isbn) {
     clauses.push(`EXISTS (
-      SELECT 1 FROM identifiers i
+      SELECT 1 FROM edition_identifiers i
       WHERE i.edition_id = e.id
         AND instr(lower(i.scheme), 'isbn') > 0
         AND ${COMPACT_ISBN_EXPR} LIKE ? ESCAPE '\\'
@@ -235,6 +274,9 @@ function filterSql(input: LibraryQuery): { sql: string; params: Array<string | n
     )`);
     params.push(input.shelfId, input.userId);
   }
+  if (input.identified != null) {
+    parts.push(`${input.identified ? '' : 'NOT '}${IDENTIFIED_SQL}`);
+  }
   if (input.q) {
     const text = textMatch(input.q);
     parts.push(text.sql);
@@ -259,7 +301,8 @@ export function loadCards(db: AppDatabase, userId: number, ids: number[]): Libra
     .prepare(
       `SELECT e.id, e.library_id AS libraryId, e.title, e.language,
         rs.status AS status, r.rating AS rating,
-        CASE WHEN f.user_id IS NULL THEN 0 ELSE 1 END AS favorite
+        CASE WHEN f.user_id IS NULL THEN 0 ELSE 1 END AS favorite,
+        CASE WHEN ${IDENTIFIED_SQL} THEN 1 ELSE 0 END AS identified
       FROM editions e
       LEFT JOIN reading_statuses rs ON rs.edition_id = e.id AND rs.user_id = ?
       LEFT JOIN ratings r ON r.edition_id = e.id AND r.user_id = ?
@@ -320,6 +363,7 @@ export function loadCards(db: AppDatabase, userId: number, ids: number[]): Libra
       status: isReadingStatus(row.status) ? row.status : null,
       rating: row.rating,
       favorite: row.favorite === 1,
+      identified: row.identified === 1,
     });
   }
   return cards;
@@ -374,7 +418,7 @@ export function searchLibrary(db: AppDatabase, input: LibraryQuery): LibraryPage
   const shelves = listUserShelves(db, input.userId, input.libraryIds);
   const languages = listLanguages(db, input.libraryIds);
   if (input.libraryIds.length === 0) {
-    return { editions: [], total: 0, limit: input.limit, offset: input.offset, languages, shelves };
+    return { editions: [], total: 0, limit: input.limit, offset: input.offset, languages, shelves, index: [] };
   }
   const where = filterSql(input);
   const sqlite = sqliteOf(db);
@@ -389,6 +433,21 @@ export function searchLibrary(db: AppDatabase, input: LibraryQuery): LibraryPage
       LIMIT ? OFFSET ?`,
     )
     .all(...where.params, input.limit, input.offset) as Array<{ id: number }>;
+  const index = sqlite
+    .prepare(
+      `SELECT key, min(position) - 1 AS offset, count(*) AS count
+      FROM (
+        SELECT key, position, position - row_number() OVER (PARTITION BY key ORDER BY position) AS run
+        FROM (
+          SELECT ${INITIAL_KEY_EXPR} AS key, row_number() OVER (ORDER BY e.sort_title, e.id) AS position
+          FROM editions e
+          WHERE ${where.sql}
+        )
+      )
+      GROUP BY key, run
+      ORDER BY offset`,
+    )
+    .all(...where.params) as LibraryIndexEntry[];
   return {
     editions: loadCards(db, input.userId, idRows.map((row) => row.id)),
     total: totalRow.total,
@@ -396,6 +455,7 @@ export function searchLibrary(db: AppDatabase, input: LibraryQuery): LibraryPage
     offset: input.offset,
     languages,
     shelves,
+    index,
   };
 }
 
@@ -505,11 +565,17 @@ export function loadNeighbors(db: AppDatabase, editionId: number): {
   };
 }
 
-export function presentLibraryEdition(db: AppDatabase, userId: number, editionId: number) {
+/** `user.role` decides whether identifier provenance and the pending lookup are included. */
+export function presentLibraryEdition(db: AppDatabase, user: { id: number; role: 'admin' | 'reader' }, editionId: number) {
+  const userId = user.id;
+  const admin = user.role === 'admin';
   return {
-    ...getEditionDetail(db, editionId, listOpenSuggestions(db, editionId)),
+    ...getEditionDetail(db, editionId, listOpenSuggestions(db, editionId), { admin }),
     reading: loadReading(db, userId, editionId),
     neighbors: loadNeighbors(db, editionId),
+    ratings: presentRatings(db, editionId, admin),
+    ratingsPending: ratingsQueued(db, editionId),
+    ...(admin ? { pendingLookup: pendingLookup(db, editionId) } : {}),
   };
 }
 

@@ -5,6 +5,8 @@ import { buildApp } from '../src/app.js';
 import {
   AssistantError,
   buildChatUrl,
+  buildModelsUrl,
+  listAssistantModels,
   postChatCompletion,
   testAssistant,
   type AssistantConfig,
@@ -39,6 +41,19 @@ function settingsPath(dir: string): string {
   return path.join(dir, 'metadata-assistant.json');
 }
 
+/** The web search fields of a public view with web search off and no extra keys. */
+const webOff = {
+  webSearch: 'off',
+  webSearchAvailable: false,
+  searchApiKeyConfigured: false,
+  searchApiKeyHint: null,
+  googleBooksApiKeyConfigured: false,
+  googleBooksApiKeyHint: null,
+} as const;
+
+/** The stored web fields for a base URL that is not DeepSeek. */
+const storedWebOff = { webSearch: 'off', searchApiKey: null, googleBooksApiKey: null } as const;
+
 function publicUnconfigured() {
   return {
     configured: false,
@@ -46,6 +61,7 @@ function publicUnconfigured() {
     model: null,
     apiKeyConfigured: false,
     apiKeyHint: null,
+    ...webOff,
   };
 }
 
@@ -112,6 +128,7 @@ describe('assistant settings', () => {
       model: 'gpt-test',
       apiKeyConfigured: true,
       apiKeyHint: '9876',
+      ...webOff,
     });
     expect(JSON.stringify(view)).not.toContain(adminKey);
 
@@ -121,7 +138,7 @@ describe('assistant settings', () => {
     const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     expect(stored).toMatchObject({ baseUrl, model: 'gpt-test', apiKey: adminKey });
     expect(typeof stored.updatedAt).toBe('string');
-    expect(readAssistantSettings(temp.dir)).toEqual({ baseUrl, model: 'gpt-test', apiKey: adminKey });
+    expect(readAssistantSettings(temp.dir)).toEqual({ baseUrl, model: 'gpt-test', apiKey: adminKey, ...storedWebOff });
     expect(readFileSync(file, 'utf8')).not.toContain('"baseUrl":"https://api.example.com/v1//"');
   });
 
@@ -156,11 +173,13 @@ describe('assistant settings', () => {
       model: 'local',
       apiKeyConfigured: false,
       apiKeyHint: null,
+      ...webOff,
     });
     expect(readAssistantSettings(temp.dir)).toEqual({
       baseUrl: 'http://localhost:11434/v1',
       model: 'local',
       apiKey: null,
+      ...storedWebOff,
     });
   });
 
@@ -394,6 +413,7 @@ describe('assistant routes', () => {
         model: 'gpt-router',
         apiKeyConfigured: true,
         apiKeyHint: '9876',
+        ...webOff,
       },
     });
     expect(saved.body).not.toContain(adminKey);
@@ -496,5 +516,172 @@ describe('assistant routes', () => {
     });
     expect(malformed.statusCode).toBe(502);
     expect(malformed.json()).toEqual({ error: 'assistant_invalid_response' });
+  });
+});
+
+describe('model list', () => {
+  function modelsTransport(respond: (url: string, init: RequestInit) => Response | Promise<Response>) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const transport: AssistantTransport = {
+      async fetch(input, init) {
+        const url = String(input);
+        calls.push({ url, init: init ?? {} });
+        return respond(url, init ?? {});
+      },
+    };
+    return { transport, calls };
+  }
+
+  async function listModels(
+    started: Awaited<ReturnType<typeof startApp>>,
+    payload: Record<string, unknown>,
+    cookie = started.cookie,
+  ) {
+    return started.app.inject({
+      method: 'POST',
+      url: '/api/metadata/assistant/models',
+      headers: { cookie },
+      payload,
+    });
+  }
+
+  it('builds the models URL from the base URL', () => {
+    expect(buildModelsUrl(baseUrl)).toBe('https://api.example.com/v1/models');
+    expect(buildModelsUrl(`${baseUrl}/`)).toBe('https://api.example.com/v1/models');
+  });
+
+  it('accepts a bare array of ids or strings, deduplicated and sorted', async () => {
+    const target = { baseUrl, apiKey: null };
+    const bare = await listAssistantModels(
+      { fetch: async () => Response.json(['b-model', { id: 'a-model' }, 'b-model', { id: '' }, 42]) },
+      target,
+    );
+    expect(bare).toEqual(['a-model', 'b-model']);
+  });
+
+  it('caps the list and the response size', async () => {
+    const target = { baseUrl, apiKey: null };
+    const many = Array.from({ length: 600 }, (_, index) => ({ id: `m-${String(index).padStart(3, '0')}` }));
+    const capped = await listAssistantModels({ fetch: async () => Response.json({ data: many }) }, target);
+    expect(capped).toHaveLength(500);
+    expect(capped[0]).toBe('m-000');
+
+    const tooLarge = 'x'.repeat(1024 * 1024 + 1);
+    expect(await errorCode(listAssistantModels({ fetch: async () => new Response(tooLarge) }, target))).toBe(
+      'assistant_invalid_response',
+    );
+  });
+
+  it('reports a timeout separately from an unreachable server', async () => {
+    const target = { baseUrl, apiKey: null };
+    const timeout = async () => {
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    };
+    expect(await errorCode(listAssistantModels({ fetch: timeout }, target))).toBe('assistant_timeout');
+    const offline = async () => {
+      throw new Error('offline');
+    };
+    expect(await errorCode(listAssistantModels({ fetch: offline }, target))).toBe('metadata_unavailable');
+  });
+
+  it('lists models from unsaved form values in the OpenAI shape', async () => {
+    const { transport, calls } = modelsTransport(() =>
+      Response.json({ object: 'list', data: [{ id: 'gpt-b' }, { id: 'gpt-a' }, { id: 'gpt-b' }] }),
+    );
+    const started = await startApp(transport);
+    const response = await listModels(started, { baseUrl: `${baseUrl}/`, apiKey: adminKey });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual({ models: ['gpt-a', 'gpt-b'] });
+    expect(response.body).not.toContain(adminKey);
+    expect(calls[0].url).toBe('https://api.example.com/v1/models');
+    expect(calls[0].init.method).toBe('GET');
+    expect(new Headers(calls[0].init.headers).get('authorization')).toBe(`Bearer ${adminKey}`);
+    expect(existsSync(settingsPath(started.tempDir))).toBe(false);
+  });
+
+  it('uses the saved key for a blank key only on the saved base URL', async () => {
+    const { transport, calls } = modelsTransport(() => Response.json({ data: [{ id: 'gpt-test' }] }));
+    const started = await startApp(transport);
+    writeAssistantSettings(started.tempDir, { baseUrl, model: 'gpt-test', apiKey: adminKey });
+
+    const blank = await listModels(started, { baseUrl, apiKey: '' });
+    expect(blank.statusCode).toBe(200);
+    expect(blank.json()).toEqual({ models: ['gpt-test'] });
+    expect(blank.body).not.toContain(adminKey);
+    expect(new Headers(calls[0].init.headers).get('authorization')).toBe(`Bearer ${adminKey}`);
+
+    const absent = await listModels(started, { baseUrl });
+    expect(absent.statusCode).toBe(200);
+    expect(new Headers(calls[1].init.headers).get('authorization')).toBe(`Bearer ${adminKey}`);
+
+    const otherServer = await listModels(started, { baseUrl: 'https://other.example.com/v1', apiKey: '' });
+    expect(otherServer.statusCode).toBe(200);
+    expect(calls[2].url).toBe('https://other.example.com/v1/models');
+    expect(new Headers(calls[2].init.headers).get('authorization')).toBeNull();
+  });
+
+  it('reports a rejected key, a server without a model list, and a malformed body', async () => {
+    let mode: 'unauthorized' | 'forbidden' | 'missing' | 'malformed' | 'wrong-shape' | 'error' = 'unauthorized';
+    const { transport } = modelsTransport(() => {
+      if (mode === 'unauthorized') return new Response('', { status: 401 });
+      if (mode === 'forbidden') return new Response('', { status: 403 });
+      if (mode === 'missing') return new Response('not found', { status: 404 });
+      if (mode === 'malformed') return new Response('<html>models</html>', { status: 200 });
+      if (mode === 'wrong-shape') return Response.json({ models: 'none' });
+      return new Response('', { status: 500 });
+    });
+    const started = await startApp(transport);
+    const expected = {
+      unauthorized: 'assistant_unauthorized',
+      forbidden: 'assistant_unauthorized',
+      missing: 'assistant_models_unsupported',
+      malformed: 'assistant_models_unsupported',
+      'wrong-shape': 'assistant_models_unsupported',
+      error: 'metadata_unavailable',
+    } as const;
+    for (const next of Object.keys(expected) as Array<keyof typeof expected>) {
+      mode = next;
+      const response = await listModels(started, { baseUrl, apiKey: adminKey });
+      expect(response.statusCode).toBe(502);
+      expect(response.json()).toEqual({ error: expected[next] });
+      expect(response.body).not.toContain(adminKey);
+    }
+  });
+
+  it('rejects invalid base URLs and unknown fields without calling out', async () => {
+    const { transport, calls } = modelsTransport(() => Response.json({ data: [] }));
+    const started = await startApp(transport);
+    const invalid = [
+      { baseUrl: 'ftp://api.example.com/v1' },
+      { baseUrl: 'https://api.example.com/v1?x=1' },
+      { baseUrl: 'https://api.example.com/v1#models' },
+      { baseUrl: 'https://user:pass@api.example.com/v1' },
+      { baseUrl: '' },
+      { baseUrl, apiKey: 42 },
+      { baseUrl, model: 'gpt-test' },
+    ];
+    for (const payload of invalid) {
+      const response = await listModels(started, payload);
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'invalid_request' });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('requires an administrator', async () => {
+    const { transport, calls } = modelsTransport(() => Response.json({ data: [{ id: 'gpt-test' }] }));
+    const started = await startApp(transport);
+    const unauth = await started.app.inject({
+      method: 'POST',
+      url: '/api/metadata/assistant/models',
+      payload: { baseUrl },
+    });
+    expect(unauth.statusCode).toBe(401);
+    const reader = await readerCookie(started.app, started.cookie);
+    const forbidden = await listModels(started, { baseUrl }, reader);
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json()).toEqual({ error: 'forbidden' });
+    expect(calls).toHaveLength(0);
   });
 });

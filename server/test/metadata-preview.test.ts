@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,7 +9,8 @@ import type { OpenLibraryTransport } from '../src/metadata/openLibrary.js';
 import { migrate } from '../src/migrate.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { configureTestAssistant, embeddedMetadataAssistant, makeTempDir, tempConfig } from './helpers.js';
-import { COVER_PNG, buildEpub, buildTextPdf } from './fixtures.js';
+import { COVER_PNG, buildEpub, buildTextPdf, jpegOfSize, pngOfSize } from './fixtures.js';
+import { absoluteBlobPath } from '../src/blobs.js';
 
 const cleanups: Array<() => void> = [];
 const password = 'correct-horse-battery';
@@ -22,8 +23,8 @@ interface PreviewFieldView {
   field: string;
   locked: boolean;
   status: 'kept' | 'change' | 'unchanged';
-  current: string | null;
-  proposed: string | null;
+  current: unknown;
+  proposed: unknown;
 }
 
 interface PreviewView {
@@ -75,6 +76,7 @@ function proposalAssistant(overrides: Partial<AssistantProposal> = {}): Assistan
     seriesOrder: 2,
     coverId: 77,
     isbn: '9780140328721',
+    cover: null,
     ...overrides,
   };
   return {
@@ -281,7 +283,11 @@ describe('metadata assistant preview and apply', () => {
       status: 'change',
       proposed: '2',
     });
-    expect(cover.calls).toEqual([]);
+    // Open Library's cover is fetched for the preview, so the admin sees the actual image.
+    expect(cover.calls.some((href) => href.includes('/b/id/77-L.jpg'))).toBe(true);
+    expect(preview?.fields.find((field) => field.field === 'cover')).toMatchObject({
+      proposed: { host: 'covers.openlibrary.org', url: `/api/editions/${editionId}/metadata/previews/${preview?.previewId}/cover` },
+    });
 
     const db = new Database(config.databasePath, { readonly: true });
     const stored = db.prepare('SELECT proposal FROM metadata_previews WHERE id = ?').get(preview?.previewId) as {
@@ -623,8 +629,9 @@ describe('metadata assistant preview and apply', () => {
     expect(lookupJob.status).toBe('succeeded');
     const preview = lookupJob.result?.preview;
     expect(preview?.fields.find((field) => field.field === 'cover')).toMatchObject({
-      proposed: 'present',
+      proposed: { host: 'covers.openlibrary.org' },
     });
+    cover.calls.length = 0;
 
     const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['title']);
     expect(applied.status).toBe('succeeded');
@@ -755,7 +762,7 @@ describe('metadata assistant preview and apply', () => {
     expect(prompt.filename).not.toBe(prompt.fields?.title);
   });
 
-  it('leaves an existing cover alone when Open Library has no selected cover', async () => {
+  it('reports no proposed cover when Open Library returns none, and leaves the cover alone', async () => {
     const assistant = embeddedMetadataAssistant();
     const cover = coverStub(404);
     const { app, cookie, libraryId } = await startApp({ assistant, openLibrary: cover.transport });
@@ -769,20 +776,33 @@ describe('metadata assistant preview and apply', () => {
       },
     ]);
     const editionId = imported.items[0]?.editionId ?? 0;
+    // Open Library had nothing, so the upload kept the cover embedded in the EPUB.
+    const before = await edition(app, cookie, editionId);
+    expect(before.cover).toEqual({ mediaType: 'image/png' });
     assistant.fetch = proposalAssistant({ coverId: 404, isbn: '9780140328721' }).fetch;
+    cover.calls.length = 0;
     const lookupJob = await lookup(app, cookie, editionId);
     const preview = lookupJob.result?.preview;
+    // An ISBN alone is not a cover: Open Library answered 404, so nothing is proposed.
+    expect(cover.calls.length).toBeGreaterThan(0);
     expect(preview?.fields.find((field) => field.field === 'cover')).toMatchObject({
-      status: 'change',
-      proposed: 'present',
+      status: 'unchanged',
+      proposed: null,
+    });
+    expect(preview?.fields.find((field) => field.field === 'cover')?.current).toMatchObject({
+      url: expect.stringMatching(new RegExp(`^/api/editions/${editionId}/cover`)),
+      width: 1,
+      height: 1,
     });
 
+    cover.calls.length = 0;
     const applied = await apply(app, cookie, editionId, preview?.previewId ?? 0, ['cover']);
     expect(applied.status).toBe('succeeded');
     const after = await edition(app, cookie, editionId);
-    expect(after.cover).toBeNull();
+    expect(after.cover).toEqual(before.cover);
+    expect(after.locks).not.toContain('cover');
     expect(after.title).toBe('No Cover');
-    expect(cover.calls.length).toBeGreaterThan(0);
+    expect(cover.calls).toEqual([]);
   });
 
   it('fails the lookup job with metadata_assistant_unconfigured when no assistant is saved', async () => {
@@ -846,5 +866,483 @@ describe('metadata assistant preview and apply', () => {
     expect(after.description).toBe('Older agent description.');
     expect(after.title).toBe('Old Preview');
     expect(after.translators).toEqual(['Old Translator']);
+  });
+});
+
+const DOUBAN_COVER = 'https://img3.doubanio.com/view/subject/l/public/s28305968.jpg';
+const DOUBAN_PAGE = 'https://book.douban.com/subject/25869109/';
+
+/** The agent proposes the Douban cover; the image host answers with `image` (and logs requests). */
+function coverAssistant(image: Buffer, overrides: Partial<AssistantProposal> = {}) {
+  const requests: Array<{ url: string; referer: string | undefined }> = [];
+  const transport: AssistantTransport = {
+    ...proposalAssistant({ cover: { url: DOUBAN_COVER, sourceUrl: DOUBAN_PAGE }, ...overrides }),
+    web: {
+      async fetch(input, init) {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        requests.push({ url, referer: (init?.headers as Record<string, string> | undefined)?.referer });
+        return new Response(new Uint8Array(image), { status: 200, headers: { 'content-type': 'image/jpeg' } });
+      },
+      async lookup() {
+        return ['93.184.216.34'];
+      },
+    },
+  };
+  return { transport, requests };
+}
+
+function previewRow(databasePath: string, previewId: number): Record<string, unknown> | undefined {
+  const db = new Database(databasePath, { readonly: true });
+  const row = db.prepare('SELECT * FROM metadata_previews WHERE id = ?').get(previewId) as Record<string, unknown> | undefined;
+  db.close();
+  return row;
+}
+
+describe('agent covers in the lookup preview', () => {
+  it('stages the verified agent cover, serves it to admins only, and applies exactly those bytes', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const ol = coverStub();
+    const { app, config, cookie, libraryId } = await startApp({ assistant, openLibrary: ol.transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'jdxx.epub', content: buildEpub({ title: 'Before', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee31' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const image = jpegOfSize(357, 500, 8000);
+    const agent = coverAssistant(image);
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    ol.calls.length = 0;
+
+    const job = await lookup(app, cookie, editionId);
+    expect(job.status).toBe('succeeded');
+    const preview = job.result!.preview!;
+    const coverField = preview.fields.find((field) => field.field === 'cover');
+    const stagedUrl = `/api/editions/${editionId}/metadata/previews/${preview.previewId}/cover`;
+    expect(coverField).toMatchObject({
+      status: 'change',
+      proposed: { url: stagedUrl, width: 357, height: 500, sourceUrl: DOUBAN_PAGE, host: 'book.douban.com' },
+      current: { width: 1, height: 1 },
+    });
+    // The agent's image was verified, so Open Library was never asked.
+    expect(ol.calls).toEqual([]);
+    expect(agent.requests).toEqual([{ url: DOUBAN_COVER, referer: 'https://book.douban.com/' }]);
+
+    const row = previewRow(config.databasePath, preview.previewId)!;
+    expect(row).toMatchObject({ cover_media_type: 'image/jpeg', cover_width: 357, cover_height: 500, cover_origin: 'agent' });
+    const stagedHash = row.cover_sha256 as string;
+    expect(existsSync(absoluteBlobPath(config.dataDir, stagedHash))).toBe(true);
+
+    const served = await app.inject({ method: 'GET', url: stagedUrl, headers: { cookie } });
+    expect(served.statusCode).toBe(200);
+    expect(served.headers['content-type']).toBe('image/jpeg');
+    expect(served.rawPayload.equals(image)).toBe(true);
+    const wrongEdition = await app.inject({
+      method: 'GET',
+      url: `/api/editions/${editionId + 999}/metadata/previews/${preview.previewId}/cover`,
+      headers: { cookie },
+    });
+    expect([404, 400]).toContain(wrongEdition.statusCode);
+    const created = await app.inject({ method: 'POST', url: '/api/users', headers: { cookie }, payload: { username: 'bea', password } });
+    expect(created.statusCode).toBe(201);
+    const login = await app.inject({ method: 'POST', url: '/api/session/login', payload: { username: 'bea', password } });
+    const reader = await app.inject({ method: 'GET', url: stagedUrl, headers: { cookie: cookieFrom(login) } });
+    expect(reader.statusCode).toBe(403);
+
+    const trajectory = await app.inject({ method: 'GET', url: `/api/metadata/trajectories/${(job as { trajectoryId?: number }).trajectoryId}`, headers: { cookie } });
+    const notes = (trajectory.json().trajectory.steps as Array<{ kind: string; data: { message?: string } }>)
+      .filter((step) => step.kind === 'note')
+      .map((step) => step.data.message);
+    expect(notes).toContain('Cover verified 357×500 JPEG from img3.doubanio.com');
+
+    agent.requests.length = 0;
+    const applied = await apply(app, cookie, editionId, preview.previewId, ['cover']);
+    expect(applied.status).toBe('succeeded');
+    // Applying reads the staged blob; nothing is downloaded again.
+    expect(agent.requests).toEqual([]);
+    const after = await edition(app, cookie, editionId);
+    expect(after.cover).toEqual({ mediaType: 'image/jpeg' });
+    expect(after.locks).toContain('cover');
+    const coverBytes = await app.inject({ method: 'GET', url: `/api/editions/${editionId}/cover`, headers: { cookie } });
+    expect(coverBytes.rawPayload.equals(image)).toBe(true);
+    // The staged columns are cleared; the blob stays because it is now the cover.
+    expect(previewRow(config.databasePath, preview.previewId)).toMatchObject({ cover_sha256: null });
+    expect(existsSync(absoluteBlobPath(config.dataDir, stagedHash))).toBe(true);
+    expect((await app.inject({ method: 'GET', url: stagedUrl, headers: { cookie } })).statusCode).toBe(404);
+  });
+
+  it('releases an unused staged cover when the preview is replaced', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const { app, config, cookie, libraryId } = await startApp({ assistant, openLibrary: coverStub(404).transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'replace.epub', content: buildEpub({ title: 'Replace', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee32' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const agent = coverAssistant(jpegOfSize(357, 500, 8000));
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    const first = await lookup(app, cookie, editionId);
+    const hash = previewRow(config.databasePath, first.result!.preview!.previewId)!.cover_sha256 as string;
+    expect(existsSync(absoluteBlobPath(config.dataDir, hash))).toBe(true);
+
+    assistant.fetch = proposalAssistant({ coverId: null, isbn: null }).fetch;
+    const second = await lookup(app, cookie, editionId);
+    expect(second.result!.preview!.fields.find((field) => field.field === 'cover')).toMatchObject({ proposed: null });
+    expect(previewRow(config.databasePath, first.result!.preview!.previewId)).toBeUndefined();
+    expect(existsSync(absoluteBlobPath(config.dataDir, hash))).toBe(false);
+  });
+
+  it('downloads nothing for a locked cover and never replaces it', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const ol = coverStub();
+    const { app, cookie, libraryId } = await startApp({ assistant, openLibrary: ol.transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'locked.epub', content: buildEpub({ title: 'Locked', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee33' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const form = multipart([{ name: 'file', filename: 'mine.png', content: COVER_PNG, type: 'image/png' }]);
+    const uploaded = await app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/cover`,
+      headers: { ...form.headers, cookie },
+      payload: form.payload,
+    });
+    expect(uploaded.statusCode).toBe(200);
+    expect((await edition(app, cookie, editionId)).locks).toContain('cover');
+
+    const agent = coverAssistant(jpegOfSize(357, 500, 8000));
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    ol.calls.length = 0;
+    const job = await lookup(app, cookie, editionId);
+    const preview = job.result!.preview!;
+    expect(preview.fields.find((field) => field.field === 'cover')).toMatchObject({ status: 'kept', locked: true, proposed: null });
+    expect(agent.requests).toEqual([]);
+    expect(ol.calls).toEqual([]);
+
+    const applied = await apply(app, cookie, editionId, preview.previewId, ['cover']);
+    expect(applied.status).toBe('succeeded');
+    expect((await edition(app, cookie, editionId)).cover).toEqual({ mediaType: 'image/png' });
+  });
+
+  it('falls back to Open Library when the agent cover is rejected, and notes why', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const ol = coverStub();
+    const { app, cookie, libraryId } = await startApp({ assistant, openLibrary: ol.transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'wide.epub', content: buildEpub({ title: 'Wide', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee34' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const agent = coverAssistant(jpegOfSize(500, 357, 8000), { coverId: 77 });
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    ol.calls.length = 0;
+    const job = await lookup(app, cookie, editionId);
+    expect(job.result!.preview!.fields.find((field) => field.field === 'cover')).toMatchObject({
+      proposed: { host: 'covers.openlibrary.org' },
+    });
+    expect(ol.calls.some((href) => href.includes('/b/id/77-L.jpg'))).toBe(true);
+    const trajectory = await app.inject({ method: 'GET', url: `/api/metadata/trajectories/${(job as { trajectoryId?: number }).trajectoryId}`, headers: { cookie } });
+    const notes = (trajectory.json().trajectory.steps as Array<{ kind: string; data: { message?: string } }>)
+      .filter((step) => step.kind === 'note')
+      .map((step) => step.data.message ?? '');
+    expect(notes.some((note) => note.startsWith('Cover rejected from img3.doubanio.com: wrong_aspect'))).toBe(true);
+  });
+});
+
+/** The EPUB's own cover, distinct from Open Library's stub image. */
+const FILE_COVER = pngOfSize(300, 450);
+
+describe('upload cover preference', () => {
+  async function uploadWith(image: Buffer | null, olStatus: number, identifier: string) {
+    const ol = coverStub(olStatus);
+    const agent = image ? coverAssistant(image) : null;
+    const base = embeddedMetadataAssistant();
+    const assistant: AssistantTransport = {
+      async fetch(input, init) {
+        const response = await base.fetch!(input, init);
+        if (!agent) return response;
+        // Add the agent's cover to the embedded-metadata submission.
+        const body = (await response.json()) as { choices: Array<{ message: { tool_calls: Array<{ function: { arguments: string } }> } }> };
+        const call = body.choices[0]!.message.tool_calls[0]!.function;
+        call.arguments = JSON.stringify({ ...JSON.parse(call.arguments), cover: { url: DOUBAN_COVER, sourceUrl: DOUBAN_PAGE } });
+        return Response.json(body);
+      },
+      web: agent?.transport.web,
+    };
+    const { app, cookie, libraryId } = await startApp({ assistant, openLibrary: ol.transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'pref.epub', content: buildEpub({ title: 'Pref', identifier: `urn:isbn:${identifier}`, cover: FILE_COVER }) },
+    ]);
+    expect(imported.status).toBe('succeeded');
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const response = await app.inject({ method: 'GET', url: `/api/editions/${editionId}/cover`, headers: { cookie } });
+    return { status: response.statusCode, bytes: response.rawPayload, ol };
+  }
+
+  it('uses the verified agent cover first, then Open Library, then the file', async () => {
+    const image = jpegOfSize(357, 500, 8000);
+    const agentFirst = await uploadWith(image, 200, '9780140328721');
+    expect(agentFirst.bytes.equals(image)).toBe(true);
+    expect(agentFirst.ol.calls).toEqual([]);
+
+    // A rejected agent image (landscape) falls through to Open Library's cover.
+    const olNext = await uploadWith(jpegOfSize(500, 357, 8000), 200, '9780140328721');
+    expect(olNext.ol.calls.length).toBeGreaterThan(0);
+    expect(olNext.bytes.equals(COVER_PNG)).toBe(true);
+
+    // Neither found anything: the EPUB's own cover is kept.
+    const fileLast = await uploadWith(null, 404, '9780140328721');
+    expect(fileLast.status).toBe(200);
+    expect(fileLast.bytes.equals(FILE_COVER)).toBe(true);
+  });
+});
+
+/** Removes the edition's cover rows, as for a book imported without one. The blob may stay. */
+function dropCover(databasePath: string, editionId: number): void {
+  const db = new Database(databasePath);
+  db.prepare('DELETE FROM covers WHERE edition_id = ?').run(editionId);
+  db.close();
+}
+
+function coverRows(databasePath: string, editionId: number): Array<{ sha256: string; created_at: string }> {
+  const db = new Database(databasePath, { readonly: true });
+  const rows = db.prepare('SELECT sha256, created_at FROM covers WHERE edition_id = ?').all(editionId) as Array<{
+    sha256: string;
+    created_at: string;
+  }>;
+  db.close();
+  return rows;
+}
+
+interface PendingLookupView {
+  previewId: number;
+  createdAt: string;
+  changedFields: string[];
+}
+
+async function editionPayload(app: Awaited<ReturnType<typeof buildApp>>, cookie: string, editionId: number) {
+  const response = await app.inject({ method: 'GET', url: `/api/editions/${editionId}`, headers: { cookie } });
+  expect(response.statusCode).toBe(200);
+  return response.json().edition as Record<string, unknown> & { pendingLookup?: PendingLookupView | null };
+}
+
+async function readerCookie(app: Awaited<ReturnType<typeof buildApp>>, cookie: string, libraryId: number): Promise<string> {
+  const created = await app.inject({ method: 'POST', url: '/api/users', headers: { cookie }, payload: { username: 'bea', password } });
+  expect(created.statusCode).toBe(201);
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/libraries/${libraryId}/grants`,
+    headers: { cookie },
+    payload: { userId: created.json().user.id },
+  });
+  expect(grant.statusCode).toBe(201);
+  const login = await app.inject({ method: 'POST', url: '/api/session/login', payload: { username: 'bea', password } });
+  return cookieFrom(login);
+}
+
+describe('automatic cover for a coverless book', () => {
+  async function coverlessEdition(identifier: string) {
+    const assistant = embeddedMetadataAssistant();
+    const ol = coverStub(404);
+    const started = await startApp({ assistant, openLibrary: ol.transport });
+    const imported = await upload(started.app, started.cookie, started.libraryId, [
+      { filename: 'bare.epub', content: buildEpub({ title: 'Bare Title', author: 'Bare Author', identifier }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    dropCover(started.config.databasePath, editionId);
+    const image = jpegOfSize(357, 500, 8000);
+    const agent = coverAssistant(image);
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    return { ...started, editionId, image, ol };
+  }
+
+  it('writes the verified cover at once, without locking it or touching any text field', async () => {
+    const { app, config, cookie, libraryId, editionId, image } = await coverlessEdition('urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee41');
+    const before = await edition(app, cookie, editionId);
+    expect(before.cover).toBeNull();
+
+    const job = await lookup(app, cookie, editionId);
+    expect(job.status).toBe('succeeded');
+    const preview = job.result!.preview!;
+
+    const after = await edition(app, cookie, editionId);
+    expect(after.cover).toEqual({ mediaType: 'image/jpeg' });
+    expect(after.locks).not.toContain('cover');
+    expect(after.locks).toEqual(before.locks);
+    expect(after.title).toBe('Bare Title');
+    expect(after.authors).toEqual(before.authors);
+    expect(after.description).toBe(before.description);
+    expect(after.publisher).toBe(before.publisher);
+    expect(after.language).toBe(before.language);
+    expect(after.identifiers).toEqual(before.identifiers);
+    expect(after.series).toEqual(before.series);
+    const served = await app.inject({ method: 'GET', url: `/api/editions/${editionId}/cover`, headers: { cookie } });
+    expect(served.rawPayload.equals(image)).toBe(true);
+
+    // The rest of the preview waits for review; its cover row now matches the current cover.
+    expect(preview.fields.find((field) => field.field === 'cover')).toMatchObject({ status: 'unchanged' });
+    expect(preview.fields.find((field) => field.field === 'title')).toMatchObject({ status: 'change' });
+    const row = previewRow(config.databasePath, preview.previewId)!;
+    expect(row.applied_at).toBeNull();
+    expect(coverRows(config.databasePath, editionId)).toEqual([expect.objectContaining({ sha256: row.cover_sha256 })]);
+
+    const trajectory = await app.inject({
+      method: 'GET',
+      url: `/api/metadata/trajectories/${(job as { trajectoryId?: number }).trajectoryId}`,
+      headers: { cookie },
+    });
+    const note = (trajectory.json().trajectory.steps as Array<{ kind: string; data: Record<string, unknown> }>).find(
+      (step) => step.kind === 'note' && step.data.message === 'cover_auto_applied',
+    );
+    expect(note?.data.cover).toEqual({ status: 'auto_applied', width: 357, height: 500, host: 'book.douban.com' });
+
+    // The admin sees what is still pending; a reader never does.
+    const admin = await editionPayload(app, cookie, editionId);
+    expect(admin.pendingLookup).toMatchObject({ previewId: preview.previewId, createdAt: row.created_at });
+    expect(admin.pendingLookup?.changedFields).toEqual(expect.arrayContaining(['title', 'description', 'publisher']));
+    expect(admin.pendingLookup?.changedFields).not.toContain('cover');
+    const reader = await readerCookie(app, cookie, libraryId);
+    const readerView = await editionPayload(app, reader, editionId);
+    expect(readerView).not.toHaveProperty('pendingLookup');
+    const readerPreview = await app.inject({
+      method: 'GET',
+      url: `/api/editions/${editionId}/metadata/previews/${preview.previewId}`,
+      headers: { cookie: reader },
+    });
+    expect(readerPreview.statusCode).toBe(403);
+  });
+
+  it('does not write the cover twice when the preview is applied later', async () => {
+    const { app, config, cookie, editionId, image } = await coverlessEdition('urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee42');
+    const job = await lookup(app, cookie, editionId);
+    const preview = job.result!.preview!;
+    const written = coverRows(config.databasePath, editionId);
+    expect(written).toHaveLength(1);
+
+    const reviewed = await app.inject({
+      method: 'GET',
+      url: `/api/editions/${editionId}/metadata/previews/${preview.previewId}`,
+      headers: { cookie },
+    });
+    expect(reviewed.statusCode).toBe(200);
+    expect(reviewed.json().preview).toMatchObject({ previewId: preview.previewId, source: 'assistant', model: 'scripted-model' });
+    expect(reviewed.json().preview.fields.find((field: PreviewFieldView) => field.field === 'cover')).toMatchObject({
+      status: 'unchanged',
+    });
+
+    const applied = await apply(app, cookie, editionId, preview.previewId, ['title', 'cover']);
+    expect(applied.status).toBe('succeeded');
+    expect(coverRows(config.databasePath, editionId)).toEqual(written);
+    const after = await edition(app, cookie, editionId);
+    expect(after.title).toBe('Agent Title');
+    const served = await app.inject({ method: 'GET', url: `/api/editions/${editionId}/cover`, headers: { cookie } });
+    expect(served.rawPayload.equals(image)).toBe(true);
+    expect(existsSync(absoluteBlobPath(config.dataDir, written[0]!.sha256))).toBe(true);
+
+    expect((await editionPayload(app, cookie, editionId)).pendingLookup).toBeNull();
+    expect(previewRow(config.databasePath, preview.previewId)?.applied_at).toEqual(expect.any(String));
+    const gone = await app.inject({
+      method: 'GET',
+      url: `/api/editions/${editionId}/metadata/previews/${preview.previewId}`,
+      headers: { cookie },
+    });
+    expect(gone.statusCode).toBe(404);
+  });
+
+  it('only proposes a cover when the edition already has one', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const { app, config, cookie, libraryId } = await startApp({ assistant, openLibrary: coverStub(404).transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'covered.epub', content: buildEpub({ title: 'Covered', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee43' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const existing = coverRows(config.databasePath, editionId);
+    expect(existing).toHaveLength(1);
+    const agent = coverAssistant(jpegOfSize(357, 500, 8000));
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+
+    const job = await lookup(app, cookie, editionId);
+    const preview = job.result!.preview!;
+    expect(preview.fields.find((field) => field.field === 'cover')).toMatchObject({ status: 'change' });
+    expect(coverRows(config.databasePath, editionId)).toEqual(existing);
+    expect((await editionPayload(app, cookie, editionId)).pendingLookup?.changedFields).toContain('cover');
+  });
+
+  it('leaves a locked, coverless edition without a cover', async () => {
+    const { app, config, cookie, editionId, ol } = await coverlessEdition('urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee44');
+    const db = new Database(config.databasePath);
+    db.prepare("INSERT INTO field_locks (edition_id, field, locked_at) VALUES (?, 'cover', ?)").run(editionId, new Date().toISOString());
+    db.close();
+    ol.calls.length = 0;
+
+    const job = await lookup(app, cookie, editionId);
+    expect(job.status).toBe('succeeded');
+    expect(coverRows(config.databasePath, editionId)).toEqual([]);
+    expect(job.result!.preview!.fields.find((field) => field.field === 'cover')).toMatchObject({ status: 'kept', proposed: null });
+  });
+
+  it('dismisses a pending preview and releases its staged cover', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const { app, config, cookie, libraryId } = await startApp({ assistant, openLibrary: coverStub(404).transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'dismiss.epub', content: buildEpub({ title: 'Dismiss', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee45' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const agent = coverAssistant(jpegOfSize(357, 500, 8000));
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    const preview = (await lookup(app, cookie, editionId)).result!.preview!;
+    const staged = previewRow(config.databasePath, preview.previewId)!.cover_sha256 as string;
+    expect(existsSync(absoluteBlobPath(config.dataDir, staged))).toBe(true);
+    expect((await editionPayload(app, cookie, editionId)).pendingLookup?.previewId).toBe(preview.previewId);
+
+    const url = `/api/editions/${editionId}/metadata/previews/${preview.previewId}`;
+    const reader = await readerCookie(app, cookie, libraryId);
+    expect((await app.inject({ method: 'DELETE', url, headers: { cookie: reader } })).statusCode).toBe(403);
+
+    const dismissed = await app.inject({ method: 'DELETE', url, headers: { cookie } });
+    expect(dismissed.statusCode).toBe(200);
+    expect(dismissed.json().edition.pendingLookup).toBeNull();
+    expect((await editionPayload(app, cookie, editionId)).pendingLookup).toBeNull();
+    expect(previewRow(config.databasePath, preview.previewId)).toBeUndefined();
+    expect(existsSync(absoluteBlobPath(config.dataDir, staged))).toBe(false);
+    expect((await app.inject({ method: 'DELETE', url, headers: { cookie } })).statusCode).toBe(404);
+  });
+
+  it('backfills a staged cover once at start, and repeating it changes nothing', async () => {
+    const assistant = embeddedMetadataAssistant();
+    const { app, config, cookie, libraryId } = await startApp({ assistant, openLibrary: coverStub(404).transport });
+    const imported = await upload(app, cookie, libraryId, [
+      { filename: 'legacy.epub', content: buildEpub({ title: 'Legacy', identifier: 'urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee46' }) },
+    ]);
+    const editionId = imported.items[0]?.editionId ?? 0;
+    const agent = coverAssistant(jpegOfSize(357, 500, 8000));
+    assistant.fetch = agent.transport.fetch;
+    assistant.web = agent.transport.web;
+    // The edition had a cover at lookup time, so the preview only staged one.
+    const preview = (await lookup(app, cookie, editionId)).result!.preview!;
+    const staged = previewRow(config.databasePath, preview.previewId)!.cover_sha256 as string;
+    await app.close();
+    // As for a preview created before covers were applied automatically.
+    dropCover(config.databasePath, editionId);
+
+    const restart = async () => {
+      const next = await buildApp({ config, clientDist: null, logger: false, assistant, openLibrary: coverStub(404).transport });
+      const rows = coverRows(config.databasePath, editionId);
+      await next.close();
+      return rows;
+    };
+    const first = await restart();
+    expect(first).toEqual([expect.objectContaining({ sha256: staged })]);
+    const second = await restart();
+    expect(second).toEqual(first);
+    const db = new Database(config.databasePath, { readonly: true });
+    const locks = db.prepare("SELECT count(*) AS count FROM field_locks WHERE edition_id = ? AND field = 'cover'").get(editionId);
+    const pending = db.prepare('SELECT applied_at FROM metadata_previews WHERE id = ?').get(preview.previewId);
+    db.close();
+    expect(locks).toEqual({ count: 0 });
+    expect(pending).toEqual({ applied_at: null });
   });
 });

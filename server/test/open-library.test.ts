@@ -51,7 +51,7 @@ async function waitForJob(app: Awaited<ReturnType<typeof buildApp>>, cookie: str
       result: {
         preview?: {
           previewId: number;
-          fields: Array<{ field: string; status: string; locked: boolean; current: string | null; proposed: string | null }>;
+          fields: Array<{ field: string; status: string; locked: boolean; current: unknown; proposed: unknown }>;
         } | null;
         error?: string;
         applied?: boolean;
@@ -147,6 +147,7 @@ function proposalAssistant(
     seriesOrder: null,
     coverId: 42,
     isbn: '9780000000002',
+    cover: null,
     ...overrides,
   };
   return {
@@ -332,7 +333,13 @@ describe('open library client', () => {
     });
     expect(calls.some((call) => call.url.startsWith(`${OPEN_LIBRARY_ORIGIN}/search.json`))).toBe(false);
     expect(calls.some((call) => call.url === `${OPEN_LIBRARY_ORIGIN}/isbn/9780000000002.json`)).toBe(false);
-    expect(calls.some((call) => call.url.includes('covers.openlibrary.org'))).toBe(false);
+    // The preview stages Open Library's cover now, so the admin sees the real image before applying.
+    expect(calls.some((call) => call.url.includes('covers.openlibrary.org'))).toBe(true);
+    // The upload already stored this same image, so the row shows it but proposes no change.
+    expect(preview?.fields.find((field) => field.field === 'cover')).toMatchObject({
+      status: 'unchanged',
+      proposed: { host: 'covers.openlibrary.org', url: `/api/editions/${editionId}/metadata/previews/${preview?.previewId}/cover` },
+    });
     const beforeApply = await editionOf(app, cookie, editionId);
 
     const applied = await app.inject({
@@ -349,7 +356,9 @@ describe('open library client', () => {
     expect(afterApply.description).toBe('From the catalog.');
     expect(afterApply.publisher).toBe('QiJuan Test Press');
     expect(afterApply.language).toBe('en');
-    expect(afterApply.identifiers).toEqual([{ scheme: 'isbn', value: '9780000000002' }]);
+    expect(afterApply.identifiers.map(({ scheme, value }) => ({ scheme, value }))).toEqual([
+      { scheme: 'isbn', value: '9780000000002' },
+    ]);
     expect(afterApply.cover).toEqual(beforeApply.cover);
     expect(afterApply.locks).toEqual(expect.arrayContaining(['title', 'description']));
     expect(afterApply.locks).not.toContain('publisher');
@@ -439,7 +448,7 @@ describe('open library client', () => {
     expect(previews.count).toBe(0);
   });
 
-  it('fails apply when the cover transport fails and does not write confirmed fields', async () => {
+  it('stages no cover when the cover transport fails and still applies the other confirmed fields', async () => {
     const { transport } = stubTransport();
     const original = transport.fetch;
     transport.fetch = async (input, init) => {
@@ -457,6 +466,10 @@ describe('open library client', () => {
     });
     const lookupJob = await waitForJob(app, cookie, lookup.json().job.id as number);
     expect(lookupJob.status).toBe('succeeded');
+    expect(lookupJob.result?.preview?.fields.find((field) => field.field === 'cover')).toMatchObject({
+      status: 'unchanged',
+      proposed: null,
+    });
     const applied = await app.inject({
       method: 'POST',
       url: `/api/editions/${editionId}/metadata/apply`,
@@ -465,11 +478,11 @@ describe('open library client', () => {
     });
     expect(applied.statusCode).toBe(202);
     const applyJob = await waitForJob(app, cookie, applied.json().job.id as number);
-    expect(applyJob.status).toBe('failed');
-    expect(applyJob.result).toEqual({ error: 'metadata_unavailable' });
+    expect(applyJob.status).toBe('succeeded');
     const after = await editionOf(app, cookie, editionId);
-    expect(after.publisher).toBe(before.publisher);
+    expect(after.publisher).toBe('OL Press');
     expect(after.cover).toBeNull();
+    expect(after.locks).not.toContain('cover');
     expect(after.title).toBe(before.title);
   });
 

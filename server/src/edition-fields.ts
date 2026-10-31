@@ -1,7 +1,8 @@
-import { existsSync } from 'node:fs';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { existsSync, readFileSync } from 'node:fs';
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { absoluteBlobPath, managedBlobRelativePath, removeBlobFile, writeImmutableBlob } from './blobs.js';
 import { CatalogError } from './catalog.js';
+import { deriveCoverTint } from './cover-tint.js';
 import type { AppDatabase } from './db.js';
 import { sniffImage } from './metadata.js';
 import { upsertPerson } from './persons.js';
@@ -10,12 +11,20 @@ import {
   covers,
   editionContributors,
   fieldLocks,
+  editionIdentifiers,
   fileAssets,
-  identifiers,
+  metadataPreviews,
   persons,
   tags,
 } from './schema.js';
-import { cleanIdentifierValue, cleanName, cleanScheme, cleanTag, cleanTitle } from './text.js';
+import {
+  type IdentifierSource,
+  cleanSourceUrl,
+  identifierKey,
+  identifierUrl,
+  normalizeIdentifier,
+} from './identifiers.js';
+import { cleanName, cleanTag, cleanTitle } from './text.js';
 
 export const LOCK_FIELDS = [
   'title',
@@ -132,12 +141,177 @@ export function loadIdentifiers(
   db: AppDatabase,
   editionId: number,
 ): Array<{ scheme: string; value: string }> {
+  return loadIdentifierRecords(db, editionId).map(({ scheme, value }) => ({ scheme, value }));
+}
+
+export interface IdentifierRecord {
+  scheme: string;
+  value: string;
+  source: IdentifierSource;
+  sourceUrl: string | null;
+  createdAt: string;
+}
+
+/** Reader payload: what the identifier is and where to look it up. */
+export interface IdentifierView {
+  scheme: string;
+  value: string;
+  url: string | null;
+}
+
+/** Admin payload adds provenance. */
+export interface AdminIdentifierView extends IdentifierView {
+  source: IdentifierSource;
+  sourceUrl: string | null;
+  createdAt: string;
+}
+
+export function loadIdentifierRecords(db: AppDatabase, editionId: number): IdentifierRecord[] {
   return db
-    .select({ scheme: identifiers.scheme, value: identifiers.value })
-    .from(identifiers)
-    .where(eq(identifiers.editionId, editionId))
-    .orderBy(asc(identifiers.id))
+    .select({
+      scheme: editionIdentifiers.scheme,
+      value: editionIdentifiers.value,
+      source: editionIdentifiers.source,
+      sourceUrl: editionIdentifiers.sourceUrl,
+      createdAt: editionIdentifiers.createdAt,
+    })
+    .from(editionIdentifiers)
+    .where(eq(editionIdentifiers.editionId, editionId))
+    .orderBy(asc(editionIdentifiers.id))
     .all();
+}
+
+export function presentIdentifiers(records: IdentifierRecord[], admin: boolean): IdentifierView[] | AdminIdentifierView[] {
+  return records.map((record) => {
+    const view: IdentifierView = {
+      scheme: record.scheme,
+      value: record.value,
+      url: identifierUrl(record.scheme, record.value),
+    };
+    if (!admin) return view;
+    return { ...view, source: record.source, sourceUrl: record.sourceUrl, createdAt: record.createdAt };
+  });
+}
+
+export interface IdentifierInput {
+  scheme: string;
+  value: string;
+  /** Defaults to the call's source. */
+  source?: IdentifierSource;
+  sourceUrl?: string | null;
+}
+
+/**
+ * Makes the edition's identifiers equal to `items`. Values are validated and
+ * normalized by scheme. `strict` rejects an invalid value with
+ * `invalid_identifier`, except a pair the edition already stores unchanged (a
+ * legacy value kept by migration 0016); `loose` drops it. Pairs already stored
+ * keep their provenance. With `onlySource`, only rows of that source may be
+ * removed: a rescan replaces what the file said and leaves agent and manual
+ * identifiers alone.
+ */
+export function replaceIdentifiers(
+  db: AppDatabase,
+  editionId: number,
+  items: IdentifierInput[],
+  mode: 'strict' | 'loose',
+  options: { source: IdentifierSource; now: string; onlySource?: IdentifierSource },
+): void {
+  const existing = db
+    .select()
+    .from(editionIdentifiers)
+    .where(eq(editionIdentifiers.editionId, editionId))
+    .orderBy(asc(editionIdentifiers.id))
+    .all();
+  const stored = new Map(existing.map((row) => [`${row.scheme}\0${row.value}`, row]));
+  const cleaned: Array<IdentifierInput & { scheme: string; value: string }> = [];
+  const seen = new Set<string>();
+  for (const [index, item] of items.entries()) {
+    const result = normalizeIdentifier(item.scheme, item.value);
+    let scheme: string;
+    let value: string;
+    if (result.ok) {
+      scheme = result.scheme;
+      value = result.value;
+    } else {
+      const legacy = typeof item.scheme === 'string' && typeof item.value === 'string'
+        ? stored.get(`${item.scheme}\0${item.value}`)
+        : undefined;
+      if (!legacy) {
+        if (mode === 'strict') throw new CatalogError('invalid_identifier', { index });
+        continue;
+      }
+      scheme = legacy.scheme;
+      value = legacy.value;
+    }
+    const key = identifierKey({ scheme, value });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push({ ...item, scheme, value });
+  }
+  if (cleaned.length > IDENTIFIER_LIMIT) throw new CatalogError('invalid_request');
+  const keep = new Set(cleaned.map((item) => `${item.scheme}\0${item.value}`));
+  for (const row of existing) {
+    if (keep.has(`${row.scheme}\0${row.value}`)) continue;
+    if (options.onlySource && row.source !== options.onlySource) continue;
+    db.delete(editionIdentifiers).where(eq(editionIdentifiers.id, row.id)).run();
+  }
+  insertNewIdentifiers(db, editionId, cleaned, stored, options);
+}
+
+/**
+ * Adds identifiers the edition lacks; never removes any. Invalid values are
+ * skipped. Returns how many were added.
+ */
+export function addIdentifiers(
+  db: AppDatabase,
+  editionId: number,
+  items: IdentifierInput[],
+  options: { source: IdentifierSource; now: string },
+): number {
+  const existing = db
+    .select()
+    .from(editionIdentifiers)
+    .where(eq(editionIdentifiers.editionId, editionId))
+    .all();
+  const stored = new Map(existing.map((row) => [`${row.scheme}\0${row.value}`, row]));
+  const cleaned: Array<IdentifierInput & { scheme: string; value: string }> = [];
+  for (const item of items) {
+    const result = normalizeIdentifier(item.scheme, item.value);
+    if (result.ok) cleaned.push({ ...item, scheme: result.scheme, value: result.value });
+  }
+  if (existing.length + cleaned.length > IDENTIFIER_LIMIT) {
+    cleaned.splice(Math.max(0, IDENTIFIER_LIMIT - existing.length));
+  }
+  return insertNewIdentifiers(db, editionId, cleaned, stored, options);
+}
+
+function insertNewIdentifiers(
+  db: AppDatabase,
+  editionId: number,
+  items: Array<IdentifierInput & { scheme: string; value: string }>,
+  stored: Map<string, unknown>,
+  options: { source: IdentifierSource; now: string },
+): number {
+  let added = 0;
+  const seen = new Set<string>();
+  for (const item of items) {
+    const exact = `${item.scheme}\0${item.value}`;
+    if (stored.has(exact) || seen.has(exact)) continue;
+    seen.add(exact);
+    db.insert(editionIdentifiers)
+      .values({
+        editionId,
+        scheme: item.scheme,
+        value: item.value,
+        source: item.source ?? options.source,
+        sourceUrl: cleanSourceUrl(item.sourceUrl),
+        createdAt: options.now,
+      })
+      .run();
+    added += 1;
+  }
+  return added;
 }
 
 export function replaceContributors(
@@ -214,43 +388,17 @@ export function replaceTags(db: AppDatabase, editionId: number, names: string[],
   }
 }
 
-export function replaceIdentifiers(
-  db: AppDatabase,
-  editionId: number,
-  items: Array<{ scheme: string; value: string }>,
-  mode: 'strict' | 'loose',
-): void {
-  const cleaned: Array<{ scheme: string; value: string }> = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    const scheme = cleanScheme(item.scheme);
-    const value = cleanIdentifierValue(item.value);
-    if (!scheme || !value) {
-      if (mode === 'strict') throw new CatalogError('invalid_request');
-      continue;
-    }
-    const key = `${scheme}\0${value.toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    cleaned.push({ scheme, value });
-  }
-  if (cleaned.length > IDENTIFIER_LIMIT) throw new CatalogError('invalid_request');
-  db.delete(identifiers).where(eq(identifiers.editionId, editionId)).run();
-  for (const item of cleaned) {
-    db.insert(identifiers).values({ editionId, scheme: item.scheme, value: item.value }).run();
-  }
-}
-
 export function latestCover(
   db: AppDatabase,
   editionId: number,
-): { id: number; sha256: string; mediaType: string; relativePath: string } | null {
+): { id: number; sha256: string; mediaType: string; relativePath: string; tint: string | null } | null {
   const row = db
     .select({
       id: covers.id,
       sha256: covers.sha256,
       mediaType: covers.mediaType,
       relativePath: covers.relativePath,
+      tint: covers.tint,
     })
     .from(covers)
     .where(eq(covers.editionId, editionId))
@@ -294,10 +442,37 @@ export function saveCoverRow(
       bytes: blob.bytes,
       mediaType: input.mediaType,
       relativePath: blob.relativePath,
+      tint: deriveCoverTint(input.bytes, input.mediaType) ?? '',
       createdAt: now,
     })
     .run();
   return retired;
+}
+
+/**
+ * Derives the band tint for covers stored before tints existed. A cover whose file is missing or
+ * unreadable is marked '' so it is not read again. Returns the number of covers updated.
+ */
+export function backfillCoverTints(db: AppDatabase, dataDir: string): number {
+  const rows = db
+    .select({ id: covers.id, sha256: covers.sha256, mediaType: covers.mediaType, relativePath: covers.relativePath })
+    .from(covers)
+    .where(isNull(covers.tint))
+    .orderBy(asc(covers.id))
+    .all();
+  for (const row of rows) {
+    const absolute = coverAbsolute(dataDir, row);
+    let tint: string | null = null;
+    if (absolute) {
+      try {
+        tint = deriveCoverTint(readFileSync(absolute), row.mediaType);
+      } catch {
+        tint = null;
+      }
+    }
+    db.update(covers).set({ tint: tint ?? '' }).where(eq(covers.id, row.id)).run();
+  }
+  return rows.length;
 }
 
 export function releaseUnreferenced(db: AppDatabase, dataDir: string, hashes: string[]): void {
@@ -333,7 +508,12 @@ function countReferences(db: AppDatabase, sha256: string): number {
     .from(covers)
     .where(eq(covers.sha256, sha256))
     .get();
-  return readCount(assetRow?.count) + readCount(coverRow?.count);
+  const previewRow = db
+    .select({ count: sql<number>`count(*)` })
+    .from(metadataPreviews)
+    .where(eq(metadataPreviews.coverSha256, sha256))
+    .get();
+  return readCount(assetRow?.count) + readCount(coverRow?.count) + readCount(previewRow?.count);
 }
 
 function readCount(value: unknown): number {

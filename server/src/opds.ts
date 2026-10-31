@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { AppDatabase } from './db.js';
-import { covers, editions, fileAssets, identifiers } from './schema.js';
+import { identifierUrn } from './identifiers.js';
+import { covers, editionIdentifiers as identifiers, editions, fileAssets } from './schema.js';
 import { searchLibrary } from './library.js';
 
 export const OPDS_PAGE_SIZE = 48;
@@ -376,8 +377,7 @@ function identifierText(identifier: { scheme: string; value: string }): string {
   const value = identifier.value.trim();
   if (!value) return '';
   if (!scheme) return value;
-  if (value.toLowerCase().startsWith(`${scheme.toLowerCase()}:`)) return value;
-  return `${scheme}:${value}`;
+  return identifierUrn(scheme, value);
 }
 
 function atomDate(value: string, fallback: string): string {

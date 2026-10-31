@@ -84,12 +84,17 @@ export const TOOL_DEFINITIONS = [
           language: { type: 'string' },
           identifiers: {
             type: 'array',
-            minItems: 1,
+            description:
+              'Identifiers found for this edition, across every scheme you are confident about: isbn, issn, doi, oclc, lccn, olid (Open Library key), google_books (volume id), douban (subject id). Give each the sourceUrl of the page or record where you found it. Never invent one; leave the list empty when none is reliable.',
             items: {
               type: 'object',
               properties: {
                 scheme: { type: 'string' },
                 value: { type: 'string' },
+                sourceUrl: {
+                  type: 'string',
+                  description: 'The http(s) URL of the page or record where this identifier was found',
+                },
               },
               required: ['scheme', 'value'],
               additionalProperties: false,
@@ -99,8 +104,22 @@ export const TOOL_DEFINITIONS = [
           seriesOrder: { type: ['number', 'null'] },
           coverId: { type: ['integer', 'null'] },
           isbn: { type: ['string', 'null'] },
+          cover: {
+            type: 'object',
+            description:
+              'Optional. A cover image of THIS edition that you found with page_images or google_books. The server downloads and checks it. Omit it when you are not sure the image shows this edition.',
+            properties: {
+              url: { type: 'string', description: 'The http(s) URL of the image itself, exactly as a tool returned it' },
+              sourceUrl: {
+                type: 'string',
+                description: 'The http(s) URL of the page or record where the image was found',
+              },
+            },
+            required: ['url'],
+            additionalProperties: false,
+          },
         },
-        required: ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate', 'identifiers'],
+        required: ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate'],
         additionalProperties: false,
       },
     },
@@ -110,6 +129,93 @@ export const TOOL_DEFINITIONS = [
 /** Aliases for callers that simply call the OpenAI-compatible tool list `tools`. */
 export const AGENT_TOOLS = TOOL_DEFINITIONS;
 export const TOOLS = TOOL_DEFINITIONS;
+
+export const GOOGLE_BOOKS_TOOL = {
+  type: 'function',
+  function: {
+    name: 'google_books',
+    description:
+      'Look up Google Books volumes by ISBN (preferred) or by a free-text query such as "intitle:<title> inauthor:<author>". Supply isbn or query. Returns compact volume records with id, title, authors, publisher, publishedDate, language, industryIdentifiers, a short description, the canonical link, and imageLinks (the largest cover image Google has).',
+    parameters: {
+      type: 'object',
+      properties: {
+        isbn: { type: 'string', description: 'ISBN-10 or ISBN-13' },
+        query: { type: 'string', description: 'A Google Books search query' },
+      },
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+export const WEB_SEARCH_TOOL = {
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description:
+      'Search the web. Returns up to 8 results with title, url, host, site, date, and a summary. Supports operators such as site:douban.com, "exact phrase", and lang:zh. Use it to find authoritative records (publisher pages, national library catalogues, Douban, Google Books), then read the best one with fetch_page.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 1, maxLength: 128, description: 'The search query, 1 to 128 characters' },
+        count: { type: 'integer', minimum: 1, maximum: 8, description: 'Number of results, at most 8' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+export const FETCH_PAGE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'fetch_page',
+    description:
+      'Read one public web page as Markdown, for example a result from web_search. Only public http(s) URLs. Long pages are truncated. The Markdown has no image URLs; use page_images to find a cover.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'An http or https URL' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+export const PAGE_IMAGES_TOOL = {
+  type: 'function',
+  function: {
+    name: 'page_images',
+    description:
+      'List the likely cover images on one public web page, such as a Douban subject page or a publisher page. Returns up to 8 absolute image URLs, og:image and similar meta tags first, then <img> tags that look like a cover, each with kind, and alt, width, and height when the page gives them. Only public http(s) URLs. Use it at most 4 times per run.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'An http or https URL of the page' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+/**
+ * The tools offered on one run. google_books is always offered; web_search, fetch_page, and
+ * page_images only when web search is on and a key is available. submit_metadata stays last.
+ */
+export function agentToolDefinitions(options: { webSearch: boolean }): ReadonlyArray<{
+  type: string;
+  function: { name: string; description: string; parameters: unknown };
+}> {
+  const [searchTool, recordTool, submitTool] = TOOL_DEFINITIONS;
+  return [
+    searchTool,
+    recordTool,
+    GOOGLE_BOOKS_TOOL,
+    ...(options.webSearch ? [WEB_SEARCH_TOOL, FETCH_PAGE_TOOL, PAGE_IMAGES_TOOL] : []),
+    submitTool,
+  ];
+}
 
 /**
  * Executes one of the three fixed Open Library operations.

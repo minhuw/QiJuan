@@ -110,7 +110,9 @@ function insertEdition(
     sqlite.prepare('INSERT INTO tags (edition_id, name, created_at) VALUES (?, ?, ?)').run(id, input.tag, input.createdAt);
   }
   if (input.isbn) {
-    sqlite.prepare('INSERT INTO identifiers (edition_id, scheme, value) VALUES (?, ?, ?)').run(id, 'isbn', input.isbn);
+    sqlite
+      .prepare("INSERT INTO edition_identifiers (edition_id, scheme, value, source, created_at) VALUES (?, ?, ?, 'manual', ?)")
+      .run(id, 'isbn', input.isbn, '2026-01-01T00:00:00.000Z');
   }
   const format = input.format ?? 'epub';
   const digest = sha(`${id}:${format}:${input.title}`);
@@ -483,5 +485,54 @@ describe('library search and personal state', () => {
     expect(after.prepare('SELECT title FROM editions WHERE id = ?').get(main)).toEqual({ title });
     expect(after.prepare('SELECT title FROM edition_fts WHERE rowid = ?').get(decoy)).toEqual({ title: '喧哗与骚动' });
     after.close();
+  });
+
+  it('indexes where each title initial starts in the filtered catalogue order', async () => {
+    const { app, databasePath, cookie, libraryId } = await startApp();
+    const sqlite = new Database(databasePath);
+    const add = (title: string, language: string, sortTitle = title) =>
+      insertEdition(sqlite, { libraryId, title, sortTitle, language, createdAt: '2026-01-01T00:00:00.000Z' });
+    add('1984', 'en');
+    add('Anna Karenina', 'en');
+    add('Austerlitz', 'en');
+    add('Beloved', 'en');
+    add('The Waves', 'en', 'Waves, The');
+    add('Émile', 'fr');
+    add('atlas of remote islands', 'en');
+    add('红楼梦', 'zh');
+    add('三体', 'zh');
+    add('こころ', 'ja');
+    sqlite.close();
+    const get = async (query: string) => {
+      const response = await app.inject({ method: 'GET', url: `/api/library?${query}`, headers: { cookie } });
+      expect(response.statusCode).toBe(200);
+      return response.json() as {
+        editions: Array<{ title: string }>;
+        index: Array<{ key: string; offset: number; count: number }>;
+      };
+    };
+
+    const all = await get('limit=2&offset=4');
+    expect(all.editions.map((item) => item.title)).toEqual(['The Waves', 'atlas of remote islands']);
+    expect(all.index).toEqual([
+      { key: '#', offset: 0, count: 1 },
+      { key: 'A', offset: 1, count: 2 },
+      { key: 'B', offset: 3, count: 1 },
+      { key: 'W', offset: 4, count: 1 },
+      { key: 'A', offset: 5, count: 1 },
+      { key: '#', offset: 6, count: 1 },
+      { key: 'cjk', offset: 7, count: 3 },
+    ]);
+
+    const english = await get('limit=24&language=en');
+    expect(english.index).toEqual([
+      { key: '#', offset: 0, count: 1 },
+      { key: 'A', offset: 1, count: 2 },
+      { key: 'B', offset: 3, count: 1 },
+      { key: 'W', offset: 4, count: 1 },
+      { key: 'A', offset: 5, count: 1 },
+    ]);
+    expect((await get('limit=24&language=zh')).index).toEqual([{ key: 'cjk', offset: 0, count: 2 }]);
+    expect((await get('limit=24&q=nothing-matches-this')).index).toEqual([]);
   });
 });

@@ -1,0 +1,22 @@
+{
+  "kind": "books#volumes",
+  "totalItems": 1,
+  "items": [
+    {
+      "kind": "books#volume",
+      "id": "wrOQLV6xB-wC",
+      "volumeInfo": {
+        "title": "Fantastic Mr. Fox",
+        "authors": ["Roald Dahl"],
+        "industryIdentifiers": [
+          { "type": "ISBN_10", "identifier": "0140328726" },
+          { "type": "ISBN_13", "identifier": "9780140328721" }
+        ],
+        "averageRating": 4,
+        "ratingsCount": 127,
+        "infoLink": "http://books.google.com/books?id=wrOQLV6xB-wC&dq=isbn:9780140328721&hl=&source=gbs_api",
+        "canonicalVolumeLink": "https://books.google.com/books/about/Fantastic_Mr_Fox.html?hl=&id=wrOQLV6xB-wC"
+      }
+    }
+  ]
+}

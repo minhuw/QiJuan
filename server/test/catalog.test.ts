@@ -30,7 +30,7 @@ import {
   editionContributors,
   favorites,
   highlights,
-  identifiers,
+  editionIdentifiers,
   libraries,
   notes,
   persons,
@@ -372,7 +372,9 @@ describe('catalog records', () => {
       ])
       .run();
     db.insert(tags).values({ editionId: edition.id, name: 'fiction', createdAt: now }).run();
-    db.insert(identifiers).values({ editionId: edition.id, scheme: 'isbn', value: '9780000000001' }).run();
+    db.insert(editionIdentifiers)
+      .values({ editionId: edition.id, scheme: 'isbn', value: '9780000000001', source: 'manual', createdAt: '2026-01-01T00:00:00.000Z' })
+      .run();
     const asset = addManagedAsset(db, {
       dataDir: dir,
       editionId: edition.id,
@@ -470,7 +472,7 @@ describe('catalog records', () => {
         'persons',
         'edition_contributors',
         'tags',
-        'identifiers',
+        'edition_identifiers',
         'file_assets',
         'covers',
         'shelves',

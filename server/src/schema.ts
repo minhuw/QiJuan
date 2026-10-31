@@ -72,6 +72,8 @@ export const editions = sqliteTable('editions', {
   description: text('description'),
   seriesId: integer('series_id').references(() => series.id, { onDelete: 'set null' }),
   seriesOrder: real('series_order'),
+  /** Never sent to the metadata assistant. */
+  metadataPrivate: integer('metadata_private', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   trashedAt: text('trashed_at'),
@@ -118,13 +120,17 @@ export const tags = sqliteTable('tags', {
   createdAt: text('created_at').notNull(),
 });
 
-export const identifiers = sqliteTable('identifiers', {
+/** One identifier of an edition, with where it came from. See migration 0016. */
+export const editionIdentifiers = sqliteTable('edition_identifiers', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   editionId: integer('edition_id')
     .notNull()
     .references(() => editions.id, { onDelete: 'cascade' }),
   scheme: text('scheme').notNull(),
   value: text('value').notNull(),
+  source: text('source', { enum: ['embedded', 'agent', 'manual'] }).notNull(),
+  sourceUrl: text('source_url'),
+  createdAt: text('created_at').notNull(),
 });
 
 export const fileAssets = sqliteTable('file_assets', {
@@ -167,11 +173,23 @@ export const jobItems = sqliteTable('job_items', {
   position: integer('position').notNull(),
   filename: text('filename').notNull(),
   sourcePath: text('source_path').notNull(),
-  status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed', 'duplicate'] }).notNull(),
+  status: text('status', {
+    enum: ['queued', 'running', 'succeeded', 'failed', 'duplicate', 'needs_confirmation'],
+  }).notNull(),
   error: text('error'),
   editionId: integer('edition_id').references(() => editions.id, { onDelete: 'set null' }),
   assetId: integer('asset_id').references(() => fileAssets.id, { onDelete: 'set null' }),
   sha256: text('sha256'),
+  /** The edition this file matched by identifier, while it waits for an admin. */
+  candidateEditionId: integer('candidate_edition_id').references(() => editions.id, { onDelete: 'set null' }),
+  /** JSON array of conflict reasons. */
+  conflicts: text('conflicts'),
+  /** JSON: an upload's agent metadata, kept until the item is resolved. */
+  pending: text('pending'),
+  resolution: text('resolution', { enum: ['merge', 'separate'] }),
+  merged: integer('merged', { mode: 'boolean' }).notNull().default(false),
+  /** The upload batch's "keep private from the metadata agent" choice. */
+  metadataPrivate: integer('metadata_private', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -185,6 +203,8 @@ export const covers = sqliteTable('covers', {
   bytes: integer('bytes').notNull(),
   mediaType: text('media_type').notNull(),
   relativePath: text('relative_path').notNull(),
+  /** The book page's band tint as #rrggbb; '' when the cover gave none, null until derived. */
+  tint: text('tint'),
   createdAt: text('created_at').notNull(),
 });
 
@@ -222,7 +242,53 @@ export const metadataPreviews = sqliteTable('metadata_previews', {
     .references(() => editions.id, { onDelete: 'cascade' }),
   proposal: text('proposal').notNull(),
   createdAt: text('created_at').notNull(),
+  /** A staged cover image, shown before it is applied. All cover columns are set together or all null. */
+  coverSha256: text('cover_sha256'),
+  coverBytes: integer('cover_bytes'),
+  coverMediaType: text('cover_media_type'),
+  coverRelativePath: text('cover_relative_path'),
+  coverWidth: integer('cover_width'),
+  coverHeight: integer('cover_height'),
+  coverUrl: text('cover_url'),
+  coverSourceUrl: text('cover_source_url'),
+  coverOrigin: text('cover_origin', { enum: ['agent', 'open_library'] }),
+  /** Set when an admin applies the preview. A dismissed preview is deleted instead. */
+  appliedAt: text('applied_at'),
 });
+
+export const metadataTrajectories = sqliteTable('metadata_trajectories', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  jobId: integer('job_id')
+    .notNull()
+    .references(() => jobs.id, { onDelete: 'cascade' }),
+  /** No foreign key; see migration 0015. Rows go with their job. */
+  jobItemId: integer('job_item_id'),
+  editionId: integer('edition_id').references(() => editions.id, { onDelete: 'set null' }),
+  previewId: integer('preview_id').references(() => metadataPreviews.id, { onDelete: 'set null' }),
+  model: text('model'),
+  outcome: text('outcome', { enum: ['accepted', 'failed', 'timeout', 'limit'] }),
+  error: text('error'),
+  stepCount: integer('step_count').notNull().default(0),
+  storedBytes: integer('stored_bytes').notNull().default(0),
+  truncated: integer('truncated', { mode: 'boolean' }).notNull().default(false),
+  summary: text('summary'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const metadataTrajectorySteps = sqliteTable(
+  'metadata_trajectory_steps',
+  {
+    trajectoryId: integer('trajectory_id')
+      .notNull()
+      .references(() => metadataTrajectories.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    kind: text('kind', { enum: ['input', 'model', 'tool_call', 'tool_result', 'submit', 'note', 'end'] }).notNull(),
+    createdAt: text('created_at').notNull(),
+    data: text('data').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.trajectoryId, table.seq] })],
+);
 
 export const shelves = sqliteTable('shelves', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -414,4 +480,30 @@ export const backupJobs = sqliteTable('backup_jobs', {
   updatedAt: text('updated_at').notNull(),
   startedAt: text('started_at'),
   finishedAt: text('finished_at'),
+});
+
+/** One external rating of an edition per provider. See migration 0018. */
+export const editionRatings = sqliteTable(
+  'edition_ratings',
+  {
+    editionId: integer('edition_id')
+      .notNull()
+      .references(() => editions.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['douban', 'goodreads', 'open_library', 'google_books'] }).notNull(),
+    url: text('url'),
+    rating: real('rating'),
+    scale: integer('scale').notNull(),
+    count: integer('count'),
+    status: text('status', { enum: ['ok', 'no_rating', 'not_found', 'error'] }).notNull(),
+    error: text('error'),
+    fetchedAt: text('fetched_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.editionId, table.provider] })],
+);
+
+/** Editions waiting for a ratings fetch. Identifier triggers fill it; see migration 0018. */
+export const editionRatingsQueue = sqliteTable('edition_ratings_queue', {
+  editionId: integer('edition_id').primaryKey(),
+  queuedAt: text('queued_at').notNull(),
+  notBefore: text('not_before'),
 });

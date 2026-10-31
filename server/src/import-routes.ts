@@ -6,7 +6,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiError, requireLibraryAccess } from './accounts.js';
 import { CatalogError } from './catalog.js';
 import type { AppDatabase } from './db.js';
-import { createBackgroundJob, createImportJob, getVisibleJob, listVisibleJobs } from './jobs.js';
+import {
+  type ItemResolution,
+  createBackgroundJob,
+  createImportJob,
+  getVisibleJob,
+  listVisibleJobs,
+  resolveImportItem,
+} from './jobs.js';
 import { listLibraryFiles } from './library-files.js';
 import type { AuthUser } from './sessions.js';
 
@@ -35,10 +42,37 @@ export function registerImportRoutes(app: FastifyInstance, deps: ImportRouteDeps
     return { job };
   });
 
+  // An item in needs_confirmation matched an edition by identifier but conflicts with it.
+  // merge: add the file to the candidate edition. separate: create its own edition.
+  for (const [action, resolution] of [
+    ['merge', 'merge'],
+    ['keep-separate', 'separate'],
+  ] as const satisfies ReadonlyArray<readonly [string, ItemResolution]>) {
+    app.post(`/api/jobs/:jobId/items/:itemId/${action}`, async (request, reply) => {
+      const user = currentUser(request);
+      if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
+      const params = request.params as { jobId?: string; itemId?: string };
+      const jobId = parseId(params.jobId);
+      const itemId = parseId(params.itemId);
+      if (!jobId || !itemId) return reply.code(400).send({ error: 'invalid_request' });
+      try {
+        const job = resolveImportItem(deps.db, user, { jobId, itemId, resolution });
+        reply.header('cache-control', 'no-store');
+        return reply.code(202).send({ job });
+      } catch (error) {
+        return sendError(reply, error);
+      }
+    });
+  }
+
   app.post('/api/imports', async (request, reply) => {
     const user = currentUser(request);
-    const libraryId = parseId((request.query as { libraryId?: string }).libraryId);
+    const query = request.query as { libraryId?: string; private?: string };
+    const libraryId = parseId(query.libraryId);
     if (!libraryId) return reply.code(400).send({ error: 'invalid_request' });
+    // ?private=1 keeps every file of the batch away from the metadata assistant.
+    const metadataPrivate = parseFlag(query.private);
+    if (metadataPrivate === null) return reply.code(400).send({ error: 'invalid_request' });
     let library;
     try {
       library = requireLibraryAccess(deps.db, user, libraryId);
@@ -91,6 +125,7 @@ export function registerImportRoutes(app: FastifyInstance, deps: ImportRouteDeps
         userId: user.id,
         source: 'upload',
         items: staged,
+        metadataPrivate,
       });
       reply.header('cache-control', 'no-store');
       return reply.code(202).send({ job });
@@ -106,6 +141,9 @@ export function registerImportRoutes(app: FastifyInstance, deps: ImportRouteDeps
     const libraryId = body && typeof body.libraryId === 'number' ? body.libraryId : null;
     const folder = body && typeof body.path === 'string' ? body.path : null;
     if (!libraryId || folder === null) return reply.code(400).send({ error: 'invalid_request' });
+    if (!body || (body.private !== undefined && typeof body.private !== 'boolean')) {
+      return reply.code(400).send({ error: 'invalid_request' });
+    }
     let library;
     try {
       library = requireLibraryAccess(deps.db, user, libraryId);
@@ -125,6 +163,7 @@ export function registerImportRoutes(app: FastifyInstance, deps: ImportRouteDeps
       userId: user.id,
       source: 'folder',
       items: located.files.map((file) => ({ filename: file.relativePath, sourcePath: file.relativePath })),
+      metadataPrivate: body.private === true,
     });
     reply.header('cache-control', 'no-store');
     return reply.code(202).send({ job });
@@ -189,6 +228,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+/** Absent, `0` or `false` is off; `1` or `true` is on; anything else is invalid. */
+function parseFlag(value: string | undefined): boolean | null {
+  if (value === undefined || value === '0' || value === 'false') return false;
+  if (value === '1' || value === 'true') return true;
+  return null;
+}
+
 function parseId(value: string | undefined): number | null {
   if (!value || !/^[1-9]\d*$/.test(value)) return null;
   const id = Number(value);
@@ -206,7 +252,8 @@ function isTooLarge(error: unknown): boolean {
 function sendError(reply: FastifyReply, error: unknown) {
   if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.code });
   if (error instanceof CatalogError) {
-    const status = error.code === 'not_found' || error.code === 'file_missing' ? 404 : 400;
+    const status =
+      error.code === 'not_found' || error.code === 'file_missing' ? 404 : error.code === 'conflict' ? 409 : 400;
     return reply.code(status).send({ error: error.code });
   }
   throw error;

@@ -1,18 +1,22 @@
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { CatalogError, createSeries } from './catalog.js';
+import { type CoverTint, coverTintPair } from './cover-tint.js';
 import type { AppDatabase } from './db.js';
 import {
   type ApiField,
   type LockField,
   API_TO_LOCK,
   loadAlternateTitles,
-  loadIdentifiers,
+  type AdminIdentifierView,
+  type IdentifierView,
+  loadIdentifierRecords,
   loadLocks,
   loadNames,
   loadTags,
   lockFields,
   lockNamesForApi,
   latestCover,
+  presentIdentifiers,
   releaseUnreferenced,
   replaceAlternateTitles,
   replaceContributors,
@@ -20,6 +24,7 @@ import {
   replaceTags,
   saveCoverRow,
 } from './edition-fields.js';
+import { recordIdentifierSuggestions } from './suggestions.js';
 import { editions, fileAssets, libraries, series } from './schema.js';
 import { sniffImage } from './metadata.js';
 import {
@@ -54,11 +59,22 @@ export interface EditionDetail {
   authors: string[];
   translators: string[];
   tags: string[];
-  identifiers: Array<{ scheme: string; value: string }>;
+  /** Readers get scheme, value, and url; admins also get provenance. */
+  identifiers: IdentifierView[] | AdminIdentifierView[];
   locks: ApiField[];
+  /** Kept private from the metadata assistant: no lookup, no agent run. */
+  metadataPrivate: boolean;
   cover: { mediaType: string } | null;
+  /** The book page's band colours from the cover; null without a cover or a clear hue. */
+  coverTint: CoverTint | null;
   assets: EditionAsset[];
-  suggestions: Array<{ id: number; otherEditionId: number; otherTitle: string }>;
+  suggestions: Array<{
+    id: number;
+    otherEditionId: number;
+    otherTitle: string;
+    reasons: Array<'title_author' | 'identifier'>;
+    identifier?: { scheme: string; value: string };
+  }>;
 }
 
 export interface EditionSummary {
@@ -82,7 +98,7 @@ export interface EditionPatch {
   publisher?: string | null;
   publishedDate?: string | null;
   language?: string | null;
-  identifiers?: Array<{ scheme: string; value: string }>;
+  identifiers?: Array<{ scheme: string; value: string; sourceUrl?: string | null }>;
   tags?: string[];
 }
 
@@ -138,6 +154,7 @@ export function getEditionDetail(
   db: AppDatabase,
   editionId: number,
   suggestions: EditionDetail['suggestions'],
+  options: { admin?: boolean } = {},
 ): EditionDetail {
   const edition = requireLiveEdition(db, editionId);
   const seriesRow =
@@ -172,9 +189,11 @@ export function getEditionDetail(
     authors: loadNames(db, edition.id, 'author'),
     translators: loadNames(db, edition.id, 'translator'),
     tags: loadTags(db, edition.id),
-    identifiers: loadIdentifiers(db, edition.id),
+    identifiers: presentIdentifiers(loadIdentifierRecords(db, edition.id), options.admin === true),
     locks: lockNamesForApi(loadLocks(db, edition.id)),
+    metadataPrivate: edition.metadataPrivate,
     cover: cover ? { mediaType: cover.mediaType } : null,
+    coverTint: cover ? coverTintPair(cover.tint) : null,
     assets: assets.map((asset) => ({
       id: asset.id,
       format: asset.format,
@@ -260,7 +279,8 @@ export function updateEdition(db: AppDatabase, editionId: number, patch: Edition
       locks.push(API_TO_LOCK.translators);
     }
     if (patch.identifiers !== undefined) {
-      replaceIdentifiers(query, edition.id, patch.identifiers, 'strict');
+      replaceIdentifiers(query, edition.id, patch.identifiers, 'strict', { source: 'manual', now: stamp });
+      recordIdentifierSuggestions(query, edition.id, stamp);
       locks.push(API_TO_LOCK.identifiers);
     }
     if (patch.tags !== undefined) {

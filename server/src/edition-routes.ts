@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiError, listLibraries, requireLibraryAccess } from './accounts.js';
 import { CatalogError } from './catalog.js';
@@ -18,8 +19,18 @@ import {
   cleanPublishedDate,
   cleanPublisher,
 } from './editions.js';
+import { cleanSourceUrl } from './identifiers.js';
 import { createBackgroundJob } from './jobs.js';
-import { PREVIEW_FIELDS, type PreviewField } from './metadata/apply.js';
+import { enqueueRatings, ensureRatingsFresh } from './ratings.js';
+import {
+  PREVIEW_FIELDS,
+  type PreviewField,
+  dismissMetadataPreview,
+  loadMetadataPreview,
+  readStagedCover,
+} from './metadata/apply.js';
+import { setEditionMetadataPrivate } from './metadata/privacy.js';
+import { metadataPreviews } from './schema.js';
 import type { AuthUser } from './sessions.js';
 import { presentLibraryEdition } from './library.js';
 import { dismissSuggestion, findSuggestion } from './suggestions.js';
@@ -74,8 +85,24 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
     const user = currentUser(request);
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
+      // Missing or stale ratings are queued for the background worker; the page never waits on them.
+      ensureRatingsFresh(deps.db, edition.id);
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, user.id, edition.id) };
+      return { edition: presentEdition(deps.db, user, edition.id) };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/api/editions/:editionId/ratings/refresh', async (request, reply) => {
+    const user = currentUser(request);
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
+    try {
+      const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
+      // Fetched by the ratings worker, under the same host spacing and backoff as any refresh.
+      enqueueRatings(deps.db, edition.id);
+      reply.header('cache-control', 'no-store');
+      return reply.code(202).send({ edition: presentEdition(deps.db, user, edition.id) });
     } catch (error) {
       return sendError(reply, error);
     }
@@ -85,11 +112,22 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
     const user = currentUser(request);
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
-      const patch = parsePatch(request.body);
-      if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'invalid_request' });
-      updateEdition(deps.db, edition.id, patch);
+      const { metadataPrivate, ...rest } = asRecord(request.body) ?? {};
+      if (metadataPrivate !== undefined) {
+        // Like lookup and apply, the assistant setting is the admin's.
+        if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
+        if (typeof metadataPrivate !== 'boolean') return reply.code(400).send({ error: 'invalid_request' });
+      }
+      const patch = Object.keys(rest).length > 0 || metadataPrivate === undefined ? parsePatch(rest) : {};
+      if (Object.keys(patch).length === 0 && metadataPrivate === undefined) {
+        return reply.code(400).send({ error: 'invalid_request' });
+      }
+      if (Object.keys(patch).length > 0) updateEdition(deps.db, edition.id, patch);
+      if (typeof metadataPrivate === 'boolean') {
+        setEditionMetadataPrivate(deps.db, deps.dataDir, edition.id, metadataPrivate);
+      }
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, user.id, edition.id) };
+      return { edition: presentEdition(deps.db, user, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -104,7 +142,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       if (!upload.bytes) return reply.code(400).send({ error: 'invalid_request' });
       replaceEditionCover(deps.db, { dataDir: deps.dataDir, editionId: edition.id, bytes: upload.bytes });
       reply.header('cache-control', 'no-store');
-      return { edition: presentEdition(deps.db, user.id, edition.id) };
+      return { edition: presentEdition(deps.db, user, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -120,6 +158,64 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       if (!absolute) return reply.code(404).send({ error: 'not_found' });
       const bytes = readFileSync(absolute);
       return reply.type(cover.mediaType).header('cache-control', 'private, no-store').send(bytes);
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  // A pending lookup preview, rebuilt against the edition as it is now, for review on the book page.
+  app.get('/api/editions/:editionId/metadata/previews/:previewId', async (request, reply) => {
+    const user = currentUser(request);
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
+    try {
+      const params = request.params as { editionId?: string; previewId?: string };
+      const edition = await accessEdition(deps, user, params.editionId);
+      const previewId = parseId(params.previewId);
+      if (!previewId) return reply.code(404).send({ error: 'not_found' });
+      const preview = loadMetadataPreview(deps.db, deps.dataDir, edition.id, previewId);
+      if (!preview) return reply.code(404).send({ error: 'not_found' });
+      reply.header('cache-control', 'no-store');
+      return { preview };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  // Dismissing discards the preview and its staged cover; nothing is applied.
+  app.delete('/api/editions/:editionId/metadata/previews/:previewId', async (request, reply) => {
+    const user = currentUser(request);
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
+    try {
+      const params = request.params as { editionId?: string; previewId?: string };
+      const edition = await accessEdition(deps, user, params.editionId);
+      const previewId = parseId(params.previewId);
+      if (!previewId) return reply.code(404).send({ error: 'not_found' });
+      dismissMetadataPreview(deps.db, deps.dataDir, edition.id, previewId);
+      reply.header('cache-control', 'no-store');
+      return { edition: presentEdition(deps.db, user, edition.id) };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  // The cover a lookup preview staged, shown to the admin before anything is applied.
+  app.get('/api/editions/:editionId/metadata/previews/:previewId/cover', async (request, reply) => {
+    const user = currentUser(request);
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
+    try {
+      const params = request.params as { editionId?: string; previewId?: string };
+      const edition = await accessEdition(deps, user, params.editionId);
+      const previewId = parseId(params.previewId);
+      if (!previewId) return reply.code(404).send({ error: 'not_found' });
+      const preview = deps.db.select().from(metadataPreviews).where(eq(metadataPreviews.id, previewId)).get();
+      if (!preview || preview.editionId !== edition.id) return reply.code(404).send({ error: 'not_found' });
+      const staged = readStagedCover(deps.dataDir, preview);
+      if (!staged) return reply.code(404).send({ error: 'not_found' });
+      return reply
+        .type(staged.mediaType)
+        .header('cache-control', 'private, no-store')
+        .header('x-content-type-options', 'nosniff')
+        .send(staged.bytes);
     } catch (error) {
       return sendError(reply, error);
     }
@@ -147,6 +243,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
     if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
+      if (edition.metadataPrivate) return reply.code(409).send({ error: 'metadata_private' });
       const job = createBackgroundJob(deps.db, {
         libraryId: edition.libraryId,
         userId: user.id,
@@ -167,6 +264,7 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
       const body = asRecord(request.body);
       const previewId = body && typeof body.previewId === 'number' ? body.previewId : null;
+      if (edition.metadataPrivate) return reply.code(409).send({ error: 'metadata_private' });
       const confirm = parseConfirm(body?.confirm);
       if (!previewId || !Number.isInteger(previewId) || previewId < 1 || !confirm) {
         return reply.code(400).send({ error: 'invalid_request' });
@@ -201,8 +299,8 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
   });
 }
 
-function presentEdition(db: AppDatabase, userId: number, editionId: number) {
-  return presentLibraryEdition(db, userId, editionId);
+function presentEdition(db: AppDatabase, user: AuthUser, editionId: number) {
+  return presentLibraryEdition(db, user, editionId);
 }
 
 async function accessEdition(deps: EditionRouteDeps, user: AuthUser, raw: string | undefined) {
@@ -327,14 +425,26 @@ function parseAlternate(value: unknown): Array<{ title: string; sortTitle: strin
   });
 }
 
-function parseIdentifiers(value: unknown): Array<{ scheme: string; value: string }> {
+/**
+ * The whole identifier list, so an edit can add, remove, or change entries.
+ * Each is `{ scheme, value, sourceUrl? }`; read-only fields of the edition
+ * payload (url, source, createdAt) may be sent back and are ignored. Values are
+ * validated by scheme when the edit is applied.
+ */
+function parseIdentifiers(value: unknown): Array<{ scheme: string; value: string; sourceUrl: string | null }> {
   if (!Array.isArray(value)) throw new CatalogError('invalid_request');
-  return value.map((item) => {
+  return value.map((item, index) => {
     const record = asRecord(item);
     if (!record || typeof record.scheme !== 'string' || typeof record.value !== 'string') {
       throw new CatalogError('invalid_request');
     }
-    return { scheme: record.scheme, value: record.value };
+    if (record.sourceUrl != null && typeof record.sourceUrl !== 'string') throw new CatalogError('invalid_request');
+    let sourceUrl: string | null = null;
+    if (typeof record.sourceUrl === 'string' && record.sourceUrl.trim() !== '') {
+      sourceUrl = cleanSourceUrl(record.sourceUrl);
+      if (!sourceUrl) throw new CatalogError('invalid_identifier', { index });
+    }
+    return { scheme: record.scheme, value: record.value, sourceUrl };
   });
 }
 
@@ -400,6 +510,8 @@ function sendError(reply: FastifyReply, error: unknown) {
   if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.code });
   if (error instanceof CatalogError) {
     const status = error.code === 'not_found' ? 404 : error.code === 'conflict' ? 409 : 400;
+    // An identifier edit names the rejected row, so the form can mark it.
+    if (error.index !== null) return reply.code(status).send({ error: error.code, index: error.index });
     return reply.code(status).send({ error: error.code });
   }
   throw error;

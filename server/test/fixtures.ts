@@ -289,3 +289,53 @@ function pdfUtf16(value: string): string {
   }
   return `<${bytes.toString('hex')}>`;
 }
+
+/** A JPEG header with an APP0 segment and a baseline SOF0 frame of the given size, padded to `bytes`. */
+export function jpegOfSize(width: number, height: number, bytes = 4096): Buffer {
+  const app0 = Buffer.from([0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]);
+  const sof = Buffer.alloc(19);
+  sof.writeUInt16BE(0xffc0, 0);
+  sof.writeUInt16BE(17, 2);
+  sof[4] = 8;
+  sof.writeUInt16BE(height, 5);
+  sof.writeUInt16BE(width, 7);
+  sof[9] = 3;
+  const head = Buffer.concat([Buffer.from([0xff, 0xd8]), app0, sof, Buffer.from([0xff, 0xda, 0x00, 0x08])]);
+  return Buffer.concat([head, Buffer.alloc(Math.max(0, bytes - head.length - 2), 0x11), Buffer.from([0xff, 0xd9])]);
+}
+
+/** A PNG signature and IHDR chunk of the given size, padded to `bytes`. */
+export function pngOfSize(width: number, height: number, bytes = 4096): Buffer {
+  const ihdr = Buffer.alloc(25);
+  ihdr.writeUInt32BE(13, 0);
+  ihdr.write('IHDR', 4, 'ascii');
+  ihdr.writeUInt32BE(width, 8);
+  ihdr.writeUInt32BE(height, 12);
+  ihdr[16] = 8;
+  ihdr[17] = 2;
+  const head = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ihdr]);
+  return Buffer.concat([head, Buffer.alloc(Math.max(0, bytes - head.length), 0)]);
+}
+
+/** A WebP RIFF container with a VP8 (lossy), VP8L (lossless), or VP8X (extended) first chunk. */
+export function webpOfSize(width: number, height: number, chunk: 'VP8 ' | 'VP8L' | 'VP8X', bytes = 4096): Buffer {
+  const body = Buffer.alloc(Math.max(64, bytes - 12));
+  body.write('WEBP', 0, 'ascii');
+  body.write(chunk, 4, 'ascii');
+  body.writeUInt32LE(body.length - 12, 8);
+  if (chunk === 'VP8 ') {
+    body.set([0x9d, 0x01, 0x2a], 15);
+    body.writeUInt16LE(width & 0x3fff, 18);
+    body.writeUInt16LE(height & 0x3fff, 20);
+  } else if (chunk === 'VP8L') {
+    body[12] = 0x2f;
+    body.writeUInt32LE(((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14), 13);
+  } else {
+    body.writeUIntLE(width - 1, 16, 3);
+    body.writeUIntLE(height - 1, 19, 3);
+  }
+  const riff = Buffer.alloc(8);
+  riff.write('RIFF', 0, 'ascii');
+  riff.writeUInt32LE(body.length, 4);
+  return Buffer.concat([riff, body]);
+}

@@ -1,17 +1,33 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AssistantConfig } from './assistant/client.js';
+import type { AssistantConfig, WebSearchMode } from './assistant/client.js';
+import { defaultWebSearch, webSearchAvailable } from './assistant/web-tools.js';
 
 const SETTINGS_FILE = 'metadata-assistant.json';
 const BASE_URL_MAX = 2048;
 const MODEL_MAX = 100;
 const API_KEY_MAX = 500;
 
+/** Body fields accepted by PUT /api/metadata/assistant. */
+export const ASSISTANT_SETTINGS_FIELDS = [
+  'baseUrl',
+  'model',
+  'apiKey',
+  'webSearch',
+  'searchApiKey',
+  'googleBooksApiKey',
+] as const;
+
 export interface AssistantSettingsInput {
   baseUrl?: unknown;
   model?: unknown;
   apiKey?: unknown;
+  /** `deepseek` or `off`. Absent keeps the saved choice, or the default for the base URL. */
+  webSearch?: unknown;
+  /** Absent or blank keeps the saved key; null removes it. */
+  searchApiKey?: unknown;
+  googleBooksApiKey?: unknown;
 }
 
 export interface PublicAssistantSettings {
@@ -20,12 +36,24 @@ export interface PublicAssistantSettings {
   model: string | null;
   apiKeyConfigured: boolean;
   apiKeyHint: string | null;
+  /** The effective web search mode. */
+  webSearch: WebSearchMode;
+  /** True when web_search and fetch_page are offered to the agent. */
+  webSearchAvailable: boolean;
+  searchApiKeyConfigured: boolean;
+  searchApiKeyHint: string | null;
+  googleBooksApiKeyConfigured: boolean;
+  googleBooksApiKeyHint: string | null;
 }
 
 interface StoredAssistantSettings {
   baseUrl: string;
   model: string;
   apiKey: string | null;
+  /** Saved only once an admin chooses; otherwise the default follows the base URL. */
+  webSearch?: WebSearchMode;
+  searchApiKey: string | null;
+  googleBooksApiKey: string | null;
   updatedAt: string;
 }
 
@@ -38,6 +66,11 @@ export class AssistantSettingsError extends Error {
 }
 
 export function readAssistantSettings(dataDir: string): AssistantConfig | null {
+  const stored = readStored(dataDir);
+  return stored ? toConfig(stored) : null;
+}
+
+function readStored(dataDir: string): Omit<StoredAssistantSettings, 'updatedAt'> | null {
   const file = path.join(dataDir, SETTINGS_FILE);
   if (!existsSync(file)) return null;
   let parsed: unknown;
@@ -47,6 +80,17 @@ export function readAssistantSettings(dataDir: string): AssistantConfig | null {
     return null;
   }
   return parseStored(parsed);
+}
+
+function toConfig(stored: Omit<StoredAssistantSettings, 'updatedAt'>): AssistantConfig {
+  return {
+    baseUrl: stored.baseUrl,
+    model: stored.model,
+    apiKey: stored.apiKey,
+    webSearch: stored.webSearch ?? defaultWebSearch(stored.baseUrl),
+    searchApiKey: stored.searchApiKey,
+    googleBooksApiKey: stored.googleBooksApiKey,
+  };
 }
 
 export function writeAssistantSettings(
@@ -59,19 +103,62 @@ export function writeAssistantSettings(
   const model = cleanModel(record.model);
   if (!baseUrl || model === null) throw new AssistantSettingsError();
 
-  const existing = readAssistantSettings(dataDir);
-  const apiKey = resolveApiKey(record.apiKey, existing);
+  const existing = readStored(dataDir);
+  const apiKey = resolveApiKey(record.apiKey, existing ? toConfig(existing) : null);
   if (apiKey === undefined) throw new AssistantSettingsError();
+  const webSearch = resolveWebSearch(record.webSearch, existing?.webSearch);
+  if (webSearch === null) throw new AssistantSettingsError();
+  const searchApiKey = resolveOptionalKey(record.searchApiKey, existing?.searchApiKey ?? null);
+  const googleBooksApiKey = resolveOptionalKey(record.googleBooksApiKey, existing?.googleBooksApiKey ?? null);
+  if (searchApiKey === undefined || googleBooksApiKey === undefined) throw new AssistantSettingsError();
 
   const stored: StoredAssistantSettings = {
     baseUrl,
     model,
     apiKey,
+    ...(webSearch ? { webSearch } : {}),
+    searchApiKey,
+    googleBooksApiKey,
     updatedAt: new Date().toISOString(),
   };
   ensurePrivateDir(dataDir);
   writePrivate(path.join(dataDir, SETTINGS_FILE), `${JSON.stringify(stored)}\n`);
-  return publicAssistantSettings({ baseUrl, model, apiKey });
+  return publicAssistantSettings(toConfig(stored));
+}
+
+/** A new explicit choice, the saved one, `undefined` for the default, or null when invalid. */
+function resolveWebSearch(value: unknown, existing: WebSearchMode | undefined): WebSearchMode | undefined | null {
+  if (value === undefined) return existing;
+  return value === 'deepseek' || value === 'off' ? value : null;
+}
+
+/** Absent or blank keeps the saved key, null removes it, and a string replaces it. */
+function resolveOptionalKey(value: unknown, existing: string | null): string | null | undefined {
+  if (value === null) return null;
+  return resolveKey(value, existing);
+}
+
+/**
+ * The target for listing models from unsaved form values. A blank key reuses the saved key only
+ * when the base URL is the saved one, so a saved key is never sent to a different server.
+ */
+export function resolveModelListTarget(
+  dataDir: string,
+  input: unknown,
+): { baseUrl: string; apiKey: string | null } {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new AssistantSettingsError();
+  const record = input as Record<string, unknown>;
+  const baseUrl = cleanBaseUrl(record.baseUrl);
+  if (!baseUrl) throw new AssistantSettingsError();
+  const existing = readAssistantSettings(dataDir);
+  const sameServer = existing !== null && existing.baseUrl === baseUrl ? existing : null;
+  const apiKey = resolveApiKey(record.apiKey, sameServer);
+  if (apiKey === undefined) throw new AssistantSettingsError();
+  return { baseUrl, apiKey };
+}
+
+export function cleanAssistantModel(value: unknown): string | null {
+  return cleanModel(value);
 }
 
 export function clearAssistantSettings(dataDir: string): void {
@@ -86,33 +173,57 @@ export function publicAssistantSettings(config: AssistantConfig | null): PublicA
       model: null,
       apiKeyConfigured: false,
       apiKeyHint: null,
+      webSearch: 'off',
+      webSearchAvailable: false,
+      searchApiKeyConfigured: false,
+      searchApiKeyHint: null,
+      googleBooksApiKeyConfigured: false,
+      googleBooksApiKeyHint: null,
     };
   }
-  const apiKeyConfigured = typeof config.apiKey === 'string' && config.apiKey.length > 0;
   return {
     configured: true,
     baseUrl: config.baseUrl,
     model: config.model,
-    apiKeyConfigured,
-    apiKeyHint: apiKeyConfigured ? config.apiKey!.slice(-4) : null,
+    apiKeyConfigured: keyHint(config.apiKey) !== null,
+    apiKeyHint: keyHint(config.apiKey),
+    webSearch: config.webSearch ?? defaultWebSearch(config.baseUrl),
+    webSearchAvailable: webSearchAvailable({ ...config, webSearch: config.webSearch ?? defaultWebSearch(config.baseUrl) }),
+    searchApiKeyConfigured: keyHint(config.searchApiKey) !== null,
+    searchApiKeyHint: keyHint(config.searchApiKey),
+    googleBooksApiKeyConfigured: keyHint(config.googleBooksApiKey) !== null,
+    googleBooksApiKeyHint: keyHint(config.googleBooksApiKey),
   };
 }
 
-function parseStored(value: unknown): AssistantConfig | null {
+/** The last four characters of a saved key; the key itself is never returned. */
+function keyHint(key: string | null | undefined): string | null {
+  return typeof key === 'string' && key.length > 0 ? key.slice(-4) : null;
+}
+
+function parseStored(value: unknown): Omit<StoredAssistantSettings, 'updatedAt'> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const baseUrl = cleanBaseUrl(record.baseUrl);
   const model = cleanModel(record.model);
   const apiKey = cleanStoredApiKey(record.apiKey);
   if (!baseUrl || model === null || apiKey === undefined) return null;
-  return { baseUrl, model, apiKey };
+  // Fields added later are optional; an unreadable one is treated as absent.
+  const webSearch = record.webSearch === 'deepseek' || record.webSearch === 'off' ? record.webSearch : undefined;
+  const searchApiKey = cleanStoredApiKey(record.searchApiKey ?? null) ?? null;
+  const googleBooksApiKey = cleanStoredApiKey(record.googleBooksApiKey ?? null) ?? null;
+  return { baseUrl, model, apiKey, ...(webSearch ? { webSearch } : {}), searchApiKey, googleBooksApiKey };
 }
 
 function resolveApiKey(value: unknown, existing: AssistantConfig | null): string | null | undefined {
-  if (value === undefined) return existing?.apiKey ?? null;
+  return resolveKey(value, existing?.apiKey ?? null);
+}
+
+function resolveKey(value: unknown, existing: string | null): string | null | undefined {
+  if (value === undefined) return existing;
   if (typeof value !== 'string') return undefined;
   const apiKey = value.trim();
-  if (apiKey.length === 0) return existing?.apiKey ?? null;
+  if (apiKey.length === 0) return existing;
   if (apiKey.length > API_KEY_MAX || /[\u0000-\u001f\u007f]/.test(apiKey)) return undefined;
   return apiKey;
 }

@@ -66,7 +66,7 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: { db: AppDatab
       const shelf = createShelf(deps.db, user.id, name, editionId);
       reply.header('cache-control', 'no-store');
       if (editionId == null) return reply.code(201).send({ shelf });
-      return reply.code(201).send({ shelf, edition: presentLibraryEdition(deps.db, user.id, editionId) });
+      return reply.code(201).send({ shelf, edition: presentLibraryEdition(deps.db, user, editionId) });
     } catch (error) {
       return sendError(reply, error);
     }
@@ -83,7 +83,7 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: { db: AppDatab
       const edition = accessEdition(deps.db, user, body.editionId);
       addShelfItem(deps.db, user.id, shelfId, edition.id);
       reply.header('cache-control', 'no-store');
-      return { edition: presentLibraryEdition(deps.db, user.id, edition.id) };
+      return { edition: presentLibraryEdition(deps.db, user, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -97,7 +97,7 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: { db: AppDatab
       if (!shelfId) return reply.code(400).send({ error: 'invalid_request' });
       removeShelfItem(deps.db, user.id, shelfId, edition.id);
       reply.header('cache-control', 'no-store');
-      return { edition: presentLibraryEdition(deps.db, user.id, edition.id) };
+      return { edition: presentLibraryEdition(deps.db, user, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -110,7 +110,7 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: { db: AppDatab
       const patch = parseReadingPatch(request.body);
       setReading(deps.db, user.id, edition.id, patch);
       reply.header('cache-control', 'no-store');
-      return { edition: presentLibraryEdition(deps.db, user.id, edition.id) };
+      return { edition: presentLibraryEdition(deps.db, user, edition.id) };
     } catch (error) {
       return sendError(reply, error);
     }
@@ -142,9 +142,18 @@ function parseLibraryQuery(query: unknown): Omit<LibraryQueryShape, 'userId' | '
     format: parseFormat(record.format),
     status: parseStatus(record.status),
     shelfId: parseOptionalId(record.shelfId),
+    identified: parseIdentified(record.identified),
     limit,
     offset,
   };
+}
+
+/** `identified=1` keeps editions with a catalog identifier; `identified=0` keeps the Unidentified. */
+function parseIdentified(value: unknown): boolean | null {
+  if (value === undefined || value === '') return null;
+  if (value === '1') return true;
+  if (value === '0') return false;
+  throw new CatalogError('invalid_request');
 }
 
 interface LibraryQueryShape {
@@ -155,6 +164,7 @@ interface LibraryQueryShape {
   format: 'epub' | 'pdf' | null;
   status: ReadingStatus | null;
   shelfId: number | null;
+  identified: boolean | null;
   limit: number;
   offset: number;
 }

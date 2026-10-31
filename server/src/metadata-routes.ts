@@ -1,11 +1,18 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthUser } from './sessions.js';
-import { AssistantError, testAssistant, type AssistantTransport } from './metadata/assistant/client.js';
 import {
+  AssistantError,
+  listAssistantModels,
+  testAssistant,
+  type AssistantTransport,
+} from './metadata/assistant/client.js';
+import {
+  ASSISTANT_SETTINGS_FIELDS,
   AssistantSettingsError,
   clearAssistantSettings,
   publicAssistantSettings,
   readAssistantSettings,
+  resolveModelListTarget,
   writeAssistantSettings,
 } from './metadata/assistant-settings.js';
 
@@ -26,7 +33,7 @@ export function registerMetadataRoutes(app: FastifyInstance, options: MetadataRo
     reply.header('cache-control', 'no-store');
     const body = asRecord(request.body);
     if (!body) return reply.code(400).send({ error: 'invalid_request' });
-    if (Object.keys(body).some((key) => key !== 'baseUrl' && key !== 'model' && key !== 'apiKey')) {
+    if (Object.keys(body).some((key) => !(ASSISTANT_SETTINGS_FIELDS as readonly string[]).includes(key))) {
       return reply.code(400).send({ error: 'invalid_request' });
     }
     try {
@@ -56,6 +63,30 @@ export function registerMetadataRoutes(app: FastifyInstance, options: MetadataRo
     try {
       const result = await testAssistant(options.transport ?? {}, config);
       return { ok: true as const, model: result.model };
+    } catch (error) {
+      return sendAssistantError(reply, error);
+    }
+  });
+
+  app.post('/api/metadata/assistant/models', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    reply.header('cache-control', 'no-store');
+    const body = asRecord(request.body);
+    if (!body) return reply.code(400).send({ error: 'invalid_request' });
+    if (Object.keys(body).some((key) => key !== 'baseUrl' && key !== 'apiKey')) {
+      return reply.code(400).send({ error: 'invalid_request' });
+    }
+    let target: ReturnType<typeof resolveModelListTarget>;
+    try {
+      target = resolveModelListTarget(options.dataDir, body);
+    } catch (error) {
+      if (error instanceof AssistantSettingsError) {
+        return reply.code(400).send({ error: 'invalid_request' });
+      }
+      throw error;
+    }
+    try {
+      return { models: await listAssistantModels(options.transport ?? {}, target) };
     } catch (error) {
       return sendAssistantError(reply, error);
     }

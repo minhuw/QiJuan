@@ -6,6 +6,8 @@ import { buildApp } from '../src/app.js';
 import { absoluteBlobPath } from '../src/blobs.js';
 import { openDatabase } from '../src/db.js';
 import { requeueInterruptedJobs, resolveUploadPath } from '../src/jobs.js';
+import { runMetadataAgent } from '../src/metadata/assistant/agent.js';
+import { createMetadataPreview } from '../src/metadata/apply.js';
 import type { AssistantTransport } from '../src/metadata/assistant/client.js';
 import { writeAssistantSettings } from '../src/metadata/assistant-settings.js';
 import type { OpenLibraryTransport } from '../src/metadata/openLibrary.js';
@@ -24,6 +26,7 @@ import {
   IMAGE_PDF_TITLE,
   malformedBook,
   TEXT_PDF_AUTHOR,
+  TEXT_PDF_ID,
   TEXT_PDF_LANGUAGE,
   TEXT_PDF_TITLE,
 } from './fixtures.js';
@@ -338,7 +341,7 @@ describe('batch import', () => {
          ORDER BY c.edition_id, c.position`,
       )
       .all() as Array<{ name: string; role: string; edition_id: number }>;
-    const ids = db.prepare('SELECT edition_id, scheme, value FROM identifiers ORDER BY edition_id, scheme').all() as Array<{
+    const ids = db.prepare('SELECT edition_id, scheme, value FROM edition_identifiers ORDER BY edition_id, scheme').all() as Array<{
       edition_id: number;
       scheme: string;
       value: string;
@@ -481,7 +484,7 @@ describe('batch import', () => {
          ORDER BY c.position`,
       )
       .all() as Array<{ name: string; role: string }>;
-    const ids = db.prepare('SELECT scheme, value FROM identifiers ORDER BY id').all() as Array<{
+    const ids = db.prepare('SELECT scheme, value FROM edition_identifiers ORDER BY id').all() as Array<{
       scheme: string;
       value: string;
     }>;
@@ -585,7 +588,7 @@ describe('batch import', () => {
   });
 
   it('fails each upload missing a required field without creating a blob or edition', async () => {
-    const required = ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate', 'identifiers'];
+    const required = ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate'];
     const attempts = new Map<string, number>();
     const assistant = scriptedAssistant((body) => {
       const input = promptInput(body);
@@ -1019,5 +1022,275 @@ describe('resolveUploadPath', () => {
     expect(resolveUploadPath(dataDir, 'other/abc/0-Edition..epub')).toBeNull();
     expect(resolveUploadPath(dataDir, 'incoming/abc/0-file.epub\0')).toBeNull();
     expect(resolveUploadPath(dataDir, 'incoming\\abc\\0-file.epub')).toBeNull();
+  });
+});
+
+describe('private books', () => {
+  async function uploadPrivate(
+    started: Awaited<ReturnType<typeof startUploadApp>>,
+    parts: Array<{ name: string; filename: string; content: Buffer }>,
+  ) {
+    const body = multipart(parts);
+    const created = await started.app.inject({
+      method: 'POST',
+      url: `/api/imports?libraryId=${started.libraryId}&private=1`,
+      headers: { ...body.headers, cookie: started.cookie },
+      payload: body.payload,
+    });
+    expect(created.statusCode).toBe(202);
+    return waitForJob(started.app, started.cookie, created.json().job.id as number);
+  }
+
+  async function readEdition(started: Awaited<ReturnType<typeof startUploadApp>>, editionId: number, cookie = started.cookie) {
+    const response = await started.app.inject({ method: 'GET', url: `/api/editions/${editionId}`, headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    return response.json().edition as { title: string; metadataPrivate: boolean; authors: string[]; cover: unknown; pendingLookup?: unknown };
+  }
+
+  function privateFlags(databasePath: string): Array<{ id: number; metadata_private: number }> {
+    const db = new Database(databasePath, { readonly: true });
+    const rows = db.prepare('SELECT id, metadata_private FROM editions ORDER BY id').all() as Array<{ id: number; metadata_private: number }>;
+    db.close();
+    return rows;
+  }
+
+  it('imports a private batch from the files alone, with no assistant configured and no request sent', async () => {
+    const assistant = defaultAssistant();
+    const openLibrary = openLibraryStub();
+    const started = await startUploadApp({ assistant: assistant.transport, openLibrary: openLibrary.transport, configure: false });
+
+    const job = await uploadPrivate(started, [
+      { name: 'files', filename: 'embedded.epub', content: buildEpub() },
+      { name: 'files', filename: 'text.pdf', content: buildTextPdf() },
+      { name: 'files', filename: 'Untitled Notes.epub', content: buildEpub({ title: '', identifier: 'urn:uuid:11111111-2222-4333-8444-555555555555' }) },
+    ]);
+    expect(job.items.map((item) => [item.filename, item.status, item.error])).toEqual([
+      ['embedded.epub', 'succeeded', null],
+      ['text.pdf', 'succeeded', null],
+      ['Untitled Notes.epub', 'succeeded', null],
+    ]);
+    expect(assistant.calls()).toBe(0);
+    expect(openLibrary.urls).toEqual([]);
+
+    const [epub, pdf, untitled] = await Promise.all(job.items.map((item) => readEdition(started, item.editionId!)));
+    expect(epub).toMatchObject({ title: EPUB_TITLE, authors: [EPUB_AUTHOR], metadataPrivate: true, cover: { mediaType: 'image/png' } });
+    expect(pdf).toMatchObject({ title: TEXT_PDF_TITLE, authors: [TEXT_PDF_AUTHOR], metadataPrivate: true });
+    expect(untitled).toMatchObject({ title: 'Untitled Notes', metadataPrivate: true });
+    expect(privateFlags(started.config.databasePath).every((row) => row.metadata_private === 1)).toBe(true);
+
+    const trajectories = new Database(started.config.databasePath, { readonly: true });
+    expect(trajectories.prepare('SELECT COUNT(*) AS count FROM metadata_trajectories').get()).toEqual({ count: 0 });
+    trajectories.close();
+  });
+
+  it('still sends a batch that is not private to the agent', async () => {
+    const assistant = defaultAssistant();
+    const started = await startUploadApp({ assistant: assistant.transport, openLibrary: openLibraryStub().transport });
+    const job = await uploadFiles(started.app, started.cookie, started.libraryId, [
+      { name: 'files', filename: 'public.epub', content: buildEpub() },
+    ]);
+    expect(job.items[0]).toMatchObject({ status: 'succeeded', error: null });
+    expect(assistant.calls()).toBeGreaterThan(0);
+    expect(promptInput(assistant.bodies[0]!).filename).toBe('public.epub');
+    expect((await readEdition(started, job.items[0]!.editionId!)).metadataPrivate).toBe(false);
+  });
+
+  it('rejects an invalid private flag on upload', async () => {
+    const started = await startUploadApp({ assistant: defaultAssistant().transport });
+    const body = multipart([{ name: 'files', filename: 'a.epub', content: buildEpub() }]);
+    const created = await started.app.inject({
+      method: 'POST',
+      url: `/api/imports?libraryId=${started.libraryId}&private=maybe`,
+      headers: { ...body.headers, cookie: started.cookie },
+      payload: body.payload,
+    });
+    expect(created.statusCode).toBe(400);
+  });
+
+  it('refuses lookup and apply for a private edition and never reaches the agent', async () => {
+    const assistant = defaultAssistant();
+    const openLibrary = openLibraryStub();
+    const started = await startUploadApp({ assistant: assistant.transport, openLibrary: openLibrary.transport });
+    const job = await uploadPrivate(started, [{ name: 'files', filename: 'secret.epub', content: buildEpub() }]);
+    const editionId = job.items[0]!.editionId!;
+
+    const lookup = await started.app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/lookup`,
+      headers: { cookie: started.cookie },
+    });
+    expect(lookup.statusCode).toBe(409);
+    expect(lookup.json()).toEqual({ error: 'metadata_private' });
+    const apply = await started.app.inject({
+      method: 'POST',
+      url: `/api/editions/${editionId}/metadata/apply`,
+      headers: { cookie: started.cookie },
+      payload: { previewId: 1, confirm: ['title'] },
+    });
+    expect(apply.statusCode).toBe(409);
+    expect(apply.json()).toEqual({ error: 'metadata_private' });
+
+    // A lookup job queued some other way still fails before the agent runs.
+    const db = new Database(started.config.databasePath);
+    const now = new Date().toISOString();
+    const queued = db
+      .prepare(`INSERT INTO jobs (library_id, source, status, payload, created_at, updated_at) VALUES (?, 'lookup', 'queued', ?, ?, ?) RETURNING id`)
+      .get(started.libraryId, JSON.stringify({ editionId }), now, now) as { id: number };
+    db.close();
+    const failed = await waitForJob(started.app, started.cookie, queued.id);
+    expect(failed).toMatchObject({ status: 'failed', result: { error: 'metadata_private' } });
+    expect(assistant.calls()).toBe(0);
+    expect(openLibrary.urls).toEqual([]);
+  });
+
+  it('throws at the agent itself when a caller forgets the private check', async () => {
+    const assistant = defaultAssistant();
+    const started = await startUploadApp({ assistant: assistant.transport, openLibrary: openLibraryStub().transport });
+    const job = await uploadPrivate(started, [{ name: 'files', filename: 'secret.epub', content: buildEpub() }]);
+    const editionId = job.items[0]!.editionId!;
+    const config = { baseUrl: assistantBaseUrl, model: 'scripted-model', apiKey: null };
+    const input = { filename: 'secret.epub', format: 'epub' as const, fields: promptInput({}).fields ?? null };
+
+    await expect(
+      runMetadataAgent({ transport: assistant.transport, openLibrary: { origin: 'https://ol.example' }, config, input: input as never, metadataPrivate: true }),
+    ).rejects.toMatchObject({ code: 'metadata_private' });
+    // Anything but an explicit false is treated as private.
+    await expect(
+      runMetadataAgent({ transport: assistant.transport, openLibrary: { origin: 'https://ol.example' }, config, input: input as never } as never),
+    ).rejects.toMatchObject({ code: 'metadata_private' });
+
+    const { sqlite, db } = openDatabase(started.config.databasePath);
+    try {
+      await expect(
+        createMetadataPreview(db, started.config.dataDir, assistant.transport, { origin: 'https://ol.example' }, editionId),
+      ).rejects.toMatchObject({ code: 'metadata_private' });
+    } finally {
+      sqlite.close();
+    }
+    expect(assistant.calls()).toBe(0);
+  });
+
+  it('toggles private on the book page, admins only, and discards a pending lookup preview', async () => {
+    const started = await startUploadApp({ assistant: defaultAssistant().transport, openLibrary: openLibraryStub().transport });
+    const job = await uploadFiles(started.app, started.cookie, started.libraryId, [
+      { name: 'files', filename: 'public.epub', content: buildEpub() },
+    ]);
+    const editionId = job.items[0]!.editionId!;
+    const db = new Database(started.config.databasePath);
+    const proposal = {
+      title: 'Stale Agent Title', authors: [], translators: [], description: null, publisher: null, publishedDate: null,
+      language: null, identifiers: [], series: null, seriesOrder: null, coverId: null, isbn: null, cover: null,
+    };
+    const preview = db
+      .prepare('INSERT INTO metadata_previews (edition_id, proposal, created_at) VALUES (?, ?, ?) RETURNING id')
+      .get(editionId, JSON.stringify(proposal), new Date().toISOString()) as { id: number };
+    db.close();
+    expect((await readEdition(started, editionId)).pendingLookup).toMatchObject({ previewId: preview.id });
+
+    const created = await started.app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: { cookie: started.cookie },
+      payload: { username: 'bea', password: 'reader-password' },
+    });
+    expect(created.statusCode).toBe(201);
+    const grant = await started.app.inject({
+      method: 'POST',
+      url: `/api/libraries/${started.libraryId}/grants`,
+      headers: { cookie: started.cookie },
+      payload: { userId: created.json().user.id },
+    });
+    expect(grant.statusCode).toBe(201);
+    const login = await started.app.inject({
+      method: 'POST',
+      url: '/api/session/login',
+      payload: { username: 'bea', password: 'reader-password' },
+    });
+    const bea = (login.headers['set-cookie'] as string).split(';')[0] ?? '';
+    const forbidden = await started.app.inject({
+      method: 'PATCH',
+      url: `/api/editions/${editionId}`,
+      headers: { cookie: bea },
+      payload: { metadataPrivate: true },
+    });
+    expect(forbidden.statusCode).toBe(403);
+    const invalid = await started.app.inject({
+      method: 'PATCH',
+      url: `/api/editions/${editionId}`,
+      headers: { cookie: started.cookie },
+      payload: { metadataPrivate: 'yes' },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const patched = await started.app.inject({
+      method: 'PATCH',
+      url: `/api/editions/${editionId}`,
+      headers: { cookie: started.cookie },
+      payload: { metadataPrivate: true },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().edition).toMatchObject({ metadataPrivate: true, pendingLookup: null });
+    const check = new Database(started.config.databasePath, { readonly: true });
+    expect(check.prepare('SELECT COUNT(*) AS count FROM metadata_previews').get()).toEqual({ count: 0 });
+    // Private is not a field edit: no lock is written.
+    expect(check.prepare('SELECT COUNT(*) AS count FROM field_locks').get()).toEqual({ count: 0 });
+    check.close();
+
+    const reopened = await started.app.inject({
+      method: 'PATCH',
+      url: `/api/editions/${editionId}`,
+      headers: { cookie: started.cookie },
+      payload: { metadataPrivate: false, title: 'Edited By Hand' },
+    });
+    expect(reopened.statusCode).toBe(200);
+    expect(reopened.json().edition).toMatchObject({ metadataPrivate: false, title: 'Edited By Hand' });
+  });
+
+  it('keeps an edition private through duplicates and identifier merges', async () => {
+    const assistant = scriptedAssistant((body) => ({
+      tool_calls: [
+        {
+          name: 'submit_metadata',
+          arguments: promptInput(body).filename !== 'public.epub' ? defaultSubmission(body) : {
+            title: TEXT_PDF_TITLE, authors: [TEXT_PDF_AUTHOR], translators: [], description: 'D.', publisher: 'P',
+            publishedDate: '2024-01-01', language: 'en', identifiers: [{ scheme: 'isbn', value: '9780000000002' }],
+            series: null, seriesOrder: null, coverId: null, isbn: null,
+          },
+        },
+      ],
+    }));
+    const started = await startUploadApp({ assistant: assistant.transport, openLibrary: openLibraryStub().transport });
+    expect(TEXT_PDF_ID).toContain('9780000000002');
+
+    // A public EPUB edition, then a private PDF of the same book: it merges and the edition turns private.
+    const publicJob = await uploadFiles(started.app, started.cookie, started.libraryId, [
+      { name: 'files', filename: 'public.epub', content: buildEpub() },
+    ]);
+    const editionId = publicJob.items[0]!.editionId!;
+    const calls = assistant.calls();
+    const merged = await uploadPrivate(started, [{ name: 'files', filename: 'text.pdf', content: buildTextPdf() }]);
+    expect(merged.items[0]).toMatchObject({ status: 'succeeded', editionId, merged: true });
+    expect((await readEdition(started, editionId)).metadataPrivate).toBe(true);
+
+    // A public copy of the same bytes is a duplicate and leaves the edition private.
+    const duplicate = await uploadFiles(started.app, started.cookie, started.libraryId, [
+      { name: 'files', filename: 'again.epub', content: buildEpub() },
+    ]);
+    expect(duplicate.items[0]).toMatchObject({ status: 'duplicate', editionId });
+    expect((await readEdition(started, editionId)).metadataPrivate).toBe(true);
+    expect(assistant.calls()).toBe(calls);
+
+    // A private duplicate of a public edition makes that edition private.
+    const other = await uploadFiles(started.app, started.cookie, started.libraryId, [
+      { name: 'files', filename: 'other.epub', content: buildEpub({ title: 'Other', identifier: 'urn:uuid:aaaaaaaa-2222-4333-8444-555555555555', english: 'Different bytes.' }) },
+    ]);
+    const otherId = other.items[0]!.editionId!;
+    expect(otherId).not.toBe(editionId);
+    expect((await readEdition(started, otherId)).metadataPrivate).toBe(false);
+    const privateCopy = await uploadPrivate(started, [
+      { name: 'files', filename: 'other-copy.epub', content: buildEpub({ title: 'Other', identifier: 'urn:uuid:aaaaaaaa-2222-4333-8444-555555555555', english: 'Different bytes.' }) },
+    ]);
+    expect(privateCopy.items[0]).toMatchObject({ status: 'duplicate', editionId: otherId });
+    expect((await readEdition(started, otherId)).metadataPrivate).toBe(true);
   });
 });

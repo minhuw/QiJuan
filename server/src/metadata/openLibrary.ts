@@ -131,7 +131,7 @@ export async function lookupOpenLibrary(
 export async function fetchOpenLibraryCover(
   transport: OpenLibraryTransport,
   input: { coverId: number | null; isbn: string | null },
-): Promise<{ bytes: Buffer; mediaType: string } | null> {
+): Promise<{ bytes: Buffer; mediaType: string; url: string } | null> {
   const origin = transport.coversOrigin ?? OPEN_LIBRARY_COVERS_ORIGIN;
   const urls: URL[] = [];
   if (input.coverId && input.coverId > 0) urls.push(buildCoverUrl({ coverId: input.coverId }, origin));
@@ -146,7 +146,7 @@ export async function fetchOpenLibraryCover(
     if (bytes.length === 0 || bytes.length > COVER_BYTES) continue;
     const mediaType = sniffImage(bytes);
     if (!mediaType) continue;
-    return { bytes, mediaType };
+    return { bytes, mediaType, url: url.href };
   }
   return null;
 }

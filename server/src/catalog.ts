@@ -3,7 +3,7 @@ import path from 'node:path';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { hashFile, managedBlobRelativePath, removeBlobFile, writeImmutableBlob } from './blobs.js';
 import type { AppDatabase } from './db.js';
-import { covers, editions, fileAssets, libraries, series } from './schema.js';
+import { covers, editions, fileAssets, libraries, metadataPreviews, series } from './schema.js';
 
 const TITLE_MAX = 500;
 const NAME_MAX = 300;
@@ -26,12 +26,17 @@ export class CatalogError extends Error {
     | 'not_in_trash'
     | 'indexed_permanent_delete'
     | 'not_indexed'
-    | 'conflict';
+    | 'conflict'
+    | 'invalid_identifier';
 
-  constructor(code: CatalogError['code']) {
+  /** For invalid_identifier: the position of the rejected identifier in the request. */
+  readonly index: number | null;
+
+  constructor(code: CatalogError['code'], options: { index?: number } = {}) {
     super(code);
     this.name = 'CatalogError';
     this.code = code;
+    this.index = options.index ?? null;
   }
 }
 
@@ -412,7 +417,12 @@ function countSha256(db: QueryDb, sha256: string): number {
     .from(covers)
     .where(eq(covers.sha256, sha256))
     .get();
-  return readCount(assetRow?.count) + readCount(coverRow?.count);
+  const previewRow = db
+    .select({ count: sql<number>`count(*)` })
+    .from(metadataPreviews)
+    .where(eq(metadataPreviews.coverSha256, sha256))
+    .get();
+  return readCount(assetRow?.count) + readCount(coverRow?.count) + readCount(previewRow?.count);
 }
 
 function readCount(value: unknown): number {

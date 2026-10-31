@@ -6,7 +6,7 @@ import { parseBookFile } from './books.js';
 import type { AppDatabase } from './db.js';
 import {
   latestCover,
-  loadIdentifiers,
+  loadIdentifierRecords,
   loadLocks,
   loadNames,
   releaseUnreferenced,
@@ -17,7 +17,9 @@ import {
 import { editions, fileAssets, libraries } from './schema.js';
 import { resolveInsideRoot } from './library-files.js';
 import type { BookMetadata } from './metadata.js';
-import { cleanDescription, cleanIdentifierValue, cleanLanguage, cleanName, cleanPublisher, cleanScheme, cleanTitle } from './text.js';
+import { normalizeIdentifierList } from './identifiers.js';
+import { recordIdentifierSuggestions } from './suggestions.js';
+import { cleanDescription, cleanLanguage, cleanName, cleanPublisher, cleanTitle } from './text.js';
 
 /**
  * Re-reads embedded metadata and writes unlocked fields.
@@ -138,14 +140,18 @@ function applyEmbedded(
     replaceContributors(db, edition.id, 'translator', nextTranslators, now, 'loose');
     changed = true;
   }
-  const nextIdentifiers = metadata.identifiers.flatMap((identifier) => {
-    const scheme = cleanScheme(identifier.scheme);
-    const value = cleanIdentifierValue(identifier.value);
-    if (!scheme || !value) return [];
-    return [{ scheme, value }];
-  });
-  if (nextIdentifiers.length > 0 && !locks.has('identifiers') && !sameIdentifiers(loadIdentifiers(db, edition.id), nextIdentifiers)) {
-    replaceIdentifiers(db, edition.id, nextIdentifiers, 'loose');
+  // A rescan replaces only what the file said. Agent and manual identifiers stay.
+  const nextIdentifiers = normalizeIdentifierList(metadata.identifiers).identifiers;
+  const currentEmbedded = loadIdentifierRecords(db, edition.id).filter((item) => item.source === 'embedded');
+  if (nextIdentifiers.length > 0 && !locks.has('identifiers') && !sameIdentifiers(currentEmbedded, nextIdentifiers)) {
+    replaceIdentifiers(
+      db,
+      edition.id,
+      [...loadIdentifierRecords(db, edition.id).filter((item) => item.source !== 'embedded'), ...nextIdentifiers],
+      'loose',
+      { source: 'embedded', now, onlySource: 'embedded' },
+    );
+    recordIdentifierSuggestions(db, edition.id, now);
     changed = true;
   }
   if (!locks.has('cover') && metadata.cover) {

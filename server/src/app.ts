@@ -10,15 +10,21 @@ import { BackupService } from './backup/service.js';
 import { createSpawnRunner, resolveResticBin, type ResticRunner } from './backup/restic-run.js';
 import type { AppConfig } from './config.js';
 import { openDatabase } from './db.js';
+import { backfillCoverTints } from './edition-fields.js';
 import { registerEditionRoutes } from './edition-routes.js';
 import { registerImportRoutes } from './import-routes.js';
 import { registerLibraryRoutes } from './library-routes.js';
 import { registerMetadataRoutes } from './metadata-routes.js';
 import { registerOpdsRoutes } from './opds-routes.js';
+import { ProviderIcons, type ProviderIconsOptions, registerProviderIconRoutes } from './provider-icons.js';
 import { registerReaderRoutes } from './reader-routes.js';
+import { registerTrajectoryRoutes } from './trajectory-routes.js';
 import type { AssistantTransport } from './metadata/assistant/client.js';
 import type { OpenLibraryTransport } from './metadata/openLibrary.js';
 import { requeueInterruptedJobs, startJobWorker } from './jobs.js';
+import { readAssistantSettings } from './metadata/assistant-settings.js';
+import { backfillPreviewCovers } from './metadata/apply.js';
+import { RatingsFetcher, type RatingsFetcherOptions, startRatingsWorker } from './ratings.js';
 import { redactOptions } from './logger.js';
 import { defaultClientDist } from './paths.js';
 import { resolveRevision } from './revision.js';
@@ -36,6 +42,10 @@ export interface BuildAppOptions {
   restic?: ResticRunner;
   resticBin?: string;
   backupPollMs?: number;
+  /** External ratings. Tests pass a stub transport, or `worker: false` to drive the queue themselves. */
+  ratings?: RatingsFetcherOptions & { worker?: boolean; pollMs?: number };
+  /** Provider site icons. Tests pass a stub transport. */
+  providerIcons?: Omit<ProviderIconsOptions, 'dataDir'>;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -66,7 +76,10 @@ export async function buildApp(options: BuildAppOptions) {
   let closed = false;
   let stopWorker: (() => void) | null = null;
   let stopBackup: (() => void) | null = null;
+  let stopRatings: (() => void) | null = null;
   app.addHook('onClose', async () => {
+    stopRatings?.();
+    stopRatings = null;
     stopBackup?.();
     stopBackup = null;
     stopWorker?.();
@@ -140,6 +153,12 @@ export async function buildApp(options: BuildAppOptions) {
       dataDir: options.config.dataDir,
       transport: options.assistant,
     });
+    registerProviderIconRoutes(app, new ProviderIcons({ dataDir: options.config.dataDir, ...options.providerIcons }));
+    registerTrajectoryRoutes(app, {
+      get db() {
+        return state.db;
+      },
+    });
     registerReaderRoutes(app, {
       get db() {
         return state.db;
@@ -202,6 +221,20 @@ export async function buildApp(options: BuildAppOptions) {
     }
 
     requeueInterruptedJobs(state.db);
+    // Previews created before covers were applied automatically; a no-op once done.
+    try {
+      const covered = backfillPreviewCovers(state.db, options.config.dataDir);
+      if (covered.length > 0) app.log.info({ editionIds: covered }, 'applied staged lookup covers');
+    } catch (error) {
+      app.log.error({ err: error }, 'staged lookup cover backfill failed');
+    }
+    // Covers stored before band tints existed; a no-op once done.
+    try {
+      const tinted = backfillCoverTints(state.db, options.config.dataDir);
+      if (tinted > 0) app.log.info({ covers: tinted }, 'derived cover tints');
+    } catch (error) {
+      app.log.error({ err: error }, 'cover tint backfill failed');
+    }
     const worker = startJobWorker({
       get db() {
         return state.db;
@@ -216,6 +249,25 @@ export async function buildApp(options: BuildAppOptions) {
       },
     });
     stopWorker = worker.stop;
+    if (options.ratings?.worker !== false) {
+      const ratings = startRatingsWorker({
+        get db() {
+          return state.db;
+        },
+        fetcher: new RatingsFetcher({
+          openLibraryOrigin: options.config.openLibraryOrigin,
+          googleBooksApiKey: () => readAssistantSettings(options.config.dataDir)?.googleBooksApiKey ?? null,
+          ...options.ratings,
+        }),
+        pollMs: options.ratings?.pollMs,
+        log: {
+          error(context, message) {
+            app.log.error(context, message);
+          },
+        },
+      });
+      stopRatings = ratings.stop;
+    }
     stopBackup = backup.start().stop;
 
     return app;

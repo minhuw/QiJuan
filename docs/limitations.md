@@ -23,6 +23,8 @@ These later milestones are not implemented:
 - social features
 - AI features beyond the [metadata agent](metadata.md): chat, summaries, embeddings
 
+Identifier merging does not merge editions that already exist; it only joins new files to them (see [metadata.md](metadata.md#identifiers-and-merging)). There is no action yet to merge two existing editions, and similar editions are only listed. Identifiers are normalized and checksum-validated, not looked up: a well-formed ISBN that belongs to another book is accepted. Identifiers in schemes other than the eight listed there are kept but never link or merge, and a book with only such identifiers counts as Unidentified.
+
 Live Cloudflare R2 was not tested. The R2 preset only fills the endpoint template, region `auto`, and path-style addressing. Backup tests talk to a local S3 server (MinIO), not to Cloudflare. Do not treat the R2 preset as a tested provider.
 
 The publish workflow pushes one `linux/amd64` image to `ghcr.io/minhuw/qijuan`. The Dockerfile uses `node:22-bookworm` and installs the pinned restic build for amd64 after checking its SHA-256. A build for another architecture stops there. No multi-arch image is published. Do not treat a live R2 test or a published multi-arch image as done.

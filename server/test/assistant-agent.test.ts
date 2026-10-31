@@ -129,6 +129,7 @@ function agentOptions(
     openLibrary,
     config,
     input: { filename: 'quiet-book.epub', format: 'epub', fields },
+    metadataPrivate: false,
   };
 }
 
@@ -380,7 +381,8 @@ describe('metadata assistant tools', () => {
     ) as { error: string; detail: string };
     expect(invalid.error).toBe('metadata_incomplete');
     expect(invalid.detail).toContain('title');
-    expect(invalid.detail).toContain('identifiers');
+    // Identifiers are optional: an invalid one is dropped, never reported missing.
+    expect(invalid.detail).not.toContain('identifiers');
 
     const validated = validateSubmission(validSubmission);
     expect(validated.ok).toBe(true);
@@ -432,11 +434,12 @@ describe('metadata submission validation', () => {
       seriesOrder: 2.5,
       coverId: 42,
       isbn: '9780140328721',
+      cover: null,
     } satisfies AssistantProposal);
   });
 
   it('reports every required field by name', () => {
-    for (const field of ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate', 'identifiers']) {
+    for (const field of ['title', 'authors', 'language', 'description', 'publisher', 'publishedDate']) {
       const input = { ...validSubmission } as Record<string, unknown>;
       delete input[field];
       const result = validateSubmission(input);
@@ -448,15 +451,25 @@ describe('metadata submission validation', () => {
     const emptyAuthors = validateSubmission({ ...validSubmission, authors: [] });
     expect(emptyAuthors).toEqual({ ok: false, missing: ['authors'] });
     const emptyIdentifiers = validateSubmission({ ...validSubmission, identifiers: [] });
-    expect(emptyIdentifiers).toEqual({ ok: false, missing: ['identifiers'] });
+    expect(emptyIdentifiers.ok).toBe(true);
+    const noIdentifiers = { ...validSubmission } as Record<string, unknown>;
+    delete noIdentifiers.identifiers;
+    expect(validateSubmission(noIdentifiers).ok).toBe(true);
   });
 
-  it('drops invalid ISBNs but allows other identifier schemes', () => {
+  it('drops invalid ISBNs with a reason but allows other identifier schemes', () => {
     const invalidIsbn = validateSubmission({
       ...validSubmission,
-      identifiers: [{ scheme: 'isbn', value: 'not-an-isbn' }],
+      isbn: null,
+      identifiers: [{ scheme: 'isbn', value: 'not-an-isbn' }, { scheme: 'isbn', value: '9780140328722' }],
     });
-    expect(invalidIsbn).toEqual({ ok: false, missing: ['identifiers'] });
+    expect(invalidIsbn.ok).toBe(true);
+    if (!invalidIsbn.ok) return;
+    expect(invalidIsbn.proposal.identifiers).toEqual([]);
+    expect(invalidIsbn.dropped).toEqual([
+      { scheme: 'isbn', value: 'not-an-isbn', reason: 'invalid_format' },
+      { scheme: 'isbn', value: '9780140328722', reason: 'invalid_checksum' },
+    ]);
 
     const other = validateSubmission({
       ...validSubmission,
@@ -485,7 +498,7 @@ describe('metadata submission validation', () => {
 });
 
 describe('metadata agent loop', () => {
-  it('drives search, record, and submit with only the three tools', async () => {
+  it('drives search, record, and submit with the Open Library tools', async () => {
     const { transport, bodies } = assistantTransport((_body, index) => {
       if (index === 0) {
         return { tool_calls: [{ name: 'search_open_library', arguments: { title: 'The Book' } }] };
@@ -518,6 +531,7 @@ describe('metadata agent loop', () => {
       seriesOrder: 2.5,
       coverId: 42,
       isbn: '9780140328721',
+      cover: null,
     });
     expect(urls).toEqual([`${origin}/search.json?title=The+Book&limit=5`, `${origin}/works/OL123W.json`]);
 
@@ -528,9 +542,11 @@ describe('metadata agent loop', () => {
       stream: boolean;
       messages: Array<{ role: string; content: string }>;
     };
+    // Web search is off in this config, so only google_books joins the Open Library tools.
     expect(first.tools.map((tool) => tool.function.name)).toEqual([
       'search_open_library',
       'get_open_library_record',
+      'google_books',
       'submit_metadata',
     ]);
     expect(first.tool_choice).toBe('auto');
@@ -606,7 +622,7 @@ describe('metadata agent loop', () => {
     const error = JSON.parse(String(toolMessage?.content)) as { error: string; detail: string };
     expect(error.error).toBe('metadata_incomplete');
     expect(error.detail).toContain('title');
-    expect(error.detail).toContain('identifiers');
+    expect(error.detail).not.toContain('identifiers');
   });
 
   it('feeds malformed arguments back to the model instead of throwing', async () => {
@@ -652,7 +668,7 @@ describe('metadata agent loop', () => {
     expect(await errorCode(runMetadataAgent(agentOptions(transport)))).toBe('metadata_incomplete');
   });
 
-  it('stops at four model turns', async () => {
+  it('stops at the model turn limit', async () => {
     let requests = 0;
     const { transport } = assistantTransport(() => {
       requests += 1;
@@ -664,9 +680,9 @@ describe('metadata agent loop', () => {
     expect(urls).toHaveLength(AGENT_MAX_TURNS);
   });
 
-  it('stops after six tool calls in one response', async () => {
+  it('stops at the tool call limit in one response', async () => {
     const { transport } = assistantTransport(() => ({
-      tool_calls: Array.from({ length: 7 }, () => ({
+      tool_calls: Array.from({ length: AGENT_MAX_TOOL_CALLS + 1 }, () => ({
         name: 'search_open_library',
         arguments: { title: 'The Book' },
       })),
@@ -676,10 +692,10 @@ describe('metadata agent loop', () => {
     expect(urls).toHaveLength(AGENT_MAX_TOOL_CALLS);
   });
 
-  it('does not request another model turn after six tool calls', async () => {
-    let requests = 0;
-    const { transport } = assistantTransport(() => {
-      requests += 1;
+  it('closes with a submit-only turn once the research budget is spent', async () => {
+    const { transport, bodies } = assistantTransport((body) => {
+      const tools = body.tools as Array<{ function: { name: string } }>;
+      if (tools.length === 1) return { tool_calls: [{ name: 'submit_metadata', arguments: validSubmission }] };
       return {
         tool_calls: Array.from({ length: 2 }, () => ({
           name: 'search_open_library',
@@ -688,12 +704,28 @@ describe('metadata agent loop', () => {
       };
     });
     const { transport: openLibrary, urls } = openLibraryTransport(() => ({ docs: [] }));
-    expect(await errorCode(runMetadataAgent(agentOptions(transport, openLibrary)))).toBe('metadata_incomplete');
-    expect(requests).toBe(3);
+    const result = await runMetadataAgent(agentOptions(transport, openLibrary));
+    expect(result.proposal.title).toBe(validSubmission.title);
     expect(urls).toHaveLength(AGENT_MAX_TOOL_CALLS);
+    const last = bodies.at(-1) as { tools: Array<{ function: { name: string } }>; tool_choice: unknown };
+    expect(last.tools.map((tool) => tool.function.name)).toEqual(['submit_metadata']);
+    expect(last.tool_choice).toBe('auto');
+    expect(bodies).toHaveLength(AGENT_MAX_TOOL_CALLS / 2 + 1);
   });
 
-  it('stops when the ninety second budget is exhausted', async () => {
+  it('refuses research calls past the budget and fails when the model never submits', async () => {
+    let requests = 0;
+    const { transport } = assistantTransport(() => {
+      requests += 1;
+      return { tool_calls: [{ name: 'search_open_library', arguments: { title: 'The Book' } }] };
+    });
+    const { transport: openLibrary, urls } = openLibraryTransport(() => ({ docs: [] }));
+    expect(await errorCode(runMetadataAgent(agentOptions(transport, openLibrary)))).toBe('metadata_incomplete');
+    expect(requests).toBe(AGENT_MAX_TURNS);
+    expect(urls.length).toBeLessThanOrEqual(AGENT_MAX_TOOL_CALLS);
+  });
+
+  it('stops when the time budget is exhausted', async () => {
     let clock = Date.now();
     vi.spyOn(Date, 'now').mockImplementation(() => clock);
     const { transport } = assistantTransport(() => {

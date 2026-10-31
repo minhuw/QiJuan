@@ -37,6 +37,13 @@ describe('migrations', () => {
       '0012_library_sort.sql',
       '0013_job_sources.sql',
       '0014_backup_maintenance.sql',
+      '0015_metadata_trajectories.sql',
+      '0016_edition_identifiers.sql',
+      '0017_preview_covers.sql',
+      '0018_edition_ratings.sql',
+      '0019_preview_applied.sql',
+      '0020_cover_tint.sql',
+      '0021_metadata_private.sql',
     ]);
     expect(first.backupPath).toBeNull();
 
@@ -149,6 +156,13 @@ describe('migrations', () => {
       '0012_library_sort.sql',
       '0013_job_sources.sql',
       '0014_backup_maintenance.sql',
+      '0015_metadata_trajectories.sql',
+      '0016_edition_identifiers.sql',
+      '0017_preview_covers.sql',
+      '0018_edition_ratings.sql',
+      '0019_preview_applied.sql',
+      '0020_cover_tint.sql',
+      '0021_metadata_private.sql',
     ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);
@@ -240,6 +254,179 @@ describe('migrations', () => {
         `INSERT INTO jobs (library_id, source, status, created_at, updated_at) VALUES (?, 'watch', 'queued', ?, ?)`,
       ).run(library.id, now, now);
     }).toThrow();
+    db.close();
+  });
+
+  it('moves identifiers into edition_identifiers with provenance and never merges existing editions', () => {
+    const temp = makeTempDir();
+    cleanups.push(temp.cleanup);
+    const earlyDir = path.join(temp.dir, 'early');
+    mkdirSync(earlyDir);
+    const packaged = defaultMigrationsDir();
+    for (const name of readdirSync(packaged)) {
+      if (!name.endsWith('.sql') || name >= '0016') continue;
+      copyFileSync(path.join(packaged, name), path.join(earlyDir, name));
+    }
+    const databasePath = path.join(temp.dir, 'qijuan.sqlite');
+    migrate({ databasePath, migrationsDir: earlyDir });
+
+    const now = '2026-01-01T00:00:00.000Z';
+    const seed = new Database(databasePath);
+    const library = seed
+      .prepare(`INSERT INTO libraries (name, mode, root_path, created_at) VALUES ('Home', 'managed', ?, ?) RETURNING id`)
+      .get(temp.dir, now) as { id: number };
+    const edition = (title: string) =>
+      (
+        seed
+          .prepare(
+            `INSERT INTO editions (library_id, title, sort_title, created_at, updated_at) VALUES (?, ?, ?, ?, ?) RETURNING id`,
+          )
+          .get(library.id, title, title, now, now) as { id: number }
+      ).id;
+    const folderBook = edition('Folder Book');
+    const uploaded = edition('Uploaded Book');
+    const edited = edition('Edited Book');
+    const twin = edition('Another Title');
+    const insert = seed.prepare('INSERT INTO identifiers (edition_id, scheme, value) VALUES (?, ?, ?)');
+    insert.run(folderBook, 'ISBN', '0-14-032872-6');
+    insert.run(folderBook, 'isbn13', 'urn:isbn:978-0-14-032872-1');
+    insert.run(folderBook, 'uuid', 'urn:uuid:6f1b1c2a-9a0e-4d3b-8c55-1a2b3c4d5e6f');
+    insert.run(uploaded, 'doi', 'https://doi.org/10.1000/ABC.Def');
+    insert.run(uploaded, 'isbn', 'not-an-isbn');
+    insert.run(edited, 'isbn', '9780000000002');
+    insert.run(twin, 'isbn', '978-0-00-000000-2');
+    const job = seed
+      .prepare(
+        `INSERT INTO jobs (library_id, source, status, created_at, updated_at) VALUES (?, 'upload', 'succeeded', ?, ?) RETURNING id`,
+      )
+      .get(library.id, now, now) as { id: number };
+    seed
+      .prepare(
+        `INSERT INTO job_items (job_id, position, filename, source_path, status, edition_id, created_at, updated_at)
+         VALUES (?, 0, 'up.epub', 'incoming/x/0-up.epub', 'succeeded', ?, ?, ?)`,
+      )
+      .run(job.id, uploaded, now, now);
+    seed.prepare(`INSERT INTO field_locks (edition_id, field, locked_at) VALUES (?, 'identifiers', ?)`).run(edited, now);
+    seed.close();
+
+    const updated = migrate({ databasePath, migrationsDir: packaged });
+    expect(updated.applied).toEqual(['0016_edition_identifiers.sql', '0017_preview_covers.sql', '0018_edition_ratings.sql', '0019_preview_applied.sql', '0020_cover_tint.sql', '0021_metadata_private.sql']);
+
+    const db = new Database(databasePath);
+    const rows = db
+      .prepare('SELECT edition_id AS editionId, scheme, value, source, source_url AS sourceUrl, created_at AS createdAt FROM edition_identifiers ORDER BY id')
+      .all();
+    expect(rows).toEqual([
+      // ISBN-10 converted; the ISBN-13 spelling of the same book collapses into it.
+      { editionId: folderBook, scheme: 'isbn', value: '9780140328721', source: 'embedded', sourceUrl: null, createdAt: now },
+      { editionId: folderBook, scheme: 'uuid', value: 'urn:uuid:6f1b1c2a-9a0e-4d3b-8c55-1a2b3c4d5e6f', source: 'embedded', sourceUrl: null, createdAt: now },
+      { editionId: uploaded, scheme: 'doi', value: '10.1000/abc.def', source: 'agent', sourceUrl: null, createdAt: now },
+      // A value that does not validate is kept as it was.
+      { editionId: uploaded, scheme: 'isbn', value: 'not-an-isbn', source: 'agent', sourceUrl: null, createdAt: now },
+      { editionId: edited, scheme: 'isbn', value: '9780000000002', source: 'manual', sourceUrl: null, createdAt: now },
+      { editionId: twin, scheme: 'isbn', value: '9780000000002', source: 'embedded', sourceUrl: null, createdAt: now },
+    ]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'identifiers'").get()).toBeUndefined();
+
+    // Two editions sharing an ISBN stay separate and become a suggestion.
+    expect(db.prepare('SELECT count(*) AS count FROM editions WHERE trashed_at IS NULL').get()).toEqual({ count: 4 });
+    expect(db.prepare('SELECT edition_id AS editionId, matched_edition_id AS matchedId FROM edition_suggestions').all()).toEqual([
+      { editionId: twin, matchedId: edited },
+    ]);
+
+    // Search still finds an edition by its ISBN.
+    expect(db.prepare("SELECT rowid FROM edition_fts WHERE edition_fts MATCH '\"9780140328721\"'").all()).toEqual([
+      { rowid: folderBook },
+    ]);
+    db.prepare('INSERT INTO edition_identifiers (edition_id, scheme, value, source, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      uploaded,
+      'isbn',
+      '9787010134185',
+      'manual',
+      now,
+    );
+    expect(db.prepare("SELECT rowid FROM edition_fts WHERE edition_fts MATCH '\"9787010134185\"'").all()).toEqual([
+      { rowid: uploaded },
+    ]);
+    expect(() =>
+      db.prepare(`UPDATE job_items SET status = 'needs_confirmation' WHERE job_id = ?`).run(job.id),
+    ).not.toThrow();
+    db.close();
+  });
+
+  it('adds edition ratings and queues an edition when its rating identifiers change', () => {
+    const temp = makeTempDir();
+    cleanups.push(temp.cleanup);
+    const databasePath = path.join(temp.dir, 'qijuan.sqlite');
+    const packaged = defaultMigrationsDir();
+    const before = path.join(temp.dir, 'before');
+    mkdirSync(before);
+    for (const name of readdirSync(packaged)) {
+      if (name.endsWith('.sql') && name < '0018') copyFileSync(path.join(packaged, name), path.join(before, name));
+    }
+    migrate({ databasePath, migrationsDir: before });
+    const now = '2026-01-01T00:00:00.000Z';
+    const seed = new Database(databasePath);
+    seed.pragma('foreign_keys = ON');
+    seed.prepare("INSERT INTO libraries (id, name, mode, root_path, created_at) VALUES (1, 'Home', 'managed', '/x', ?)").run(now);
+    seed.prepare("INSERT INTO editions (id, library_id, title, sort_title, created_at, updated_at) VALUES (1, 1, 'T', 'T', ?, ?)").run(now, now);
+    seed.prepare("INSERT INTO edition_identifiers (edition_id, scheme, value, source, created_at) VALUES (1, 'isbn', '9780140328721', 'manual', ?)").run(now);
+    seed.close();
+
+    const updated = migrate({ databasePath, migrationsDir: packaged });
+    expect(updated.applied).toEqual(['0018_edition_ratings.sql', '0019_preview_applied.sql', '0020_cover_tint.sql', '0021_metadata_private.sql']);
+    const db = new Database(databasePath);
+    db.pragma('foreign_keys = ON');
+    // No backfill: existing identifiers queue nothing.
+    expect(db.prepare('SELECT count(*) AS count FROM edition_ratings_queue').get()).toEqual({ count: 0 });
+
+    const insertIdentifier = db.prepare('INSERT INTO edition_identifiers (edition_id, scheme, value, source, created_at) VALUES (1, ?, ?, ?, ?)');
+    insertIdentifier.run('uuid', 'urn:uuid:x', 'manual', now);
+    expect(db.prepare('SELECT count(*) AS count FROM edition_ratings_queue').get()).toEqual({ count: 0 });
+    insertIdentifier.run('douban', '25869109', 'manual', now);
+    expect(db.prepare('SELECT edition_id AS editionId FROM edition_ratings_queue').all()).toEqual([{ editionId: 1 }]);
+    db.prepare('DELETE FROM edition_ratings_queue').run();
+    db.prepare("DELETE FROM edition_identifiers WHERE scheme = 'isbn'").run();
+    expect(db.prepare('SELECT edition_id AS editionId FROM edition_ratings_queue').all()).toEqual([{ editionId: 1 }]);
+
+    const insertRating = db.prepare(
+      'INSERT INTO edition_ratings (edition_id, provider, url, rating, scale, count, status, error, fetched_at) VALUES (1, ?, ?, ?, ?, ?, ?, NULL, ?)',
+    );
+    insertRating.run('douban', 'https://book.douban.com/subject/25869109/', 9.3, 10, 209, 'ok', now);
+    expect(() => insertRating.run('goodreads', null, 5.5, 5, 1, 'ok', now)).toThrow(/CHECK/);
+    expect(() => insertRating.run('goodreads', null, 4, 5, -1, 'ok', now)).toThrow(/CHECK/);
+    expect(() => insertRating.run('amazon', null, 4, 5, 1, 'ok', now)).toThrow(/CHECK/);
+    expect(() => insertRating.run('goodreads', null, null, 5, null, 'pending', now)).toThrow(/CHECK/);
+
+    db.prepare('DELETE FROM editions WHERE id = 1').run();
+    expect(db.prepare('SELECT count(*) AS count FROM edition_ratings').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
+  it('adds metadata_private to editions and job items, off for existing rows', () => {
+    const temp = makeTempDir();
+    cleanups.push(temp.cleanup);
+    const databasePath = path.join(temp.dir, 'qijuan.sqlite');
+    const packaged = defaultMigrationsDir();
+    const before = path.join(temp.dir, 'before');
+    mkdirSync(before);
+    for (const name of readdirSync(packaged)) {
+      if (name.endsWith('.sql') && name < '0021') copyFileSync(path.join(packaged, name), path.join(before, name));
+    }
+    migrate({ databasePath, migrationsDir: before });
+    const now = '2026-01-01T00:00:00.000Z';
+    const seed = new Database(databasePath);
+    seed.prepare("INSERT INTO libraries (id, name, mode, root_path, created_at) VALUES (1, 'Home', 'managed', '/x', ?)").run(now);
+    seed.prepare("INSERT INTO editions (id, library_id, title, sort_title, created_at, updated_at) VALUES (1, 1, 'T', 'T', ?, ?)").run(now, now);
+    seed.close();
+
+    const updated = migrate({ databasePath, migrationsDir: packaged });
+    expect(updated.applied).toEqual(['0021_metadata_private.sql']);
+    const db = new Database(databasePath);
+    expect(db.prepare('SELECT metadata_private FROM editions WHERE id = 1').get()).toEqual({ metadata_private: 0 });
+    const columns = db.prepare("SELECT name FROM pragma_table_info('job_items')").all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('metadata_private');
+    expect(() => db.prepare('UPDATE editions SET metadata_private = 2 WHERE id = 1').run()).toThrow(/CHECK/);
     db.close();
   });
 });
