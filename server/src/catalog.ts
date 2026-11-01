@@ -24,6 +24,7 @@ export class CatalogError extends Error {
     | 'invalid_path'
     | 'file_missing'
     | 'not_in_trash'
+    | 'last_asset'
     | 'indexed_permanent_delete'
     | 'not_indexed'
     | 'conflict'
@@ -280,25 +281,33 @@ export function removeCatalogEntry(db: AppDatabase, editionId: number, now = new
         .where(eq(editions.id, edition.id))
         .run();
     }
+    // Files go with the edition's stamp, so a restore can tell them from files trashed on their own.
     tx.update(fileAssets)
-      .set({ trashedAt: stamp })
+      .set({ trashedAt: edition.trashedAt ?? stamp })
       .where(and(eq(fileAssets.editionId, edition.id), isNull(fileAssets.trashedAt)))
       .run();
   }, { behavior: 'immediate' });
 }
 
-/** Clears trashed time on the edition and its files. Does not move or rewrite bytes. */
+/**
+ * Clears trashed time on the edition and on the files trashed with it. A file trashed on its own
+ * before the edition stays in trash. Does not move or rewrite bytes.
+ */
 export function restoreCatalogEntry(db: AppDatabase, editionId: number, now = new Date()): void {
   const stamp = now.toISOString();
   db.transaction((tx) => {
     const edition = tx
-      .select({ id: editions.id })
+      .select({ id: editions.id, trashedAt: editions.trashedAt })
       .from(editions)
       .where(eq(editions.id, requireId(editionId)))
       .get();
     if (!edition) throw new CatalogError('not_found');
+    if (!edition.trashedAt) return;
     tx.update(editions).set({ trashedAt: null, updatedAt: stamp }).where(eq(editions.id, edition.id)).run();
-    tx.update(fileAssets).set({ trashedAt: null }).where(eq(fileAssets.editionId, edition.id)).run();
+    tx.update(fileAssets)
+      .set({ trashedAt: null })
+      .where(and(eq(fileAssets.editionId, edition.id), eq(fileAssets.trashedAt, edition.trashedAt)))
+      .run();
   }, { behavior: 'immediate' });
 }
 

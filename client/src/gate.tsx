@@ -32,6 +32,7 @@ import { StateTag } from './components/ui/status-mark';
 import { EmptyState, ErrorNotice, LoadingState } from './components/ui/states';
 import { ImportScreen } from './import-screen';
 import { LibraryBrowser } from './library';
+import { TrashScreen } from './trash-screen';
 import { useAccountChrome, useLocale } from './shell';
 
 const ERROR_CODES = new Set([
@@ -191,6 +192,11 @@ export function Gate() {
     return <Settings />;
   }
 
+  if (location.pathname === '/trash') {
+    if (phase.user.role !== 'admin') return <Navigate to="/" replace />;
+    return <TrashScreen />;
+  }
+
   if (location.pathname === '/import') {
     return <ImportScreen libraries={phase.libraries} role={phase.user.role} />;
   }
@@ -211,7 +217,7 @@ export function Gate() {
     }
   }
 
-  return <LibraryBrowser libraries={phase.libraries} />;
+  return <LibraryBrowser libraries={phase.libraries} role={phase.user.role} />;
 }
 
 function AuthLayout({

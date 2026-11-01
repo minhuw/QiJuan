@@ -398,7 +398,9 @@ describe('edition editing', () => {
     const merge = await app.inject({ method: 'POST', url: `/api/editions/${ids[0]}/merge`, headers: { cookie } });
     const removed = await app.inject({ method: 'DELETE', url: `/api/editions/${ids[0]}`, headers: { cookie } });
     expect(merge.statusCode).toBe(404);
-    expect(removed.statusCode).toBe(404);
+    // A live edition is deleted only from Trash.
+    expect(removed.statusCode).toBe(409);
+    expect(removed.json()).toEqual({ error: 'not_in_trash' });
     const listed = await app.inject({ method: 'GET', url: '/api/editions', headers: { cookie } });
     expect(listed.json().editions).toHaveLength(3);
   });

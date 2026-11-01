@@ -314,11 +314,14 @@ Alerts are rule-bounded text bands: a top and bottom border in the state's base 
 ### Tags
 Small muted text in a 1px hairline box with 2px corners. They are used for metadata values, never as filled chips.
 
+### Confirm dialog
+Destructive actions confirm in a modal: the native `<dialog>` opened with `showModal()`, so focus is trapped and the page behind is inert. A 28rem sheet on stock with a 1px ink border and 2px corners, no shadow, over a flat ink wash (no blur). A question as the title ("Move to Trash?", "Delete permanently?"), one paragraph naming the book or file and what happens to it, then Cancel (ink outline) and the action (vermilion outline) right-aligned under a hairline. Focus starts on Cancel and returns to the trigger. Escape and Cancel close it; the backdrop closes it only for reversible actions, never for a permanent delete. Errors stay inside the open dialog. Phone: near full width, buttons share the row.
+
 ### Empty and loading states
 An empty state is an italic title with a muted description at the small size, laid out flush left. Loading skeletons are hairline plate outlines and underline-only lines that fade between 45% and 100% opacity (`settle`, 1.1s ease-out, alternating).
 
 ### Motion
-Motion is minimal and functional: button colour over 120ms, the batch-panel chevron rotating over 160ms, the status stepper label sliding in over 140ms, progress width over 240ms, the skeleton fade and a 900ms linear spinner. Under `prefers-reduced-motion: reduce`, durations collapse to 0.01ms and smooth scrolling is off.
+Motion is minimal and functional: button colour over 120ms, the batch-panel chevron rotating over 160ms, the status stepper label sliding in over 140ms, the confirm dialog rising in over 120ms, progress width over 240ms, the skeleton fade and a 900ms linear spinner. Under `prefers-reduced-motion: reduce`, durations collapse to 0.01ms and smooth scrolling is off.
 
 ## Do's and Don'ts
 

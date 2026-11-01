@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiError, listLibraries, requireLibraryAccess } from './accounts.js';
-import { CatalogError } from './catalog.js';
+import { CatalogError, getEdition } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { coverAbsolute, latestCover } from './edition-fields.js';
 import {
@@ -151,7 +151,9 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
   app.get('/api/editions/:editionId/cover', async (request, reply) => {
     const user = currentUser(request);
     try {
-      const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
+      const raw = (request.params as { editionId?: string }).editionId;
+      // The Trash screen shows an admin the covers of trashed books too.
+      const edition = user.role === 'admin' ? accessAnyEdition(deps, user, raw) : await accessEdition(deps, user, raw);
       const cover = latestCover(deps.db, edition.id);
       if (!cover) return reply.code(404).send({ error: 'not_found' });
       const absolute = coverAbsolute(deps.dataDir, cover);
@@ -307,6 +309,15 @@ async function accessEdition(deps: EditionRouteDeps, user: AuthUser, raw: string
   const editionId = parseId(raw);
   if (!editionId) throw new CatalogError('invalid_request');
   const edition = requireLiveEdition(deps.db, editionId);
+  requireLibraryAccess(deps.db, user, edition.libraryId);
+  return edition;
+}
+
+function accessAnyEdition(deps: EditionRouteDeps, user: AuthUser, raw: string | undefined) {
+  const editionId = parseId(raw);
+  if (!editionId) throw new CatalogError('invalid_request');
+  const edition = getEdition(deps.db, editionId);
+  if (!edition) throw new CatalogError('not_found');
   requireLibraryAccess(deps.db, user, edition.libraryId);
   return edition;
 }

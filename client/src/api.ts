@@ -375,3 +375,36 @@ export async function apiForm<T>(path: string, body: FormData): Promise<ApiResul
   }
   return { status: response.status, data: payload as T | null, error: null };
 }
+
+/** A file in trash. managed: uploaded into QiJuan; indexed: a folder library's file, never touched on disk. */
+export interface TrashFile {
+  id: number;
+  format: 'epub' | 'pdf';
+  storage: 'managed' | 'indexed';
+  originalFilename: string;
+  displayFilename: string;
+  bytes: number;
+}
+
+export interface TrashedEdition {
+  id: number;
+  libraryId: number;
+  title: string;
+  authors: string[];
+  hasCover: boolean;
+  trashedAt: string;
+  files: TrashFile[];
+}
+
+export interface TrashedAsset extends TrashFile {
+  editionId: number;
+  editionTitle: string;
+  trashedAt: string;
+}
+
+/** GET /api/trash, admins only. */
+export interface TrashListing {
+  editions: TrashedEdition[];
+  /** Files trashed on their own from books still in the library. */
+  assets: TrashedAsset[];
+}

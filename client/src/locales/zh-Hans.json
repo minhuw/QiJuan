@@ -610,5 +610,43 @@
     "mark": "私密",
     "markDescription": "不会发送给元数据助手。",
     "lookupOff": "此书保持私密，不使用元数据助手。"
+  },
+  "trash": {
+    "title": "回收站",
+    "link": "回收站",
+    "lede": "移除的书和文件留在这里，直到你恢复或永久删除。回收站不会自动清空。",
+    "books": "图书",
+    "files": "文件",
+    "booksMeta": "已移除的书",
+    "filesMeta": "从书中移除",
+    "empty": "回收站是空的。",
+    "emptyHint": "从书库移除的书会留在这里。",
+    "removed": "移除于 {date}",
+    "uploaded": "上传",
+    "folder": "文件夹文件",
+    "fromBook": "来自",
+    "restore": "恢复",
+    "removeTitle": "移到回收站？",
+    "removeFileTitle": "移除这个文件？",
+    "deleteTitle": "永久删除？",
+    "deleteForever": "永久删除",
+    "deleteBookConfirm": "永久删除《{title}》？书目记录、阅读状态、书架和笔记都会一并删除。上传的文件会从栖卷的存储中抹去；文件夹中的文件只从栖卷移除，磁盘上的原文件不动。此操作无法撤销。",
+    "deleteFileConfirm": "永久删除“{name}”？上传的文件会从栖卷的存储中抹去；文件夹中的文件只从栖卷移除，磁盘上的原文件不动。此操作无法撤销。",
+    "cancel": "取消",
+    "restored": "已恢复《{title}》。",
+    "open": "打开",
+    "deleted": "已删除《{title}》。",
+    "removeBook": "从书库移除",
+    "removeConfirm": "把《{title}》移到回收站？它会从书库、搜索和 OPDS 中消失。可以在回收站恢复，阅读状态、书架和笔记都会保留。",
+    "removeAction": "移到回收站",
+    "moved": "已将《{title}》移到回收站。",
+    "undo": "撤销",
+    "removeFile": "移除文件",
+    "removeFileConfirm": "把“{name}”移到回收站？这本书的其他文件不受影响，这个文件也可以在回收站恢复。",
+    "errors": {
+      "last_asset": "每本书至少保留一个文件。要移除，请移除整本书。",
+      "not_in_trash": "它已经不在回收站里了。",
+      "failed": "操作没有成功，请重试。"
+    }
   }
 }

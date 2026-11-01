@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import {
   ArrowLeft,
   ArrowRight,
@@ -42,6 +42,8 @@ import { BookRatings } from './book-ratings';
 import { BookTabs, useTabHash, type BookTab } from './book-tabs';
 import { ReadingActions, ShelfMenu } from './reading-actions';
 import { useLocale } from './shell';
+import { ConfirmDialog } from './components/ui/confirm-dialog';
+import { fill } from './trash-screen';
 
 const ERROR_CODES = new Set([
   'invalid_request',
@@ -119,6 +121,10 @@ interface EditionForm {
   language: string;
   identifiers: IdentifierRow[];
   tags: string;
+}
+
+function removeErrorText(t: (key: string) => string, code: string): string {
+  return code === 'last_asset' ? t('trash.errors.last_asset') : errorText(t, code);
 }
 
 function errorText(t: (key: string) => string, code: string | null): string {
@@ -244,6 +250,11 @@ export function BookDetail({
   const [lookupTrace, setLookupTrace] = useState<LookupTrace | null>(null);
   /** Set by Review: once the loaded preview renders, move to it. */
   const [revealPreview, setRevealPreview] = useState(false);
+  /** The confirm dialog open: 'edition' for the book, or a file's asset id. */
+  const [removing, setRemoving] = useState<'edition' | number | null>(null);
+  const [removePending, setRemovePending] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const navigate = useNavigate();
   const lookupRef = useRef<HTMLDetailsElement>(null);
   /** The card's left column; on desktop the cover gives up height to its controls only when short. */
   const [side, setSide] = useState<HTMLDivElement | null>(null);
@@ -282,6 +293,8 @@ export function BookDetail({
     setLookupTrace(null);
     setFormError(null);
     setIdentifierError(null);
+    setRemoving(null);
+    setRemoveError(null);
     return () => {
       requestId.current += 1;
       retryWait.current?.cancel();
@@ -304,6 +317,40 @@ export function BookDetail({
   useEffect(() => {
     if (identifierError !== null) document.getElementById(`${baseId}-identifier-${identifierError}`)?.focus();
   }, [identifierError, baseId]);
+
+  function openRemove(target: 'edition' | number | null) {
+    setRemoving(target);
+    setRemoveError(null);
+  }
+
+  async function removeEdition() {
+    if (!edition) return;
+    setRemovePending(true);
+    setRemoveError(null);
+    const result = await api<{ edition: { id: number; title: string } }>(`/api/editions/${edition.id}/trash`, { method: 'POST' });
+    setRemovePending(false);
+    if (result.error || !result.data) {
+      setRemoveError(result.error ?? 'network');
+      return;
+    }
+    navigate('/', { state: { trashed: { id: result.data.edition.id, title: result.data.edition.title } } });
+  }
+
+  async function removeAsset(assetId: number) {
+    if (!edition) return;
+    setRemovePending(true);
+    setRemoveError(null);
+    const result = await api<{ edition: EditionDetail }>(`/api/editions/${edition.id}/assets/${assetId}/trash`, {
+      method: 'POST',
+    });
+    setRemovePending(false);
+    if (result.error || !result.data) {
+      setRemoveError(result.error ?? 'network');
+      return;
+    }
+    setRemoving(null);
+    setEdition(result.data.edition);
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -716,6 +763,7 @@ export function BookDetail({
     </h2>
   );
 
+  const canRemoveFiles = role === 'admin' && edition.assets.length > 1;
   const tabs: BookTab[] = [];
   if (tabIds.includes('overview')) {
     tabs.push({
@@ -840,7 +888,33 @@ export function BookDetail({
                 <Link className="btn btn-sm" to={`/books/${edition.id}/read/${asset.id}`}>
                   {t('book.read')} {asset.format.toUpperCase()}
                 </Link>
+                {canRemoveFiles ? (
+                  <button
+                    type="button"
+                    id={`${baseId}-remove-${asset.id}-trigger`}
+                    className="link-button link-button-danger"
+                    aria-label={`${t('trash.removeFile')}: ${asset.displayFilename}`}
+                    aria-haspopup="dialog"
+                    onClick={() => openRemove(asset.id)}
+                  >
+                    {t('trash.removeFile')}
+                  </button>
+                ) : null}
               </span>
+              {canRemoveFiles && removing === asset.id ? (
+                <ConfirmDialog
+                  title={t('trash.removeFileTitle')}
+                  text={fill(t('trash.removeFileConfirm'), { name: asset.displayFilename })}
+                  action={t('trash.removeFile')}
+                  cancel={t('trash.cancel')}
+                  pending={removePending}
+                  error={removeError ? removeErrorText(t, removeError) : null}
+                  dismissOnBackdrop
+                  returnFocusId={`${baseId}-remove-${asset.id}-trigger`}
+                  onConfirm={() => void removeAsset(asset.id)}
+                  onCancel={() => openRemove(null)}
+                />
+              ) : null}
             </li>
           ))}
         </ul>
@@ -1141,6 +1215,33 @@ export function BookDetail({
             </details>
           ) : null}
         </div>
+        {role === 'admin' ? (
+          <div className="book-remove">
+            <button
+              type="button"
+              id={`${baseId}-remove-edition-trigger`}
+              className="link-button link-button-danger"
+              aria-haspopup="dialog"
+              onClick={() => openRemove('edition')}
+            >
+              {t('trash.removeBook')}
+            </button>
+            {removing === 'edition' ? (
+              <ConfirmDialog
+                title={t('trash.removeTitle')}
+                text={fill(t('trash.removeConfirm'), { title: edition.title })}
+                action={t('trash.removeAction')}
+                cancel={t('trash.cancel')}
+                pending={removePending}
+                error={removeError ? removeErrorText(t, removeError) : null}
+                dismissOnBackdrop
+                returnFocusId={`${baseId}-remove-edition-trigger`}
+                onConfirm={() => void removeEdition()}
+                onCancel={() => openRemove(null)}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </>
     ),
   });

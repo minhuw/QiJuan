@@ -12,6 +12,7 @@ import type { AppConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { backfillCoverTints } from './edition-fields.js';
 import { registerEditionRoutes } from './edition-routes.js';
+import { registerTrashRoutes } from './trash-routes.js';
 import { registerImportRoutes } from './import-routes.js';
 import { registerLibraryRoutes } from './library-routes.js';
 import { registerMetadataRoutes } from './metadata-routes.js';
@@ -139,6 +140,12 @@ export async function buildApp(options: BuildAppOptions) {
       maxUploadBytes: options.config.maxUploadBytes,
     });
     registerEditionRoutes(app, {
+      get db() {
+        return state.db;
+      },
+      dataDir: options.config.dataDir,
+    });
+    registerTrashRoutes(app, {
       get db() {
         return state.db;
       },

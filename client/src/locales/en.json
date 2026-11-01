@@ -610,5 +610,43 @@
     "mark": "Private",
     "markDescription": "Not sent to the metadata agent.",
     "lookupOff": "This book is kept private, so the metadata agent is not used for it."
+  },
+  "trash": {
+    "title": "Trash",
+    "link": "Trash",
+    "lede": "Removed books and files wait here until you restore them or delete them. Trash is never emptied on its own.",
+    "books": "Books",
+    "files": "Files",
+    "booksMeta": "Removed books",
+    "filesMeta": "Removed from a book",
+    "empty": "Trash is empty.",
+    "emptyHint": "Books you remove from the library wait here.",
+    "removed": "Removed {date}",
+    "uploaded": "Uploaded",
+    "folder": "Folder file",
+    "fromBook": "From",
+    "restore": "Restore",
+    "removeTitle": "Move to Trash?",
+    "removeFileTitle": "Remove this file?",
+    "deleteTitle": "Delete permanently?",
+    "deleteForever": "Delete permanently",
+    "deleteBookConfirm": "Delete “{title}” permanently? Its catalog record, reading state, shelves and notes go too. Uploaded files are erased from QiJuan's storage. Folder files are only removed from QiJuan and stay on disk. This cannot be undone.",
+    "deleteFileConfirm": "Delete “{name}” permanently? An uploaded file is erased from QiJuan's storage. A folder file is only removed from QiJuan and stays on disk. This cannot be undone.",
+    "cancel": "Cancel",
+    "restored": "Restored “{title}”.",
+    "open": "Open",
+    "deleted": "Deleted “{title}”.",
+    "removeBook": "Remove from library",
+    "removeConfirm": "Move “{title}” to Trash? It leaves the library, search and OPDS. You can restore it from Trash with its reading state, shelves and notes.",
+    "removeAction": "Move to Trash",
+    "moved": "Moved “{title}” to Trash.",
+    "undo": "Undo",
+    "removeFile": "Remove file",
+    "removeFileConfirm": "Move “{name}” to Trash? The book keeps its other files, and you can restore this one from Trash.",
+    "errors": {
+      "last_asset": "A book keeps at least one file. Remove the book instead.",
+      "not_in_trash": "That is no longer in Trash.",
+      "failed": "That did not work. Try again."
+    }
   }
 }

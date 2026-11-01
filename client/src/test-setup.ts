@@ -8,3 +8,17 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
   if (typeof current?.removeItem === 'function' || !jsdomWindow) continue;
   Object.defineProperty(globalThis, name, { configurable: true, value: jsdomWindow[name] });
 }
+
+// jsdom has no modal dialogs; open and close by attribute so <dialog> components render in tests.
+const dialogProto = (globalThis as { HTMLDialogElement?: { prototype: HTMLDialogElement } }).HTMLDialogElement?.prototype;
+if (dialogProto && typeof dialogProto.showModal !== 'function') {
+  dialogProto.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+  };
+  dialogProto.show = dialogProto.showModal;
+  dialogProto.close = function close(this: HTMLDialogElement) {
+    if (!this.hasAttribute('open')) return;
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+}

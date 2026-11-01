@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { ChevronLeft, ChevronRight, Heart, LayoutGrid, List, Plus, Search, Star, X } from 'lucide-react';
 import {
   api,
@@ -9,6 +9,7 @@ import {
   type LibraryInfo,
   type LibraryPage,
   type ReadingStatus,
+  type TrashListing,
 } from './api';
 import { CatalogHome } from './catalog-home';
 import { CoverArt } from './components/ui/cover-art';
@@ -16,6 +17,7 @@ import { UnidentifiedMark } from './components/ui/identifiers';
 import { EmptyState, ErrorNotice, SkeletonGrid } from './components/ui/states';
 import { StatusMark } from './components/ui/status-mark';
 import { useLocale } from './shell';
+import { fill } from './trash-screen';
 
 const PAGE_LIMIT = 24;
 const ERROR_CODES = new Set([
@@ -292,8 +294,57 @@ function revealCatalogue(section: RefObject<HTMLElement | null>, heading: RefObj
   heading.current?.focus({ preventScroll: true });
 }
 
-export function LibraryBrowser({ libraries = [] }: { libraries?: LibraryInfo[] }) {
+/** Set by the book page after a removal: the library shows the Undo notice once. */
+export interface TrashedState {
+  trashed: { id: number; title: string };
+}
+
+function trashedFrom(state: unknown): TrashedState['trashed'] | null {
+  if (typeof state !== 'object' || state === null || !('trashed' in state)) return null;
+  const trashed = (state as TrashedState).trashed;
+  return trashed && typeof trashed.id === 'number' && typeof trashed.title === 'string' ? trashed : null;
+}
+
+type RemovalNotice = { id: number; title: string; phase: 'moved' | 'undoing' | 'restored' | 'failed' };
+
+function RemovalBand({ notice, onUndo }: { notice: RemovalNotice; onUndo: () => void }) {
   const { t } = useLocale();
+  if (notice.phase === 'restored') {
+    return (
+      <p className="alert alert-success removal-notice" role="status">
+        <span>{fill(t('trash.restored'), { title: notice.title })}</span>
+        <Link className="text-link" to={`/books/${notice.id}`}>
+          {t('trash.open')}
+        </Link>
+      </p>
+    );
+  }
+  return (
+    <p className={notice.phase === 'failed' ? 'alert alert-error removal-notice' : 'alert alert-info removal-notice'} role="status">
+      <span>{notice.phase === 'failed' ? t('trash.errors.failed') : fill(t('trash.moved'), { title: notice.title })}</span>
+      <span aria-hidden="true">·</span>
+      <button type="button" className="link-button" disabled={notice.phase === 'undoing'} onClick={onUndo}>
+        {t('trash.undo')}
+      </button>
+    </p>
+  );
+}
+
+export function LibraryBrowser({
+  libraries = [],
+  role = 'reader',
+}: {
+  libraries?: LibraryInfo[];
+  role?: 'admin' | 'reader';
+}) {
+  const { t } = useLocale();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [removal, setRemoval] = useState<RemovalNotice | null>(() => {
+    const trashed = trashedFrom(location.state);
+    return trashed ? { ...trashed, phase: 'moved' } : null;
+  });
+  const [trashCount, setTrashCount] = useState(0);
   const searchId = useId();
   const searchRef = useRef<HTMLInputElement>(null);
   const catalogueRef = useRef<HTMLElement>(null);
@@ -315,6 +366,31 @@ export function LibraryBrowser({ libraries = [] }: { libraries?: LibraryInfo[] }
   const [page, setPage] = useState<LibraryPage | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
+
+  // The notice is shown once: a reload or Back does not bring it again.
+  useEffect(() => {
+    if (trashedFrom(location.state)) navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (role !== 'admin') return;
+    let active = true;
+    void api<TrashListing>('/api/trash').then((result) => {
+      if (!active || !result.data) return;
+      setTrashCount(result.data.editions.length + result.data.assets.length);
+    });
+    return () => {
+      active = false;
+    };
+  }, [role, generation]);
+
+  async function undoRemoval() {
+    if (!removal) return;
+    setRemoval({ ...removal, phase: 'undoing' });
+    const result = await api(`/api/editions/${removal.id}/restore`, { method: 'POST' });
+    setRemoval({ ...removal, phase: result.error ? 'failed' : 'restored' });
+    if (!result.error) setGeneration((value) => value + 1);
+  }
 
   useEffect(() => {
     let active = true;
@@ -556,6 +632,8 @@ export function LibraryBrowser({ libraries = [] }: { libraries?: LibraryInfo[] }
         </div>
       </div>
 
+      {removal ? <RemovalBand notice={removal} onUndo={() => void undoRemoval()} /> : null}
+
       {alertCode ? (
         <ErrorNotice
           message={errorText(t, alertCode)}
@@ -748,6 +826,14 @@ export function LibraryBrowser({ libraries = [] }: { libraries?: LibraryInfo[] }
       </section>
 
       <CatalogHome />
+
+      {role === 'admin' && trashCount > 0 ? (
+        <p className="trash-link-row">
+          <Link className="text-link" to="/trash">
+            {t('trash.link')} · <span className="num">{trashCount}</span>
+          </Link>
+        </p>
+      ) : null}
     </div>
   );
 }

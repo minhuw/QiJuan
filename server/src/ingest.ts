@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { hashFile, writeImmutableBlob } from './blobs.js';
 import { CatalogError, addIndexedAsset, addManagedAsset, createEdition, findOrCreateSeries } from './catalog.js';
 import type { AppDatabase } from './db.js';
@@ -309,12 +309,20 @@ function isLiveInLibrary(db: AppDatabase, editionId: number, libraryId: number):
   return Boolean(row && !row.trashedAt && row.libraryId === libraryId);
 }
 
+/** A live file of a live edition with these bytes. A copy only in trash is not a duplicate. */
 function findByHash(db: AppDatabase, libraryId: number, sha256: string): { id: number; editionId: number } | null {
   const row = db
     .select({ id: fileAssets.id, editionId: fileAssets.editionId })
     .from(fileAssets)
     .innerJoin(editions, eq(editions.id, fileAssets.editionId))
-    .where(and(eq(editions.libraryId, libraryId), eq(fileAssets.sha256, sha256)))
+    .where(
+      and(
+        eq(editions.libraryId, libraryId),
+        eq(fileAssets.sha256, sha256),
+        isNull(editions.trashedAt),
+        isNull(fileAssets.trashedAt),
+      ),
+    )
     .orderBy(asc(fileAssets.id))
     .get();
   return row ?? null;

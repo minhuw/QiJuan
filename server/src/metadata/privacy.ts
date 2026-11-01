@@ -25,6 +25,14 @@ export function assertNotPrivate(isPrivate: boolean | undefined): void {
  */
 export function markEditionPrivate(db: AppDatabase, editionId: number, stamp: string): string[] {
   db.update(editions).set({ metadataPrivate: true, updatedAt: stamp }).where(eq(editions.id, editionId)).run();
+  return discardPendingPreviews(db, editionId);
+}
+
+/**
+ * Deletes an edition's pending (unapplied) lookup previews inside the caller's transaction.
+ * Returns the staged cover hashes the caller releases once the transaction has committed.
+ */
+export function discardPendingPreviews(db: AppDatabase, editionId: number): string[] {
   const pending = and(eq(metadataPreviews.editionId, editionId), isNull(metadataPreviews.appliedAt));
   const staged = db.select({ coverSha256: metadataPreviews.coverSha256 }).from(metadataPreviews).where(pending).all();
   db.delete(metadataPreviews).where(pending).run();

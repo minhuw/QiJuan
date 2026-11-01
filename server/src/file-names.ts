@@ -79,8 +79,15 @@ export function contentDisposition(name: string, format: AssetFormat, type: 'inl
   return `${type}; filename="${asciiFilename(name, format)}"; filename*=UTF-8''${encoded}`;
 }
 
-/** Display names for every live asset of the edition, keyed by asset id. */
-export function editionAssetFilenames(db: AppDatabase, editionId: number): Map<number, string> {
+/**
+ * Display names for every live asset of the edition, keyed by asset id. `includeTrashed` also
+ * names trashed assets, for the Trash screen.
+ */
+export function editionAssetFilenames(
+  db: AppDatabase,
+  editionId: number,
+  options: { includeTrashed?: boolean } = {},
+): Map<number, string> {
   const edition = db
     .select({
       title: editions.title,
@@ -101,7 +108,11 @@ export function editionAssetFilenames(db: AppDatabase, editionId: number): Map<n
   const assets = db
     .select({ id: fileAssets.id, format: fileAssets.format, originalFilename: fileAssets.originalFilename })
     .from(fileAssets)
-    .where(and(eq(fileAssets.editionId, editionId), isNull(fileAssets.trashedAt)))
+    .where(
+      options.includeTrashed
+        ? eq(fileAssets.editionId, editionId)
+        : and(eq(fileAssets.editionId, editionId), isNull(fileAssets.trashedAt)),
+    )
     .orderBy(asc(fileAssets.id))
     .all();
   const seen = new Map<AssetFormat, number>();
