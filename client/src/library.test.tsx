@@ -231,14 +231,18 @@ describe('library browser', () => {
     expect(screen.getByText(catalogs['zh-Hans'].identifiers.unidentified, { selector: '.status-mark-label' })).toBeInTheDocument();
   });
 
-  it('uses the focus ring tokens and 44px targets without stretching covers', () => {
+  it('uses the focus ring tokens and 44px targets, and trims covers only on shelves and grids', () => {
     const dir = path.dirname(fileURLToPath(import.meta.url));
     const css = readFileSync(path.join(dir, 'styles/app.css'), 'utf8');
     const tokens = readFileSync(path.join(dir, 'styles/tokens.css'), 'utf8');
     expect(tokens).toContain(':focus-visible');
     expect(css).toContain('min-height: 2.75rem');
     expect(css).toMatch(/\.cover-image\s*\{[^}]*height:\s*auto;[^}]*object-fit:\s*contain;/s);
-    expect(css).not.toMatch(/\.cover-image\s*\{[^}]*object-fit:\s*(?:cover|fill)/s);
+    // Shelf and grid books share one shape and trim a cover to fit it; elsewhere a cover is shown whole.
+    const uncommented = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const trimming = [...uncommented.matchAll(/([^{}]+)\{[^}]*object-fit:\s*(?:cover|fill)/g)].map((match) => match[1]!.trim());
+    expect(trimming).toEqual(['.rh-hero-wash', '.book-object .cover-image']);
+    expect(css).toMatch(/\.book-object \.cover-art\s*\{[^}]*aspect-ratio:\s*var\(--book-aspect\)/s);
     expect(css).toContain('.cover-fallback');
     expect(css).toMatch(/\.cover-fallback\s*\{[^}]*font-family:\s*var\(--font-serif\)/s);
   });

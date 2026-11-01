@@ -4933,6 +4933,8 @@ a.rating-card:hover {
 :root {
   /* The colour of book shadows, as r g b. */
   --rh-shadow: 20 18 16;
+  /* Every book on a shelf or in a grid has this shape, so a row reads as one set. */
+  --book-aspect: 5 / 7;
 }
 
 .reading-home {
@@ -5102,15 +5104,17 @@ a.rating-card:hover {
   background: transparent;
 }
 
-/* A real cover keeps its own proportions, never cropped; a drawn cover stays 2:3. */
-.book-object .cover-art:has(.cover-image) {
-  aspect-ratio: auto;
+/* Real and drawn covers share one shape; a real cover fills it, trimmed evenly from the centre. */
+.book-object .cover-art {
+  aspect-ratio: var(--book-aspect);
 }
 
 .book-object .cover-image {
   width: 100%;
-  height: auto;
+  height: 100%;
   max-height: none;
+  object-fit: cover;
+  object-position: center;
 }
 
 .book-object-mini {
@@ -5803,10 +5807,10 @@ a.rating-card:hover {
 .lib-card-cover {
   display: flex;
   align-items: flex-end;
-  /* A 2:3 well as wide as the column: drawn covers fill it, real ones sit on its bottom edge.
+  /* A well as wide as the column, in the shared book shape, so every cover fills it.
      Size containment keeps a cover's content (e.g. a vertical title) from widening it. */
   width: 100%;
-  aspect-ratio: 2 / 3;
+  aspect-ratio: var(--book-aspect);
   margin-bottom: 0.65rem;
   contain: size;
 }
