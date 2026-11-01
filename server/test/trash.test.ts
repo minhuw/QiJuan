@@ -332,6 +332,17 @@ describe('trash', () => {
       expect(response.statusCode, `${method} ${url}`).toBe(403);
       expect(response.json()).toEqual({ error: 'forbidden' });
     }
+    // Editing details, replacing the cover and rescanning change the book for everyone: admins only.
+    const edit = await app.inject({ method: 'PATCH', url: `/api/editions/${editionId}`, headers: { cookie: reader }, payload: { title: 'Renamed' } });
+    expect(edit.statusCode).toBe(403);
+    const rescan = await app.inject({ method: 'POST', url: `/api/editions/${editionId}/refresh`, headers: { cookie: reader } });
+    expect(rescan.statusCode).toBe(403);
+    const cover = await app.inject({ method: 'POST', url: `/api/editions/${editionId}/cover`, headers: { cookie: reader } });
+    expect(cover.statusCode).toBe(403);
+    expect((await call(app, reader, 'GET', `/api/editions/${editionId}`)).json().edition.title).not.toBe('Renamed');
+    // Their own reading state stays theirs to change.
+    const status = await app.inject({ method: 'PATCH', url: `/api/editions/${editionId}/reading`, headers: { cookie: reader }, payload: { status: 'reading' } });
+    expect(status.statusCode).toBe(200);
     // Still live after the readers' attempts; a reader cannot see a trashed cover either.
     expect((await call(app, reader, 'GET', `/api/editions/${editionId}`)).statusCode).toBe(200);
     expect((await call(app, cookie, 'POST', `/api/editions/${editionId}/trash`)).statusCode).toBe(200);

@@ -110,12 +110,12 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
 
   app.patch('/api/editions/:editionId', async (request, reply) => {
     const user = currentUser(request);
+    // Book details are shared by the household; only an administrator changes them.
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
       const { metadataPrivate, ...rest } = asRecord(request.body) ?? {};
       if (metadataPrivate !== undefined) {
-        // Like lookup and apply, the assistant setting is the admin's.
-        if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
         if (typeof metadataPrivate !== 'boolean') return reply.code(400).send({ error: 'invalid_request' });
       }
       const patch = Object.keys(rest).length > 0 || metadataPrivate === undefined ? parsePatch(rest) : {};
@@ -135,6 +135,8 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
 
   app.post('/api/editions/:editionId/cover', async (request, reply) => {
     const user = currentUser(request);
+    // Book details are shared by the household; only an administrator changes them.
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
       const upload = await readCoverUpload(request);
@@ -225,6 +227,8 @@ export function registerEditionRoutes(app: FastifyInstance, deps: EditionRouteDe
 
   app.post('/api/editions/:editionId/refresh', async (request, reply) => {
     const user = currentUser(request);
+    // Book details are shared by the household; only an administrator changes them.
+    if (user.role !== 'admin') return reply.code(403).send({ error: 'forbidden' });
     try {
       const edition = await accessEdition(deps, user, (request.params as { editionId?: string }).editionId);
       const job = createBackgroundJob(deps.db, {

@@ -792,7 +792,10 @@ describe('book detail', () => {
     );
     window.history.pushState({}, '', '/books/3');
     render(<App locale="en" />);
-    await openEditor();
+    expect(await screen.findByRole('heading', { name: 'The Tale', level: 1 })).toBeInTheDocument();
+    openTab(catalogs.en.book.detailsTitle);
+    // Readers have no editor at all, so no agent either.
+    expect(screen.queryByText(catalogs.en.book.editDetails, { selector: 'summary' })).not.toBeInTheDocument();
     expect(screen.queryByText(catalogs.en.book.metadataAgent, { selector: 'summary' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: catalogs.en.book.runAgent })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: catalogs.en.trajectory.title })).not.toBeInTheDocument();
@@ -1221,7 +1224,7 @@ describe('book detail', () => {
     expect(await row('Tale (both)')).toHaveTextContent('书名与作者相近 · 标识相同：豆瓣 1084336');
   });
 
-  it('keeps cover replacement and exports available to readers, and hides empty related sections', async () => {
+  it('gives readers exports but no cover replacement, and hides empty related sections', async () => {
     let current = { ...edition, suggestions: [] };
     let uploaded: FormData | null = null;
     installFetch((url, init) => {
@@ -1239,13 +1242,10 @@ describe('book detail', () => {
     expect(await screen.findByRole('heading', { name: 'The Tale' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: catalogs.en.book.suggestions })).not.toBeInTheDocument();
     expect(document.querySelector('.suggestion-list')).toBeNull();
-    await openEditor();
-    expect(screen.queryByRole('button', { name: catalogs.en.book.runAgent })).not.toBeInTheDocument();
-    const cover = new File(['cover'], 'cover.png', { type: 'image/png' });
-    fireEvent.change(screen.getByLabelText(catalogs.en.book.replaceCover), { target: { files: [cover] } });
-    fireEvent.click(screen.getByRole('button', { name: catalogs.en.book.replaceCover }));
-    expect(await screen.findByText(catalogs.en.book.saved)).toBeInTheDocument();
-    expect(uploaded!.get('cover')).toEqual(cover);
+    openTab(catalogs.en.book.detailsTitle);
+    // Replacing the cover changes the book for everyone, so it is an administrator's task.
+    expect(screen.queryByLabelText(catalogs.en.book.replaceCover)).not.toBeInTheDocument();
+    expect(uploaded).toBeNull();
     openTab(catalogs.en.book.filesExports);
     expect(within(panel('files')).getByRole('link', { name: catalogs.en.book.exportMarkdown })).toHaveAttribute('href', '/api/editions/3/annotations?format=markdown');
     expect(screen.getByRole('link', { name: catalogs.en.book.exportJson })).toHaveAttribute('href', '/api/editions/3/annotations?format=json');
@@ -1992,10 +1992,9 @@ describe('book page tabs', () => {
     expect(screen.queryByRole('button', { name: catalogs.en.book.runAgent, hidden: true })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: catalogs.en.book.metadataAgent, hidden: true })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: catalogs.en.ratings.refresh, hidden: true })).not.toBeInTheDocument();
-    // Readers keep what they had: details, files and the editor.
-    await openEditor();
-    expect(screen.getByRole('textbox', { name: catalogs.en.book.title })).toBeVisible();
-    expect(screen.queryByRole('button', { name: catalogs.en.book.runAgent, hidden: true })).not.toBeInTheDocument();
+    // Readers see the details and files, but editing is an administrator's task.
+    expect(screen.queryByText(catalogs.en.book.editDetails, { selector: 'summary', ignore: false })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: catalogs.en.book.title, hidden: true })).not.toBeInTheDocument();
   });
 
   it('puts the Read button in the left column right after the cover, with further formats as outline buttons', async () => {

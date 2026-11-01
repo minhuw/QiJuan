@@ -960,6 +960,8 @@ export function BookDetail({
           </div>
         ) : null}
         <div className="book-disclosures">
+          {/* Editing a book changes it for the whole household, so it is an administrator's task. */}
+          {role === 'admin' ? (
           <details className="book-editor book-disclosure">
             <summary>{t('book.editDetails')}</summary>
             <div className="book-edit-body">
@@ -1112,6 +1114,7 @@ export function BookDetail({
               </section>
             </div>
           </details>
+          ) : null}
           {role === 'admin' ? (
             <details className="book-lookup book-disclosure" ref={lookupRef}>
               <summary>{t('book.metadataAgent')}</summary>
