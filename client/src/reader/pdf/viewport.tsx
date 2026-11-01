@@ -3,13 +3,14 @@ import { PageStream } from './layout';
 import { formatPdfSelection, parsePdfSelection, type PdfAnnotationMark, type PdfTextSelection } from './annotations';
 import { cleanCopiedText } from './copy-text';
 import { readPdfSelection, selectedPages, transformRect } from './selection';
-import { spreadOf, spreadPages, type Spread } from './spread';
+import { drawCurl, easeTurn, type CurlImage, type CurlScene } from './page-curl';
+import { spreadOf, spreadPages, spreadTurn, type Spread } from './spread';
 import type { PdfPageSize, PdfPlace, PdfSession, RenderedPage } from './types';
 
 export interface PdfViewportProps {
   session: PdfSession | null;
   place: PdfPlace | null;
-  /** 'spread' shows two pages side by side. */
+  /** 'spread' shows two pages side by side and curls the page on a turn. */
   flow: 'paginated' | 'spread' | 'continuous';
   scrollerRef: RefObject<HTMLDivElement | null>;
   enterAtBottom?: boolean;
@@ -40,6 +41,22 @@ export interface PdfViewportHandle {
 /** The smallest area, in CSS pixels on each side, that counts as a deliberate drag. */
 export const AREA_MIN_PX = 6;
 
+/** How long a page takes to turn over. */
+export const PAGE_CURL_MS = 650;
+/** A turn whose new pages never paint gives up and shows them as they are. */
+const PAGE_CURL_WAIT_MS = 4000;
+
+/** A turn between adjacent spreads, with copies of the old spread's pages to curl. */
+interface PendingTurn {
+  direction: 'next' | 'prev';
+  left: CurlImage | null;
+  right: CurlImage | null;
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 type Callbacks = Pick<PdfViewportProps, 'onPosition' | 'onRendered' | 'onReflow' | 'onError' | 'annotations' | 'onSelection' | 'onSelectionTooLarge' | 'areaMode' | 'onArea' | 'onTextlessDrag'>;
 interface GeometryCache {
   session: PdfSession;
@@ -67,15 +84,26 @@ export function PdfViewport(props: PdfViewportProps) {
   latest.current = props;
   const geometry = useRef<GeometryCache | null>(null);
   const controller = useRef<ReturnType<typeof mountViewport> | null>(null);
+  const turnRef = useRef<PendingTurn | null>(null);
 
   useLayoutEffect(() => {
     const root = scrollerRef.current;
     if (!root || !session || !place || session.pageCount < 1) return;
-    const mounted = mountViewport(root, session, place, flow, latest.current.enterAtBottom ?? false, latest, geometry);
+    const turn = turnRef.current;
+    turnRef.current = null;
+    const mounted = mountViewport(root, session, place, flow, latest.current.enterAtBottom ?? false, latest, geometry, turn);
     controller.current = mounted;
     const handle = latest.current.handleRef;
     if (handle) handle.current = mounted.handle;
     return () => {
+      // The props already hold the next place. A move to the adjacent spread at the same zoom
+      // is a page turn: copy the old pages before they are released, for the curl.
+      const next = latest.current;
+      const direction = flow === 'spread' && next.flow === 'spread' && next.session === session && next.place
+        && next.place !== place && next.place.zoom === place.zoom && !prefersReducedMotion()
+        ? spreadTurn(place.page, next.place.page)
+        : null;
+      turnRef.current = direction ? { direction, ...mounted.snapshot() } : null;
       controller.current = null;
       if (handle && handle.current === mounted.handle) handle.current = null;
       mounted.destroy();
@@ -103,6 +131,7 @@ function mountViewport(
   enterAtBottom: boolean,
   callbacks: { current: Callbacks },
   cache: { current: GeometryCache | null },
+  turn: PendingTurn | null = null,
 ) {
   const continuous = flow === 'continuous';
   const requestedPage = Math.max(1, Math.min(session.pageCount, request.page));
@@ -392,9 +421,11 @@ function mountViewport(
           if (root.ownerDocument.getSelection()?.rangeCount) scheduleSelection();
           finishRestore();
           reportNativePosition();
+          startCurl();
         } catch (error) {
           if (current()) {
             shell.setAttribute('aria-busy', 'false');
+            endCurl();
             callbacks.current.onError(error);
           }
         }
@@ -443,6 +474,104 @@ function mountViewport(
     nativePositionPending = true;
     reconcile();
     reportNativePosition();
+  }
+
+  // A page turn between spreads: the old spread's copy covers the new one until the new pages
+  // have painted, then the turning page curls over to reveal them.
+  let curl: {
+    canvas: HTMLCanvasElement;
+    context: CanvasRenderingContext2D;
+    scene: CurlScene;
+    frame: number | null;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
+  function beginCurl(pending: PendingTurn) {
+    const turning = pending.direction === 'next' ? pending.right : pending.left;
+    const still = pending.direction === 'next' ? pending.left : pending.right;
+    if (!pair || !turning) return;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const ratio = window.devicePixelRatio || 1;
+    canvas.className = 'pdf-curl';
+    canvas.setAttribute('aria-hidden', 'true');
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    Object.assign(canvas.style, { position: 'absolute', width: `${width}px`, height: `${height}px`, pointerEvents: 'none', zIndex: '3' });
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const background = getComputedStyle(root).backgroundColor;
+    const scene: CurlScene = {
+      width,
+      height,
+      direction: pending.direction,
+      turning,
+      still,
+      back: null,
+      background: background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent' ? background : '#fff',
+      paper: '#fff',
+    };
+    stream.append(canvas);
+    curl = { canvas, context, scene, frame: null, timer: setTimeout(endCurl, PAGE_CURL_WAIT_MS) };
+    paintCurl(0);
+  }
+
+  function paintCurl(progress: number) {
+    if (!curl) return;
+    // The canvas covers the viewport, wherever the stream is scrolled.
+    curl.canvas.style.left = `${root.scrollLeft}px`;
+    curl.canvas.style.top = `${root.scrollTop}px`;
+    drawCurl(curl.context, curl.scene, progress);
+  }
+
+  /** Starts the turn once every page of the new spread has painted. */
+  function startCurl() {
+    if (!curl || curl.frame !== null || !pair) return;
+    const shown = spreadPages(requestedPage, session.pageCount);
+    if (!shown.every((page) => pages.get(page)?.rendered)) return;
+    const back = curl.scene.direction === 'next' ? pair.left : pair.right;
+    curl.scene.back = back === null ? null : pages.get(back)?.canvas ?? null;
+    const begun = performance.now();
+    const step = (now: number) => {
+      if (!curl) return;
+      const elapsed = (now - begun) / PAGE_CURL_MS;
+      if (elapsed >= 1) {
+        endCurl();
+        return;
+      }
+      paintCurl(easeTurn(elapsed));
+      curl.frame = requestAnimationFrame(step);
+    };
+    curl.frame = requestAnimationFrame(step);
+  }
+
+  function endCurl() {
+    if (!curl) return;
+    if (curl.frame !== null) cancelAnimationFrame(curl.frame);
+    clearTimeout(curl.timer);
+    curl.canvas.remove();
+    curl = null;
+  }
+
+  /** Copies of the spread's painted pages and where they sit in the viewport, for a turn. */
+  function snapshot(): Omit<PendingTurn, 'direction'> {
+    const box = root.getBoundingClientRect();
+    const copy = (page: number | null): CurlImage | null => {
+      const entry = page === null ? undefined : pages.get(page);
+      if (!entry?.rendered || entry.canvas.width === 0 || entry.canvas.height === 0) return null;
+      const image = document.createElement('canvas');
+      image.width = entry.canvas.width;
+      image.height = entry.canvas.height;
+      const context = image.getContext('2d');
+      if (!context) return null;
+      context.drawImage(entry.canvas, 0, 0);
+      const rect = entry.shell.getBoundingClientRect();
+      return {
+        image,
+        rect: { x: rect.left - box.left - root.clientLeft, y: rect.top - box.top - root.clientTop, width: rect.width, height: rect.height },
+      };
+    };
+    return pair ? { left: copy(pair.left), right: copy(pair.right) } : { left: null, right: null };
   }
 
   // Area highlights: a drag on one page draws a rectangle in that page's CSS space.
@@ -590,6 +719,7 @@ function mountViewport(
   owner.addEventListener('keyup', scheduleSelection);
   // Capture ancestor scrolling as well, since toolbar anchors use client coordinates.
   owner.addEventListener('scroll', scheduleSelection, true);
+  if (turn) beginCurl(turn);
   start(command, enterAtBottom, true);
   const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
     if (!alive) return;
@@ -610,8 +740,9 @@ function mountViewport(
   });
   observer?.observe(root);
 
-  return { refreshAnnotations, handle, destroy: () => {
+  return { refreshAnnotations, handle, snapshot, destroy: () => {
     alive = false;
+    endCurl();
     cancelDrag();
     clearSelection();
     root.removeEventListener('pointerdown', onPointerDown);

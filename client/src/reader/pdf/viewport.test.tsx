@@ -735,6 +735,18 @@ describe('PdfViewport selection and overlays', () => {
 });
 
 describe('PdfViewport two-page spread', () => {
+  /** A 2D context that accepts any call; enough for the curl to run under jsdom. */
+  function fakeCanvas() {
+    const context = new Proxy({} as Record<string | symbol, unknown>, {
+      get: (target, name) => target[name] ?? (name === 'createLinearGradient' ? () => ({ addColorStop() {} }) : () => undefined),
+      set: (target, name, value) => {
+        target[name] = value;
+        return true;
+      },
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => context as unknown as CanvasRenderingContext2D);
+  }
+
   function shells(root: HTMLDivElement) {
     return [...root.querySelectorAll<HTMLDivElement>('.pdf-page')].map((shell) => ({
       page: Number(shell.dataset.page),
@@ -745,6 +757,7 @@ describe('PdfViewport two-page spread', () => {
   }
 
   it('sets a pair of pages either side of the spine, each fitted to half the width', async () => {
+    fakeCanvas();
     const view = setup({ flow: 'spread', place: { page: 3, x: 10, y: 1000, zoom: 'page' } });
     await settled(view.props);
     // Half of 640 wide and 480 high: 0.48 scale, so 192px pages meeting at 320.
@@ -761,5 +774,42 @@ describe('PdfViewport two-page spread', () => {
     view.update({ place: { page: 20, x: 10, y: 1000, zoom: 'page' } });
     await settled(view.props, 3);
     expect(shells(view.root)).toEqual([{ page: 20, side: 'left', left: '128px', width: '192px' }]);
+  });
+
+  it('curls the old page over the new spread on a turn, then removes the curl', async () => {
+    fakeCanvas();
+    const view = setup({ flow: 'spread', place: { page: 2, x: 10, y: 1000, zoom: 'page' } });
+    await settled(view.props);
+    view.update({ place: { page: 4, x: 10, y: 1000, zoom: 'page' } });
+    // The old spread's copy covers the viewport at once, before the new pages paint.
+    const curl = view.root.querySelector<HTMLCanvasElement>('canvas.pdf-curl');
+    expect(curl).not.toBeNull();
+    expect(curl!.style.pointerEvents).toBe('none');
+    await settled(view.props, 2);
+    expect(shells(view.root).map((shell) => shell.page)).toEqual([4, 5]);
+    await waitFor(() => expect(view.root.querySelector('canvas.pdf-curl')).toBeNull(), { timeout: 3000 });
+  });
+
+  it('does not curl on a jump, a zoom, a single-page flow, or when motion is reduced', async () => {
+    fakeCanvas();
+    const view = setup({ flow: 'spread', place: { page: 2, x: 10, y: 1000, zoom: 'page' } });
+    await settled(view.props);
+    view.update({ place: { page: 10, x: 10, y: 1000, zoom: 'page' } });
+    expect(view.root.querySelector('canvas.pdf-curl')).toBeNull();
+    await settled(view.props, 2);
+    view.update({ place: { page: 10, x: 10, y: 1000, zoom: 1 } });
+    expect(view.root.querySelector('canvas.pdf-curl')).toBeNull();
+    await settled(view.props, 3);
+
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('reduce') }));
+    view.update({ place: { page: 12, x: 10, y: 1000, zoom: 1 } });
+    expect(view.root.querySelector('canvas.pdf-curl')).toBeNull();
+    await settled(view.props, 4);
+
+    const single = setup({ flow: 'paginated', place: { page: 2, x: 10, y: 1000, zoom: 'page' } });
+    await settled(single.props);
+    vi.unstubAllGlobals();
+    single.update({ place: { page: 3, x: 10, y: 1000, zoom: 'page' } });
+    expect(single.root.querySelector('canvas.pdf-curl')).toBeNull();
   });
 });

@@ -358,6 +358,8 @@ describe('pdf reader', () => {
   });
 
   it('shows two pages side by side in Two pages mode and turns a spread at a time', async () => {
+    // The curl needs a real canvas; with reduced motion it is skipped.
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('reduce') }));
     const session = sessionFor();
     install(session);
     renderReader('en');
