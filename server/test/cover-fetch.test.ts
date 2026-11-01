@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { WebTransport } from '../src/metadata/assistant/client.js';
 import {
   COVER_MAX_BYTES,
+  PAGE_COVER_CANDIDATES,
   coverReferer,
   describeCoverResult,
+  fetchPageCover,
   fetchVerifiedCover,
   imageDimensions,
   sameSiteFamily,
   verifyCoverBytes,
 } from '../src/metadata/cover-fetch.js';
+import { coverSourcePages, fetchSourcePageCover } from '../src/metadata/apply.js';
 import { jpegOfSize, pngOfSize, webpOfSize } from './fixtures.js';
 
 interface Seen {
@@ -169,5 +172,107 @@ describe('cover download', () => {
 
   it('never reaches the network without a stubbed transport under Vitest', async () => {
     expect(await fetchVerifiedCover({ url: 'https://img3.doubanio.com/c.jpg' }, {})).toMatchObject({ ok: false, reason: 'network' });
+  });
+});
+
+const html = (body: string, status = 200) =>
+  new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
+
+/** A Douban record page: its og:image is the cover, the <img> tags below are related books. */
+const DOUBAN_PAGE = `<html><head><title>康德《纯粹理性批判》句读 (豆瓣)</title>
+<meta property="og:image" content="https://img1.doubanio.com/view/subject/l/public/s4396867.jpg" /></head>
+<body><div id="mainpic"><img src="https://img1.doubanio.com/view/subject/s/public/s4396867.jpg" alt="康德《纯粹理性批判》句读"></div>
+<img src="https://img2.doubanio.com/view/subject/s/public/s6152831.jpg"></body></html>`;
+
+describe('record page cover', () => {
+  it("takes the page's og:image with the page as Referer, and never the page's <img> tags", async () => {
+    const { transport, seen } = imageTransport((url) =>
+      url.hostname === 'book.douban.com' ? html(DOUBAN_PAGE) : jpeg(jpegOfSize(357, 500)),
+    );
+    const result = await fetchPageCover('https://book.douban.com/subject/4712697/', transport);
+    expect(result).toMatchObject({
+      ok: true,
+      cover: {
+        url: 'https://img1.doubanio.com/view/subject/l/public/s4396867.jpg',
+        sourceUrl: 'https://book.douban.com/subject/4712697/',
+        width: 357,
+      },
+    });
+    expect(seen.map((item) => item.url)).toEqual([
+      'https://book.douban.com/subject/4712697/',
+      'https://img1.doubanio.com/view/subject/l/public/s4396867.jpg',
+    ]);
+    expect(seen[1]!.headers.referer).toBe('https://book.douban.com/');
+  });
+
+  it('tries at most two meta images and reports the last rejection', async () => {
+    const page = `<meta property="og:image" content="https://img.example.com/a.jpg"><meta name="twitter:image" content="https://img.example.com/b.jpg"><link rel="image_src" href="https://img.example.com/c.jpg">`;
+    const { transport, seen } = imageTransport((url) =>
+      url.hostname === 'books.example.com' ? html(page) : jpeg(jpegOfSize(500, 357)),
+    );
+    const result = await fetchPageCover('https://books.example.com/record/1', transport);
+    expect(result).toMatchObject({ ok: false, reason: 'wrong_aspect', host: 'img.example.com' });
+    expect(seen).toHaveLength(1 + PAGE_COVER_CANDIDATES);
+  });
+
+  it('reports a page without meta images, a refused page, and a non-HTML page', async () => {
+    const bare = imageTransport(() => html('<img src="https://img.example.com/cover.jpg">'));
+    expect(await fetchPageCover('https://books.example.com/1', bare.transport)).toMatchObject({ ok: false, reason: 'no_page_image' });
+    expect(bare.seen).toHaveLength(1);
+
+    const refused = imageTransport(() => html('', 403));
+    const result = await fetchPageCover('https://books.example.com/1', refused.transport);
+    expect(result).toMatchObject({ ok: false, reason: 'page_unavailable', host: 'books.example.com' });
+    expect(describeCoverResult(result)).toBe('Cover rejected from books.example.com: page_unavailable (http_error: HTTP 403)');
+
+    const json = imageTransport(() => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+    expect(await fetchPageCover('https://books.example.com/1', json.transport)).toMatchObject({ ok: false, reason: 'not_html' });
+  });
+
+  it('lists distinct cited pages, Douban first, without Open Library, at most two', () => {
+    expect(
+      coverSourcePages([
+        { sourceUrl: 'https://openlibrary.org/books/OL1M' },
+        { sourceUrl: 'https://opac.example.edu.cn/book/1' },
+        { sourceUrl: null },
+        { sourceUrl: 'javascript:alert(1)' },
+        { sourceUrl: 'not a url' },
+        { sourceUrl: 'https://book.douban.com/subject/4712697/' },
+        { sourceUrl: 'https://book.douban.com/subject/4712697/#info' },
+        { sourceUrl: 'https://www.example.com/third' },
+        {},
+      ]),
+    ).toEqual(['https://book.douban.com/subject/4712697/', 'https://opac.example.edu.cn/book/1']);
+    expect(coverSourcePages([])).toEqual([]);
+  });
+
+  it('falls through to the next page and notes every attempt', async () => {
+    const { transport } = imageTransport((url) =>
+      url.hostname === 'book.douban.com'
+        ? html('', 403)
+        : url.pathname === '/book/1'
+          ? html('<meta property="og:image" content="https://opac.example.edu.cn/cover.jpg">')
+          : jpeg(jpegOfSize(357, 500)),
+    );
+    const notes: Array<{ message: string; data?: Record<string, unknown> }> = [];
+    const trajectory = { id: 1, onStep: () => undefined, note: (message: string, data?: Record<string, unknown>) => notes.push({ message, data }) };
+    const found = await fetchSourcePageCover(
+      ['https://book.douban.com/subject/1/', 'https://opac.example.edu.cn/book/1'],
+      { web: transport },
+      trajectory as never,
+    );
+    expect(found).toMatchObject({
+      mediaType: 'image/jpeg',
+      width: 357,
+      height: 500,
+      url: 'https://opac.example.edu.cn/cover.jpg',
+      sourceUrl: 'https://opac.example.edu.cn/book/1',
+      origin: 'agent',
+    });
+    expect(notes.map((note) => note.data?.cover)).toMatchObject([
+      { status: 'rejected', reason: 'page_unavailable', url: 'https://book.douban.com/subject/1/' },
+      { status: 'source_page', host: 'opac.example.edu.cn', sourceUrl: 'https://opac.example.edu.cn/book/1' },
+    ]);
+    expect(await fetchSourcePageCover([], { web: transport }, null)).toBeNull();
   });
 });

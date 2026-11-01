@@ -1,4 +1,5 @@
 import type { WebTransport } from './assistant/client.js';
+import { PAGE_HTML_MAX_BYTES, decodeHtml, extractPageImages } from './assistant/page-images.js';
 import { safeGet } from './safe-fetch.js';
 
 /**
@@ -82,6 +83,45 @@ export async function fetchVerifiedCover(
       sourceUrl,
     },
   };
+}
+
+/** How many of a page's meta images (og:image, twitter:image, image_src) are tried. */
+export const PAGE_COVER_CANDIDATES = 2;
+
+export type PageCoverResult =
+  | { ok: true; cover: VerifiedCover }
+  | { ok: false; reason: CoverRejection | 'page_unavailable' | 'not_html' | 'no_page_image'; detail: string; host: string | null };
+
+/**
+ * The cover a book's record page advertises. Only meta images are tried: the <img> tags on a
+ * record page are often other books (Douban lists related titles). Each candidate goes through
+ * `fetchVerifiedCover` with the page as its source. Never throws.
+ */
+export async function fetchPageCover(pageUrl: string, transport: WebTransport): Promise<PageCoverResult> {
+  const reply = await safeGet(pageUrl, {
+    transport,
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    maxBytes: PAGE_HTML_MAX_BYTES,
+    overflow: 'truncate',
+  });
+  const pageHost = hostOf(pageUrl);
+  if (!reply.ok) return { ok: false, reason: 'page_unavailable', detail: `${reply.code}: ${reply.detail}`, host: pageHost };
+  const type = (reply.contentType ?? '').split(';')[0]!.trim().toLowerCase();
+  if (type && type !== 'text/html' && type !== 'application/xhtml+xml') {
+    return { ok: false, reason: 'not_html', detail: `the page is ${type}`, host: reply.url.hostname };
+  }
+  const { images } = extractPageImages(decodeHtml(reply.bytes, reply.contentType), reply.url);
+  const candidates = images.filter((image) => image.kind !== 'img').slice(0, PAGE_COVER_CANDIDATES);
+  if (candidates.length === 0) {
+    return { ok: false, reason: 'no_page_image', detail: 'the page has no og:image or similar', host: reply.url.hostname };
+  }
+  let last: PageCoverResult | null = null;
+  for (const image of candidates) {
+    const result = await fetchVerifiedCover({ url: image.url, sourceUrl: reply.url.href }, transport);
+    if (result.ok) return result;
+    last = result;
+  }
+  return last!;
 }
 
 /** Checks the type by magic bytes, the size, the pixel width, and the aspect ratio. */
@@ -238,7 +278,7 @@ function siteOf(host: string): string | null {
 }
 
 /** A one-line trajectory note, e.g. "Cover verified 357×500 JPEG from img3.doubanio.com". */
-export function describeCoverResult(result: CoverFetchResult): string {
+export function describeCoverResult(result: CoverFetchResult | PageCoverResult): string {
   if (result.ok) {
     const { cover } = result;
     return `Cover verified ${cover.width}×${cover.height} ${shortType(cover.mediaType)} from ${cover.host}`;

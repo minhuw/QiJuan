@@ -13,9 +13,12 @@ import {
   type PreviewField,
   applyMetadataPreview,
   createMetadataPreview,
+  coverSourcePages,
   fetchAgentCover,
   fetchFallbackCover,
+  fetchSourcePageCover,
 } from './metadata/apply.js';
+import { webSearchAvailable } from './metadata/assistant/web-tools.js';
 import { runMetadataAgent } from './metadata/assistant/agent.js';
 import {
   AssistantError,
@@ -477,11 +480,15 @@ interface PendingUpload {
   cover: CoverRef;
 }
 
-/** Where an upload's cover may come from, in order: the agent's image, then Open Library. */
+/**
+ * Where an upload's cover may come from, in order: the agent's image, then Open Library, then
+ * the record pages the proposal cites.
+ */
 interface CoverRef {
   coverId: number | null;
   isbn: string | null;
   agent?: AssistantCover | null;
+  pages?: string[];
 }
 
 async function processItem(
@@ -561,7 +568,12 @@ async function processItem(
       void _cover;
       const pending: PendingUpload = {
         metadata: kept,
-        cover: { coverId: result.proposal.coverId, isbn: result.proposal.isbn, agent: result.proposal.cover },
+        cover: {
+          coverId: result.proposal.coverId,
+          isbn: result.proposal.isbn,
+          agent: result.proposal.cover,
+          pages: coverSourcePages(result.proposal.identifiers),
+        },
       };
       commitPreparedImport(db, prepared, metadata, { pending });
       return;
@@ -642,13 +654,19 @@ function decodePending(value: string | null): PendingUpload | null {
       coverId: typeof record.cover?.coverId === 'number' ? record.cover.coverId : null,
       isbn: typeof record.cover?.isbn === 'string' ? record.cover.isbn : null,
       agent: cleanCover(record.cover?.agent),
+      pages: Array.isArray(record.cover?.pages)
+        ? coverSourcePages(
+            record.cover.pages.filter((page): page is string => typeof page === 'string').map((sourceUrl) => ({ sourceUrl })),
+          )
+        : [],
     },
   };
 }
 
 /**
  * An upload's cover: the agent's verified image first, then Open Library's (only when it returns
- * an image), then the cover embedded in the file. Every step is optional and never fails the import.
+ * an image), then, when web access is on, a cited record page's cover, then the cover embedded in
+ * the file. Every step is optional and never fails the import.
  */
 async function uploadCover(
   context: ImportJobContext,
@@ -658,7 +676,10 @@ async function uploadCover(
 ): Promise<{ bytes: Buffer; mediaType: string } | null> {
   const found =
     (await fetchAgentCover(ref.agent ?? null, context.assistant, trajectory)) ??
-    (await fetchFallbackCover(context.openLibrary, ref, trajectory));
+    (await fetchFallbackCover(context.openLibrary, ref, trajectory)) ??
+    (ref.pages?.length && context.assistantConfig && webSearchAvailable(context.assistantConfig)
+      ? await fetchSourcePageCover(ref.pages, context.assistant, trajectory)
+      : null);
   if (found) return { bytes: found.bytes, mediaType: found.mediaType };
   if (fileCover) trajectory?.note('Cover taken from the file', { cover: { status: 'file', mediaType: fileCover.mediaType } });
   return fileCover;
@@ -693,7 +714,7 @@ async function proposalMetadata(
   assertCompleteProposal(proposal);
   const cover = await uploadCover(
     context,
-    { coverId: proposal.coverId, isbn: proposal.isbn, agent: proposal.cover },
+    { coverId: proposal.coverId, isbn: proposal.isbn, agent: proposal.cover, pages: coverSourcePages(proposal.identifiers) },
     fileCover,
     trajectory,
   );

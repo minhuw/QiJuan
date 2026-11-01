@@ -24,7 +24,8 @@ import { readAssistantSettings } from './assistant-settings.js';
 import { assertNotPrivate, isEditionPrivate } from './privacy.js';
 import { sortKey } from '../sort-key.js';
 import { appendTrajectoryStep, linkTrajectoryPreview, startTrajectory, type TrajectoryRecorder } from './trajectory.js';
-import { describeCoverResult, fetchVerifiedCover, imageDimensions } from './cover-fetch.js';
+import { describeCoverResult, fetchPageCover, fetchVerifiedCover, imageDimensions } from './cover-fetch.js';
+import { webSearchAvailable } from './assistant/web-tools.js';
 import { cleanCover, type AssistantCover } from './assistant/submit.js';
 import { recordIdentifierSuggestions } from '../suggestions.js';
 import { type OpenLibraryTransport, fetchOpenLibraryCover } from './openLibrary.js';
@@ -180,7 +181,9 @@ export async function createMetadataPreview(
   // A locked cover is never replaced, so nothing is downloaded for it.
   const coverLocked = loadLocks(db, edition.id).has('cover');
   if (coverLocked) trajectory?.note('Cover not fetched: the cover is locked', { cover: { status: 'locked' } });
-  const obtained = coverLocked ? null : await obtainPreviewCover(result.proposal, assistant, openLibrary, trajectory);
+  const obtained = coverLocked
+    ? null
+    : await obtainPreviewCover(result.proposal, assistant, openLibrary, trajectory, { sourcePages: webSearchAvailable(config) });
   const blob = obtained ? writeImmutableBlob(dataDir, obtained.bytes) : null;
   let row: PreviewRow;
   let replaced: string[];
@@ -239,7 +242,8 @@ export async function createMetadataPreview(
 }
 
 /**
- * The agent's verified cover first; otherwise Open Library, but only when it returns an image.
+ * The agent's verified cover first; otherwise Open Library, but only when it returns an image;
+ * otherwise, when web access is on, the cover advertised by a record page the proposal cites.
  * Each outcome is noted in the trajectory. Never throws.
  */
 async function obtainPreviewCover(
@@ -247,10 +251,67 @@ async function obtainPreviewCover(
   assistant: AssistantTransport,
   openLibrary: OpenLibraryTransport,
   trajectory: TrajectoryRecorder | null,
+  options: { sourcePages: boolean },
 ): Promise<ObtainedCover | null> {
   const agent = await fetchAgentCover(proposal.cover, assistant, trajectory);
   if (agent) return agent;
-  return fetchFallbackCover(openLibrary, proposal, trajectory);
+  const fallback = await fetchFallbackCover(openLibrary, proposal, trajectory);
+  if (fallback || !options.sourcePages) return fallback;
+  return fetchSourcePageCover(coverSourcePages(proposal.identifiers), assistant, trajectory);
+}
+
+/** At most this many cited record pages are searched for a cover. */
+export const COVER_SOURCE_PAGES_MAX = 2;
+
+/**
+ * Distinct http(s) record pages the proposal's identifiers cite, Douban first. Open Library
+ * pages are left out: its cover was already tried.
+ */
+export function coverSourcePages(identifiers: ReadonlyArray<{ sourceUrl?: string | null }>): string[] {
+  const pages: Array<{ href: string; rank: number }> = [];
+  const seen = new Set<string>();
+  for (const { sourceUrl } of identifiers) {
+    if (!sourceUrl) continue;
+    let url: URL;
+    try {
+      url = new URL(sourceUrl);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+    const host = url.hostname.toLowerCase();
+    if (host === 'openlibrary.org' || host.endsWith('.openlibrary.org')) continue;
+    url.hash = '';
+    if (seen.has(url.href)) continue;
+    seen.add(url.href);
+    pages.push({ href: url.href, rank: host === 'douban.com' || host.endsWith('.douban.com') ? 0 : 1 });
+  }
+  return pages
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, COVER_SOURCE_PAGES_MAX)
+    .map((page) => page.href);
+}
+
+/** The first verified cover advertised by one of `pages`, noting each attempt. Never throws. */
+export async function fetchSourcePageCover(
+  pages: readonly string[],
+  assistant: AssistantTransport,
+  trajectory: TrajectoryRecorder | null,
+): Promise<ObtainedCover | null> {
+  for (const page of pages) {
+    const result = await fetchPageCover(page, assistant.web ?? {});
+    const message = `${describeCoverResult(result)} (source page ${page})`;
+    if (result.ok) {
+      const { width, height, mediaType, host, url } = result.cover;
+      trajectory?.note(message, { cover: { status: 'source_page', width, height, mediaType, host, url, sourceUrl: page } });
+      // Stored as an agent cover: the page is one the agent cited for this edition.
+      return { bytes: result.cover.bytes, mediaType, width, height, url, sourceUrl: page, origin: 'agent' };
+    }
+    trajectory?.note(message, {
+      cover: { status: 'rejected', reason: result.reason, detail: result.detail, host: result.host, url: page },
+    });
+  }
+  return null;
 }
 
 /** Downloads and verifies the agent's cover, noting the outcome. Shared with uploads. */
