@@ -3335,12 +3335,6 @@ a.rating-card:hover {
   overflow-wrap: anywhere;
 }
 
-.format-original {
-  overflow-wrap: anywhere;
-  color: var(--ink-muted);
-  font-size: var(--text-small);
-}
-
 .format-actions {
   display: flex;
   flex-wrap: wrap;

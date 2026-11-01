@@ -863,11 +863,6 @@ export function BookDetail({
               <FileText className="format-icon" size={16} strokeWidth={1.5} aria-hidden="true" />
               <span className="format-copy">
                 <span className="format-name">{asset.displayFilename}</span>
-                {asset.originalFilename !== asset.displayFilename ? (
-                  <span className="format-original" title={t('book.originalFilename')}>
-                    {asset.originalFilename}
-                  </span>
-                ) : null}
                 <span className="format-meta">
                   <span className="format-text">{asset.format.toUpperCase()}</span>
                   {asset.availability === 'missing' ? <StateTag tone="error">{t('book.missing')}</StateTag> : null}

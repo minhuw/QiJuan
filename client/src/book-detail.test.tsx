@@ -222,7 +222,7 @@ describe('book detail', () => {
     expect(screen.queryByRole('button', { name: /删除|delete/i, hidden: true })).not.toBeInTheDocument();
   });
 
-  it('names each file by its display name, keeps the original name beneath, and links a download', async () => {
+  it('names each file by its display name only and links a download', async () => {
     const files: EditionDetail['assets'] = [
       ...edition.assets,
       {
@@ -246,7 +246,8 @@ describe('book detail', () => {
 
     const first = within(rows[0]!);
     expect(rows[0]!.querySelector('.format-name')).toHaveTextContent('Ada Lovelace - The Tale (2020).epub');
-    expect(first.getByText('tale.epub')).toHaveClass('format-original');
+    // The raw upload name stays on the server (a lookup hint) and is not shown.
+    expect(first.queryByText('tale.epub')).toBeNull();
     const download = first.getByRole('link', { name: `${catalogs.en.book.download} Ada Lovelace - The Tale (2020).epub` });
     expect(download).toHaveAttribute('href', '/api/editions/3/assets/9/file?download=1');
     expect(download).toHaveAttribute('download', 'Ada Lovelace - The Tale (2020).epub');
@@ -259,11 +260,9 @@ describe('book detail', () => {
     );
     // A missing file has no download link.
     expect(within(rows[2]!).getByText('Ada Lovelace - The Tale (2020) (2).pdf')).toBeInTheDocument();
-    expect(within(rows[2]!).getByText('scan.pdf')).toBeInTheDocument();
+    expect(within(rows[2]!).queryByText('scan.pdf')).toBeNull();
     expect(within(rows[2]!).queryByRole('link', { name: new RegExp(`^${catalogs.en.book.download}`) })).toBeNull();
-    // The original name is not repeated when it already matches.
     expect(within(rows[3]!).getAllByText('Same.epub')).toHaveLength(1);
-    expect(rows[3]!.querySelector('.format-original')).toBeNull();
   });
 
   it('labels the download link in Chinese', async () => {
