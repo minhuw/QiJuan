@@ -18,7 +18,8 @@ export interface PdfTextSelection {
 export interface PdfAnnotationMark {
   id: string;
   locator: string;
-  kind: 'highlight' | 'note';
+  /** pending: an area drawn but not yet saved. */
+  kind: 'highlight' | 'note' | 'pending';
 }
 
 export const PDF_SELECTION_MAX_PAGES = 8;

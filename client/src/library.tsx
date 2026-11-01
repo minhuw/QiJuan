@@ -1,6 +1,6 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { ChevronLeft, ChevronRight, Heart, LayoutGrid, List, Plus, Search, Star, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Heart, LayoutGrid, List, Plus, Search, Trash2, X } from 'lucide-react';
 import {
   api,
   type HomePayload,
@@ -11,11 +11,14 @@ import {
   type ReadingStatus,
   type TrashListing,
 } from './api';
+import { setFavorite, setOnShelf, setStatus } from './book-actions';
+import { bookMenuItems } from './book-menu';
 import { CatalogHome } from './catalog-home';
-import { CoverArt } from './components/ui/cover-art';
-import { UnidentifiedMark } from './components/ui/identifiers';
+import { BookObject } from './components/ui/book-object';
+import { ConfirmDialog } from './components/ui/confirm-dialog';
+import { Menu, type MenuItem } from './components/ui/menu';
 import { EmptyState, ErrorNotice, SkeletonGrid } from './components/ui/states';
-import { StatusMark } from './components/ui/status-mark';
+import { LibraryCard, LibraryRow, type ItemHandlers } from './library-items';
 import { useLocale } from './shell';
 import { fill } from './trash-screen';
 
@@ -32,8 +35,8 @@ const ERROR_CODES = new Set([
 ]);
 
 const STATUSES: ReadingStatus[] = ['want', 'reading', 'finished', 'on_hold'];
-/** Catalogue order: digits and marks, Latin initials, then CJK titles (sort_title has no pinyin). */
-const BAND_KEYS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'cjk'];
+/** Catalogue order is one A–Z: Chinese titles file under their pinyin initial; '#' holds the rest. */
+const BAND_KEYS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
 
 function errorText(t: (key: string) => string, code: string | null): string {
   const known = code && ERROR_CODES.has(code) ? code : 'internal';
@@ -62,15 +65,7 @@ function libraryPath(input: {
 }
 
 
-function shortAuthor(name: string | undefined): string | null {
-  const trimmed = name?.trim();
-  if (!trimmed) return null;
-  if (/\p{Script=Han}/u.test(trimmed)) return trimmed;
-  const parts = trimmed.split(/\s+/);
-  return parts[parts.length - 1] ?? trimmed;
-}
-
-function lastReadText(value: string, locale: string): string | null {
+export function lastReadText(value: string, locale: string): string | null {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   const day = 86_400_000;
@@ -84,142 +79,6 @@ function lastReadText(value: string, locale: string): string | null {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date);
 }
 
-function Formats({ formats }: { formats: LibraryEdition['formats'] }) {
-  if (formats.length === 0) return null;
-  return <span className="format-text">{formats.map((format) => format.toUpperCase()).join(' · ')}</span>;
-}
-
-function Rating({ rating }: { rating: number }) {
-  const { t } = useLocale();
-  return (
-    <span className="rating-meta">
-      <Star size={11} strokeWidth={1.5} aria-hidden="true" />
-      <span className="visually-hidden">{t('reading.rating')} </span>
-      {rating}
-    </span>
-  );
-}
-
-function BookCard({ book }: { book: LibraryEdition }) {
-  const { t } = useLocale();
-  const authors = book.authors.join(', ');
-  return (
-    <li className="book-card">
-      <Link className="book-card-link" to={`/books/${book.id}`}>
-        <CoverArt editionId={book.id} title={book.title} author={book.authors[0]} hasCover={book.hasCover} />
-        <span className="book-card-caption">
-          <span className="book-card-title">{book.title}</span>
-          <span className="book-card-meta">
-            {authors ? <span className="book-card-author">{authors}</span> : null}
-            <Formats formats={book.formats} />
-          </span>
-          {book.status || book.favorite || book.rating ? (
-            <span className="book-card-signals">
-              {book.status ? <StatusMark status={book.status} /> : null}
-              {book.favorite ? (
-                <span className="favorite-meta">
-                  <Heart size={11} strokeWidth={1.5} fill="currentColor" aria-hidden="true" />
-                  <span className="visually-hidden">{t('reading.favorite')}</span>
-                </span>
-              ) : null}
-              {book.rating ? <Rating rating={book.rating} /> : null}
-            </span>
-          ) : null}
-          {book.identified === false ? (
-            <span className="book-card-identity">
-              <UnidentifiedMark />
-            </span>
-          ) : null}
-        </span>
-      </Link>
-    </li>
-  );
-}
-
-function ContinueItem({ book }: { book: LibraryEdition & { updatedAt: string } }) {
-  const { t, locale } = useLocale();
-  const read = lastReadText(book.updatedAt, locale);
-  return (
-    <li className="continue-item">
-      <CoverArt editionId={book.id} title={book.title} author={book.authors[0]} hasCover={book.hasCover} variant="thumb" />
-      <div className="continue-copy">
-        <p className="continue-title">{book.title}</p>
-        <p className="continue-meta">
-          {book.authors.length > 0 ? <span>{book.authors.join(', ')}</span> : null}
-          <Formats formats={book.formats} />
-        </p>
-        {read ? (
-          <p className="continue-read">
-            {t('library.lastRead')} <time dateTime={book.updatedAt}>{read}</time>
-          </p>
-        ) : null}
-        <Link className="btn btn-sm continue-resume" to={`/books/${book.id}`}>
-          {t('library.resume')}
-          <span className="visually-hidden">: {book.title}</span>
-        </Link>
-      </div>
-    </li>
-  );
-}
-
-function GuideBand({
-  editions,
-  libraries,
-  total,
-  shelves,
-}: {
-  editions: LibraryEdition[];
-  libraries: LibraryInfo[];
-  total: number | null;
-  shelves: number | null;
-}) {
-  const { t } = useLocale();
-  const first = editions[0];
-  const last = editions.length > 1 ? editions[editions.length - 1] : undefined;
-  return (
-    <div className="guide-band">
-      <span className="guide guide-first" aria-hidden="true">
-        {first ? (
-          <>
-            <span className="guide-word">{first.title}</span>
-            {shortAuthor(first.authors[0]) ? <span className="guide-author">{shortAuthor(first.authors[0])}</span> : null}
-          </>
-        ) : null}
-      </span>
-      <p className="guide-meta">
-        <span className="visually-hidden">{t('home.libraries')}: </span>
-        {libraries.length === 0 ? (
-          <span>{t('home.noAccess')}</span>
-        ) : (
-          libraries.map((library) => (
-            <span className="guide-library" key={library.id}>
-              {library.name}
-            </span>
-          ))
-        )}
-        {total !== null ? (
-          <span className="guide-count">
-            {t('home.books')} <span className="num">{total}</span>
-          </span>
-        ) : null}
-        {shelves !== null ? (
-          <span className="guide-count">
-            {t('home.shelvesCount')} <span className="num">{shelves}</span>
-          </span>
-        ) : null}
-      </p>
-      <span className="guide guide-last" aria-hidden="true">
-        {last ? (
-          <>
-            <span className="guide-word">{last.title}</span>
-            {shortAuthor(last.authors[0]) ? <span className="guide-author">{shortAuthor(last.authors[0])}</span> : null}
-          </>
-        ) : null}
-      </span>
-    </div>
-  );
-}
-
 interface Band {
   key: string;
   target: number | null;
@@ -227,7 +86,7 @@ interface Band {
   current: boolean;
 }
 
-/** Folds the server's runs into one band per key; a key can recur because sort_title orders by code point. */
+/** Folds the server's runs into one band per key; a key recurs only before sort keys are filled in. */
 export function thumbBands(index: LibraryIndexEntry[], offset: number, shown: number): Band[] {
   const end = offset + shown;
   return BAND_KEYS.map((key) => {
@@ -257,10 +116,9 @@ function ThumbIndex({
     <nav className="thumb-index" aria-label={t('library.thumbIndex')}>
       <ol>
         {thumbBands(index, offset, shown).map((band) => {
-          const label = band.key === 'cjk' ? t('library.indexCjk') : band.key;
+          const label = band.key;
           const className = [
             'thumb-tab',
-            band.key === 'cjk' ? 'thumb-tab-cjk' : '',
             band.inView ? 'thumb-tab-in' : '',
             band.current ? 'thumb-tab-current' : '',
           ]
@@ -305,28 +163,47 @@ function trashedFrom(state: unknown): TrashedState['trashed'] | null {
   return trashed && typeof trashed.id === 'number' && typeof trashed.title === 'string' ? trashed : null;
 }
 
-type RemovalNotice = { id: number; title: string; phase: 'moved' | 'undoing' | 'restored' | 'failed' };
+/** Books just moved to Trash: one names its title, several give a count. Undo restores them all. */
+export type RemovalNotice = { books: Array<{ id: number; title: string }>; phase: 'moved' | 'undoing' | 'restored' | 'failed' };
 
-function RemovalBand({ notice, onUndo }: { notice: RemovalNotice; onUndo: () => void }) {
+export function RemovalBand({ notice, onUndo }: { notice: RemovalNotice; onUndo: () => void }) {
   const { t } = useLocale();
+  const single = notice.books.length === 1 ? notice.books[0]! : null;
   if (notice.phase === 'restored') {
     return (
       <p className="alert alert-success removal-notice" role="status">
-        <span>{fill(t('trash.restored'), { title: notice.title })}</span>
-        <Link className="text-link" to={`/books/${notice.id}`}>
-          {t('trash.open')}
-        </Link>
+        <span>
+          {single ? fill(t('trash.restored'), { title: single.title }) : fill(t('trash.restoredMany'), { count: String(notice.books.length) })}
+        </span>
+        {single ? (
+          <Link className="text-link" to={`/books/${single.id}`}>
+            {t('trash.open')}
+          </Link>
+        ) : null}
       </p>
     );
   }
+  const moved = single ? fill(t('trash.moved'), { title: single.title }) : fill(t('trash.movedMany'), { count: String(notice.books.length) });
   return (
     <p className={notice.phase === 'failed' ? 'alert alert-error removal-notice' : 'alert alert-info removal-notice'} role="status">
-      <span>{notice.phase === 'failed' ? t('trash.errors.failed') : fill(t('trash.moved'), { title: notice.title })}</span>
+      <span>{notice.phase === 'failed' ? t('trash.errors.failed') : moved}</span>
       <span aria-hidden="true">·</span>
       <button type="button" className="link-button" disabled={notice.phase === 'undoing'} onClick={onUndo}>
         {t('trash.undo')}
       </button>
     </p>
+  );
+}
+
+type OpenMenu =
+  | { kind: 'book'; book: LibraryEdition; at: { x: number; y: number }; returnFocus: HTMLElement | null }
+  | { kind: 'bulk-status' | 'bulk-shelf'; at: { x: number; y: number }; returnFocus: HTMLElement | null };
+
+function FilterChip({ label, active, onClick, children }: { label: string; active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className={active ? 'chip chip-active' : 'chip'} aria-label={label} aria-pressed={active} onClick={onClick}>
+      {children}
+    </button>
   );
 }
 
@@ -340,9 +217,10 @@ export function LibraryBrowser({
   const { t } = useLocale();
   const location = useLocation();
   const navigate = useNavigate();
+  const admin = role === 'admin';
   const [removal, setRemoval] = useState<RemovalNotice | null>(() => {
     const trashed = trashedFrom(location.state);
-    return trashed ? { ...trashed, phase: 'moved' } : null;
+    return trashed ? { books: [trashed], phase: 'moved' } : null;
   });
   const [trashCount, setTrashCount] = useState(0);
   const searchId = useId();
@@ -353,7 +231,7 @@ export function LibraryBrowser({
   const [q, setQ] = useState('');
   const [language, setLanguage] = useState('');
   const [format, setFormat] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatusFilter] = useState('');
   const [shelfId, setShelfId] = useState('');
   /** '' any, '1' identified, '0' Unidentified: the server's identified= filter. */
   const [identified, setIdentified] = useState('');
@@ -366,6 +244,13 @@ export function LibraryBrowser({
   const [page, setPage] = useState<LibraryPage | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const anchor = useRef<number | null>(null);
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const [trashing, setTrashing] = useState<LibraryEdition[] | null>(null);
+  const [trashPending, setTrashPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // The notice is shown once: a reload or Back does not bring it again.
   useEffect(() => {
@@ -373,7 +258,7 @@ export function LibraryBrowser({
   }, [location.state, location.pathname, location.search, navigate]);
 
   useEffect(() => {
-    if (role !== 'admin') return;
+    if (!admin) return;
     let active = true;
     void api<TrashListing>('/api/trash').then((result) => {
       if (!active || !result.data) return;
@@ -382,14 +267,18 @@ export function LibraryBrowser({
     return () => {
       active = false;
     };
-  }, [role, generation]);
+  }, [admin, generation]);
 
   async function undoRemoval() {
     if (!removal) return;
     setRemoval({ ...removal, phase: 'undoing' });
-    const result = await api(`/api/editions/${removal.id}/restore`, { method: 'POST' });
-    setRemoval({ ...removal, phase: result.error ? 'failed' : 'restored' });
-    if (!result.error) setGeneration((value) => value + 1);
+    let failed = false;
+    for (const book of removal.books) {
+      const result = await api(`/api/editions/${book.id}/restore`, { method: 'POST' });
+      if (result.error) failed = true;
+    }
+    setRemoval({ ...removal, phase: failed ? 'failed' : 'restored' });
+    setGeneration((value) => value + 1);
   }
 
   useEffect(() => {
@@ -430,20 +319,72 @@ export function LibraryBrowser({
     };
   }, [q, language, format, status, shelfId, identified, offset, generation]);
 
+  // A new page or filter starts a fresh selection.
+  useEffect(() => {
+    setSelected(new Set());
+    anchor.current = null;
+  }, [q, language, format, status, shelfId, identified, offset]);
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
-      if (target instanceof HTMLElement) {
-        const tag = target.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
+      const typing =
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
+      if (event.key === 'Escape' && !typing && !menu && !trashing) {
+        setSelected((current) => (current.size === 0 ? current : new Set()));
+        return;
       }
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey || typing) return;
       event.preventDefault();
       searchRef.current?.focus();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [menu, trashing]);
+
+  /** Applies a reading or shelf change to the shown cards, then refreshes the shelf counts quietly. */
+  const patchCards = useCallback((patches: Map<number, Partial<LibraryEdition>>) => {
+    const apply = (book: LibraryEdition) => (patches.has(book.id) ? { ...book, ...patches.get(book.id) } : book);
+    setPage((current) => (current ? { ...current, editions: current.editions.map(apply) } : current));
+    setHome((current) => (current ? { ...current, recent: current.recent.map(apply) } : current));
+    void api<HomePayload>('/api/home').then((result) => {
+      if (result.data) setHome(result.data);
+    });
   }, []);
+
+  /** Runs one change on each book in turn; failures are reported once, the rest still apply. */
+  async function runOn(books: LibraryEdition[], change: (book: LibraryEdition) => Promise<{ patch: Partial<LibraryEdition> } | { error: string }>) {
+    setBusy(true);
+    setActionError(null);
+    const patches = new Map<number, Partial<LibraryEdition>>();
+    let failure: string | null = null;
+    for (const book of books) {
+      const result = await change(book);
+      if ('error' in result) failure = result.error;
+      else patches.set(book.id, result.patch);
+    }
+    setBusy(false);
+    if (patches.size > 0) patchCards(patches);
+    if (failure) setActionError(failure);
+  }
+
+  async function moveToTrash(books: LibraryEdition[]) {
+    setTrashPending(true);
+    const moved: Array<{ id: number; title: string }> = [];
+    let failure: string | null = null;
+    for (const book of books) {
+      const result = await api(`/api/editions/${book.id}/trash`, { method: 'POST' });
+      if (result.error) failure = result.error;
+      else moved.push({ id: book.id, title: book.title });
+    }
+    setTrashPending(false);
+    setTrashing(null);
+    setSelected(new Set());
+    if (moved.length > 0) setRemoval({ books: moved, phase: 'moved' });
+    if (failure) setActionError(failure);
+    setGeneration((value) => value + 1);
+  }
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
@@ -456,10 +397,61 @@ export function LibraryBrowser({
     setQ('');
     setLanguage('');
     setFormat('');
-    setStatus('');
+    setStatusFilter('');
     setShelfId('');
     setIdentified('');
     setOffset(0);
+  }
+
+  const shelves = page?.shelves ?? home?.shelves ?? [];
+  const editions = page && !pageLoading ? page.editions : [];
+  const selectedBooks = editions.filter((book) => selected.has(book.id));
+
+  function select(book: LibraryEdition, mode: 'toggle' | 'range') {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (mode === 'range' && anchor.current !== null) {
+        const ids = editions.map((item) => item.id);
+        const from = ids.indexOf(anchor.current);
+        const to = ids.indexOf(book.id);
+        if (from >= 0 && to >= 0) {
+          for (const id of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) next.add(id);
+          return next;
+        }
+      }
+      if (next.has(book.id)) next.delete(book.id);
+      else next.add(book.id);
+      anchor.current = book.id;
+      return next;
+    });
+  }
+
+  function handlersFor(book: LibraryEdition): ItemHandlers {
+    return {
+      selected: selected.has(book.id),
+      selecting: selected.size > 0,
+      onSelect: (mode) => select(book, mode),
+      onMenu: (at, returnFocus) => setMenu({ kind: 'book', book, at, returnFocus }),
+    };
+  }
+
+  function bulkMenuItems(kind: 'bulk-status' | 'bulk-shelf'): MenuItem[] {
+    if (kind === 'bulk-status') {
+      return [
+        ...STATUSES.map<MenuItem>((item) => ({
+          kind: 'action',
+          label: t(`reading.${item}`),
+          onSelect: () => void runOn(selectedBooks, (book) => setStatus(book.id, item)),
+        })),
+        { kind: 'separator' },
+        { kind: 'action', label: t('library.menu.clearStatus'), onSelect: () => void runOn(selectedBooks, (book) => setStatus(book.id, null)) },
+      ];
+    }
+    return shelves.map<MenuItem>((shelf) => ({
+      kind: 'action',
+      label: shelf.name,
+      onSelect: () => void runOn(selectedBooks.filter((book) => !book.shelfIds?.includes(shelf.id)), (book) => setOnShelf(book.id, shelf.id, true)),
+    }));
   }
 
   const initialLoading = homeLoading && !home;
@@ -470,17 +462,163 @@ export function LibraryBrowser({
   const first = total === 0 ? 0 : offset + 1;
   const last = offset + (page?.editions.length ?? 0);
   const range = page ? `${first}–${last} ${t('library.of')} ${page.total}` : null;
+  // In a small library the recent row would show the same books again; it appears only when it adds something.
+  const paged = page !== null && page.total > PAGE_LIMIT;
+  const shownIds = new Set(editions.map((book) => book.id));
+  const recentAddsBooks = home !== null && !activeFilters && home.recent.some((book) => !shownIds.has(book.id));
+  const libraryNames = libraries.map((library) => library.name).join(' · ');
+  const allFavorite = selectedBooks.length > 0 && selectedBooks.every((book) => book.favorite);
 
   return (
-    <div className="library-page">
-      <GuideBand
-        editions={page && !pageLoading ? page.editions : []}
-        libraries={libraries}
-        total={page ? page.total : null}
-        shelves={home ? home.shelves.length : null}
-      />
+    <div className="library-page lib-page">
+      <header className="lib-header">
+        <div className="lib-heading">
+          <h1>{t('tabs.library')}</h1>
+          <p className="lib-subtitle">
+            {libraryNames ? <span>{libraryNames}</span> : null}
+            {page ? <span>{fill(t('library.countBooks'), { count: String(page.total) })}</span> : null}
+            {home ? <span>{fill(t('library.countShelves'), { count: String(home.shelves.length) })}</span> : null}
+          </p>
+        </div>
+        <Link className="soft-button soft-button-primary" to="/import">
+          <Plus size={17} strokeWidth={1.75} aria-hidden="true" />
+          {t('home.addBooks')}
+        </Link>
+      </header>
 
-      {page && page.total > 0 && page.index ? (
+      <div className="lib-tools">
+        <form className="lib-search" role="search" onSubmit={submitSearch}>
+          <Search size={18} strokeWidth={1.75} aria-hidden="true" />
+          <label className="visually-hidden" htmlFor={searchId}>
+            {t('library.search')}
+          </label>
+          <input
+            id={searchId}
+            ref={searchRef}
+            type="search"
+            value={draft}
+            placeholder={t('library.searchHint')}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <kbd aria-hidden="true">/</kbd>
+          <button className="visually-hidden" type="submit">
+            {t('library.submit')}
+          </button>
+        </form>
+
+        <div className="lib-filters">
+          {shelves.length > 0 ? (
+            <div className="chip-group" role="group" aria-label={t('library.shelves')}>
+              <FilterChip
+                label={t('library.shelfAny')}
+                active={!shelfId}
+                onClick={() => {
+                  setShelfId('');
+                  setOffset(0);
+                }}
+              >
+                {t('library.allBooks')}
+              </FilterChip>
+              {shelves.map((shelf) => (
+                <FilterChip
+                  key={shelf.id}
+                  label={shelf.name}
+                  active={String(shelf.id) === shelfId}
+                  onClick={() => {
+                    setShelfId(String(shelf.id) === shelfId ? '' : String(shelf.id));
+                    setOffset(0);
+                  }}
+                >
+                  {shelf.name}
+                  <span className="chip-count num">{shelf.count}</span>
+                </FilterChip>
+              ))}
+            </div>
+          ) : null}
+          <div className="lib-selects">
+            <label className={language ? 'chip-select chip-select-on' : 'chip-select'}>
+              <select
+                aria-label={t('library.language')}
+                value={language}
+                onChange={(event) => {
+                  setLanguage(event.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">{t('library.languageAny')}</option>
+                {(page?.languages ?? []).map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={format ? 'chip-select chip-select-on' : 'chip-select'}>
+              <select
+                aria-label={t('library.format')}
+                value={format}
+                onChange={(event) => {
+                  setFormat(event.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">{t('library.formatAny')}</option>
+                <option value="epub">{t('library.formatEpub')}</option>
+                <option value="pdf">{t('library.formatPdf')}</option>
+              </select>
+            </label>
+            <label className={status ? 'chip-select chip-select-on' : 'chip-select'}>
+              <select
+                aria-label={t('library.status')}
+                value={status}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">{t('library.statusAny')}</option>
+                {STATUSES.map((item) => (
+                  <option key={item} value={item}>
+                    {t(`reading.${item}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={identified ? 'chip-select chip-select-on' : 'chip-select'}>
+              <select
+                aria-label={t('library.identifier')}
+                value={identified}
+                onChange={(event) => {
+                  setIdentified(event.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">{t('library.identifierAny')}</option>
+                <option value="1">{t('library.identified')}</option>
+                <option value="0">{t('library.unidentified')}</option>
+              </select>
+            </label>
+            {activeFilters ? (
+              <button type="button" className="chip chip-clear" onClick={clearFilters}>
+                <X size={14} strokeWidth={1.75} aria-hidden="true" />
+                {t('library.clearFilters')}
+              </button>
+            ) : null}
+          </div>
+          <div className="segmented" role="group" aria-label={t('library.results')}>
+            <button type="button" aria-pressed={view === 'grid'} title={t('library.grid')} onClick={() => setView('grid')}>
+              <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span className="visually-hidden">{t('library.grid')}</span>
+            </button>
+            <button type="button" aria-pressed={view === 'list'} title={t('library.list')} onClick={() => setView('list')}>
+              <List size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span className="visually-hidden">{t('library.list')}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {page && paged && page.index ? (
         <ThumbIndex
           index={page.index}
           offset={page.offset}
@@ -491,146 +629,6 @@ export function LibraryBrowser({
           }}
         />
       ) : null}
-
-      <div className="library-toolbar">
-        <h1 className="toolbar-title">{t('home.title')}</h1>
-        <Link className="btn btn-primary" to="/import">
-          <Plus size={15} strokeWidth={1.5} aria-hidden="true" />
-          {t('home.addBooks')}
-        </Link>
-        <form className="search-form" role="search" onSubmit={submitSearch}>
-          <div className="search-field">
-            <Search size={15} strokeWidth={1.5} aria-hidden="true" />
-            <label className="visually-hidden" htmlFor={searchId}>
-              {t('library.search')}
-            </label>
-            <input
-              id={searchId}
-              ref={searchRef}
-              type="search"
-              value={draft}
-              placeholder={t('library.searchHint')}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <kbd aria-hidden="true">/</kbd>
-          </div>
-          <button className="btn" type="submit">
-            {t('library.submit')}
-          </button>
-        </form>
-
-        <div className="filter-bar">
-          <span className="toolbar-label">{t('library.filters')}</span>
-          <label className="filter-field">
-            <span className="visually-hidden">{t('library.language')}</span>
-            <select
-              value={language}
-              onChange={(event) => {
-                setLanguage(event.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">{t('library.languageAny')}</option>
-              {(page?.languages ?? []).map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-field">
-            <span className="visually-hidden">{t('library.format')}</span>
-            <select
-              value={format}
-              onChange={(event) => {
-                setFormat(event.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">{t('library.formatAny')}</option>
-              <option value="epub">{t('library.formatEpub')}</option>
-              <option value="pdf">{t('library.formatPdf')}</option>
-            </select>
-          </label>
-          <label className="filter-field">
-            <span className="visually-hidden">{t('library.status')}</span>
-            <select
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">{t('library.statusAny')}</option>
-              {STATUSES.map((item) => (
-                <option key={item} value={item}>
-                  {t(`reading.${item}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-field">
-            <span className="visually-hidden">{t('library.shelf')}</span>
-            <select
-              value={shelfId}
-              onChange={(event) => {
-                setShelfId(event.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">{t('library.shelfAny')}</option>
-              {(page?.shelves ?? home?.shelves ?? []).map((shelf) => (
-                <option key={shelf.id} value={shelf.id}>
-                  {shelf.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-field">
-            <span className="visually-hidden">{t('library.identifier')}</span>
-            <select
-              value={identified}
-              onChange={(event) => {
-                setIdentified(event.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">{t('library.identifierAny')}</option>
-              <option value="1">{t('library.identified')}</option>
-              <option value="0">{t('library.unidentified')}</option>
-            </select>
-          </label>
-          {activeFilters ? (
-            <button type="button" className="btn btn-ghost btn-sm clear-filters" onClick={clearFilters}>
-              <X size={14} strokeWidth={1.5} aria-hidden="true" />
-              {t('library.clearFilters')}
-            </button>
-          ) : null}
-        </div>
-
-        <div className="view-switch" role="group" aria-label={t('library.results')}>
-          <button
-            type="button"
-            className="view-button"
-            aria-pressed={view === 'grid'}
-            title={t('library.grid')}
-            onClick={() => setView('grid')}
-          >
-            <LayoutGrid size={15} strokeWidth={1.5} aria-hidden="true" />
-            <span className="visually-hidden">{t('library.grid')}</span>
-          </button>
-          <button
-            type="button"
-            className="view-button"
-            aria-pressed={view === 'list'}
-            title={t('library.list')}
-            onClick={() => setView('list')}
-          >
-            <List size={15} strokeWidth={1.5} aria-hidden="true" />
-            <span className="visually-hidden">{t('library.list')}</span>
-          </button>
-        </div>
-      </div>
 
       {removal ? <RemovalBand notice={removal} onUndo={() => void undoRemoval()} /> : null}
 
@@ -644,195 +642,190 @@ export function LibraryBrowser({
           }}
         />
       ) : null}
+      {actionError ? <ErrorNotice message={errorText(t, actionError)} /> : null}
 
       {initialLoading ? <SkeletonGrid count={7} /> : null}
 
-      {home ? (
-        <>
-          <section className="entry" aria-labelledby="continue-heading">
-            <div className="entry-head">
-              <h2 id="continue-heading">{t('library.continue')}</h2>
-              <p className="entry-meta">
-                {t('home.inProgress')} · <span className="num">{home.continueReading.length}</span>
-              </p>
-            </div>
-            <div className="entry-body">
-              {home.continueReading.length === 0 ? (
-                <EmptyState
-                  compact
-                  title={t('library.continueEmpty')}
-                  action={
-                    <Link className="btn btn-sm" to="/import">
-                      <Plus size={14} strokeWidth={1.5} aria-hidden="true" />
-                      {t('home.addBooks')}
-                    </Link>
-                  }
-                />
-              ) : (
-                <ul className="continue-list">
-                  {home.continueReading.map((book) => (
-                    <ContinueItem key={book.id} book={book} />
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
-
-          <section className="entry" aria-labelledby="recent-heading">
-            <div className="entry-head">
-              <h2 id="recent-heading">{t('library.recent')}</h2>
-              <p className="entry-meta">
-                {t('home.books')} · <span className="num">{home.recent.length}</span>
-              </p>
-            </div>
-            <div className="entry-body">
-              {home.recent.length === 0 ? (
-                <EmptyState compact title={t('library.recentEmpty')} />
-              ) : (
-                <ul className="plate-grid plate-grid-recent">
-                  {home.recent.map((book) => (
-                    <BookCard key={book.id} book={book} />
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
-        </>
+      {home && recentAddsBooks ? (
+        <section className="lib-section" aria-labelledby="recent-heading">
+          <div className="section-head">
+            <h2 id="recent-heading">{t('library.recent')}</h2>
+          </div>
+          <ul className="book-shelf">
+            {home.recent.map((book) => (
+              <li key={book.id}>
+                <Link className="book-shelf-book" to={`/books/${book.id}`}>
+                  <BookObject book={book} size="shelf" />
+                  <span className="book-shelf-title">{book.title}</span>
+                  {book.authors.length > 0 ? <span className="book-shelf-authors">{book.authors.join(', ')}</span> : null}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
-      <section className="entry catalogue-entry" aria-labelledby="browse-heading" ref={catalogueRef}>
-        <div className="entry-head">
+      <section className="lib-section catalogue-entry" aria-labelledby="browse-heading" ref={catalogueRef}>
+        <div className="section-head">
           <h2 id="browse-heading" ref={catalogueHeadingRef} tabIndex={-1}>
             {t('library.catalogue')}
           </h2>
-          {range ? <p className="entry-meta num">{range}</p> : null}
-          {home ? (
-            <div className="shelf-index">
-              <h3>{t('library.shelves')}</h3>
-              {home.shelves.length === 0 ? (
-                <p className="entry-meta">{t('library.shelvesEmpty')}</p>
-              ) : (
-                <ul className="shelf-list">
-                  {home.shelves.map((shelf) => {
-                    const on = String(shelf.id) === shelfId;
-                    return (
-                      <li key={shelf.id}>
-                        <button
-                          type="button"
-                          className={on ? 'shelf-button shelf-button-active' : 'shelf-button'}
-                          aria-label={shelf.name}
-                          aria-pressed={on}
-                          onClick={() => {
-                            setShelfId(String(shelf.id));
-                            setOffset(0);
-                          }}
-                        >
-                          <span className="shelf-name">{shelf.name}</span>
-                          <span className="shelf-count num">{shelf.count}</span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          ) : null}
+          {range ? <p className="section-meta num">{range}</p> : null}
         </div>
 
-        <div className="entry-body">
-          {showPageLoading ? <SkeletonGrid count={7} /> : null}
-          {page && !pageLoading && page.editions.length === 0 ? (
+        {showPageLoading ? <SkeletonGrid count={7} /> : null}
+        {page && !pageLoading && page.editions.length === 0 ? (
+          <div className="lib-empty">
             <EmptyState
               title={t('library.empty')}
               description={activeFilters ? t('library.searchHint') : undefined}
               action={
                 activeFilters ? (
-                  <button type="button" className="btn btn-sm" onClick={clearFilters}>
+                  <button type="button" className="soft-button soft-button-quiet" onClick={clearFilters}>
                     {t('library.clearFilters')}
                   </button>
                 ) : null
               }
             />
-          ) : null}
-          {page && !pageLoading && page.editions.length > 0 ? (
-            view === 'grid' ? (
-              <ul className="plate-grid" aria-label={t('library.results')}>
-                {page.editions.map((book) => (
-                  <BookCard key={book.id} book={book} />
-                ))}
-              </ul>
-            ) : (
-              <ul className="book-table" aria-label={t('library.results')}>
-                {page.editions.map((book) => (
-                  <li key={book.id} className="book-row">
-                    <Link className="book-row-cover" to={`/books/${book.id}`} tabIndex={-1} aria-hidden="true">
-                      <CoverArt
-                        editionId={book.id}
-                        title={book.title}
-                        author={book.authors[0]}
-                        hasCover={book.hasCover}
-                        variant="thumb"
-                      />
-                    </Link>
-                    <div className="book-row-main">
-                      <Link className="book-row-title" to={`/books/${book.id}`}>
-                        {book.title}
-                      </Link>
-                      {book.authors.length > 0 ? (
-                        <span className="book-row-author">{book.authors.join(', ')}</span>
-                      ) : null}
-                    </div>
-                    <span className="book-row-lang">{book.language ?? ''}</span>
-                    <span className="book-row-formats">
-                      <Formats formats={book.formats} />
-                    </span>
-                    <span className="book-row-status">
-                      {book.status ? <StatusMark status={book.status} /> : null}
-                      {book.identified === false ? <UnidentifiedMark /> : null}
-                    </span>
-                    <span className="book-row-rating">{book.rating ? <Rating rating={book.rating} /> : null}</span>
-                  </li>
-                ))}
-              </ul>
-            )
-          ) : null}
+          </div>
+        ) : null}
+        {editions.length > 0 ? (
+          view === 'grid' ? (
+            <ul className="lib-grid" aria-label={t('library.results')}>
+              {editions.map((book) => (
+                <LibraryCard key={book.id} book={book} handlers={handlersFor(book)} />
+              ))}
+            </ul>
+          ) : (
+            <ul className="lib-list" aria-label={t('library.results')}>
+              {editions.map((book) => (
+                <LibraryRow key={book.id} book={book} handlers={handlersFor(book)} />
+              ))}
+            </ul>
+          )
+        ) : null}
 
-          {page && !pageLoading && (offset > 0 || offset + page.editions.length < page.total) ? (
-            <div className="pagination">
-              <span className="pagination-copy num">{range}</span>
-              <div className="pagination-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={offset === 0}
-                  onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
-                >
-                  <ChevronLeft size={15} strokeWidth={1.5} aria-hidden="true" />
-                  {t('library.previous')}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={offset + page.editions.length >= page.total}
-                  onClick={() => setOffset(offset + PAGE_LIMIT)}
-                >
-                  {t('library.next')}
-                  <ChevronRight size={15} strokeWidth={1.5} aria-hidden="true" />
-                </button>
-              </div>
+        {page && !pageLoading && (offset > 0 || offset + page.editions.length < page.total) ? (
+          <div className="pagination">
+            <span className="pagination-copy num">{range}</span>
+            <div className="pagination-actions">
+              <button
+                type="button"
+                className="soft-button soft-button-quiet"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+              >
+                <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+                {t('library.previous')}
+              </button>
+              <button
+                type="button"
+                className="soft-button soft-button-quiet"
+                disabled={offset + page.editions.length >= page.total}
+                onClick={() => setOffset(offset + PAGE_LIMIT)}
+              >
+                {t('library.next')}
+                <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+              </button>
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </section>
 
       <CatalogHome />
 
-      {role === 'admin' && trashCount > 0 ? (
+      {admin && trashCount > 0 ? (
         <p className="trash-link-row">
           <Link className="text-link" to="/trash">
             {t('trash.link')} · <span className="num">{trashCount}</span>
           </Link>
         </p>
+      ) : null}
+
+      {selectedBooks.length > 0 ? (
+        <div className="selection-bar" role="toolbar" aria-label={t('library.selection')} aria-busy={busy || undefined}>
+          <span className="selection-count" aria-live="polite">
+            {fill(t('library.selectedCount'), { count: String(selectedBooks.length) })}
+          </span>
+          <button
+            type="button"
+            aria-haspopup="menu"
+            disabled={busy}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setMenu({ kind: 'bulk-status', at: { x: rect.left, y: rect.top - 8 }, returnFocus: event.currentTarget });
+            }}
+          >
+            {t('library.status')}
+          </button>
+          {shelves.length > 0 ? (
+            <button
+              type="button"
+              aria-haspopup="menu"
+              disabled={busy}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenu({ kind: 'bulk-shelf', at: { x: rect.left, y: rect.top - 8 }, returnFocus: event.currentTarget });
+              }}
+            >
+              {t('library.menu.addToShelf')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void runOn(selectedBooks, (book) => setFavorite(book.id, !allFavorite))}
+          >
+            <Heart size={15} strokeWidth={1.75} fill={allFavorite ? 'currentColor' : 'none'} aria-hidden="true" />
+            {allFavorite ? t('library.menu.unfavorite') : t('reading.favorite')}
+          </button>
+          {admin ? (
+            <button type="button" className="selection-danger" disabled={busy} onClick={() => setTrashing(selectedBooks)}>
+              <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
+              {t('trash.removeAction')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="selection-close"
+            aria-label={t('library.clearSelection')}
+            title={t('library.clearSelection')}
+            onClick={() => setSelected(new Set())}
+          >
+            <X size={16} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+
+      {menu ? (
+        <Menu
+          label={menu.kind === 'book' ? menu.book.title : menu.kind === 'bulk-status' ? t('library.status') : t('library.menu.addToShelf')}
+          items={
+            menu.kind === 'book'
+              ? bookMenuItems(menu.book, { t, admin, shelves, run: (book, change) => void runOn([book], change), onTrash: (book) => setTrashing([book]) })
+              : bulkMenuItems(menu.kind)
+          }
+          at={menu.at}
+          returnFocus={menu.returnFocus}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
+
+      {trashing ? (
+        <ConfirmDialog
+          title={t('trash.removeTitle')}
+          text={
+            trashing.length === 1
+              ? fill(t('trash.removeConfirm'), { title: trashing[0]!.title })
+              : fill(t('trash.removeManyConfirm'), { count: String(trashing.length) })
+          }
+          action={t('trash.removeAction')}
+          cancel={t('trash.cancel')}
+          pending={trashPending}
+          dismissOnBackdrop
+          onConfirm={() => void moveToTrash(trashing)}
+          onCancel={() => setTrashing(null)}
+        />
       ) : null}
     </div>
   );

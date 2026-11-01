@@ -15,6 +15,7 @@ import {
   saveCoverRow,
 } from './edition-fields.js';
 import { editions, fileAssets, libraries } from './schema.js';
+import { sortKey } from './sort-key.js';
 import { resolveInsideRoot } from './library-files.js';
 import type { BookMetadata } from './metadata.js';
 import { normalizeIdentifierList } from './identifiers.js';
@@ -101,7 +102,10 @@ function applyEmbedded(
   const nextTitle = cleanTitle(metadata.title);
   if (nextTitle && !locks.has('title') && nextTitle !== edition.title) {
     values.title = nextTitle;
-    if (!locks.has('sort_title') && edition.sortTitle === edition.title) values.sortTitle = nextTitle;
+    if (!locks.has('sort_title') && edition.sortTitle === edition.title) {
+      values.sortTitle = nextTitle;
+      values.sortKey = sortKey(nextTitle);
+    }
     changed = true;
   }
   const nextLanguage = cleanLanguage(metadata.language);

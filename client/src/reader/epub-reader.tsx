@@ -210,7 +210,14 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
         if (ticket !== generationRef.current) return;
         const result = await api<{ position: { locator: string; revision: number } }>(
           `/api/editions/${editionId}/reading-place`,
-          { method: 'PUT', body: { locator, assetId, revision: revisionRef.current } },
+          {
+            method: 'PUT',
+            body: (() => {
+              const fraction = sessionRef.current?.progress() ?? null;
+              const body = { locator, assetId, revision: revisionRef.current };
+              return fraction == null ? body : { ...body, progress: { fraction } };
+            })(),
+          },
         );
         if (!alive || ticket !== generationRef.current) return;
         if (result.status === 409) {
@@ -466,7 +473,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
             <span className="visually-hidden">{t('reader.backToBook')}</span>
           </Link>
           <h1 className="reader-title">{title}</h1>
-          <Link className="reader-library-link" to="/" title={t('reader.library')}>
+          <Link className="reader-library-link" to="/library" title={t('reader.library')}>
             <Library size={18} aria-hidden="true" />
             <span className="visually-hidden">{t('reader.library')}</span>
           </Link>

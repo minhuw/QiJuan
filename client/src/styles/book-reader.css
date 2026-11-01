@@ -251,20 +251,79 @@
   text-align: center;
 }
 
-.reader-zoom-controls {
+/* Zoom sits on the toolbar: − 100% + then the two fit modes. */
+.reader-zoom-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
+  gap: 0.1rem;
 }
 
 .reader-zoom-label {
-  display: block;
-  min-width: 3.4rem;
-  color: var(--ink-muted);
+  min-width: 3.2rem;
+  min-height: 2rem;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
   font-size: var(--text-small);
   font-variant-numeric: tabular-nums;
   text-align: center;
+  cursor: pointer;
+}
+
+.reader-zoom-label:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.reader-tool-rule {
+  align-self: stretch;
+  width: 0;
+  margin: 0.45rem 0.3rem;
+  border-left: var(--rule-hair) solid var(--hairline);
+}
+
+/* Area tool: a crosshair, no text selection, and a hairline box while dragging. */
+.pdf-area-mode .pdf-page {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.pdf-area-mode .textLayer {
+  pointer-events: none;
+  user-select: none;
+}
+
+.pdf-area-draft {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid var(--ink);
+  background: rgb(250 207 64 / 22%);
+  pointer-events: none;
+}
+
+.pdf-area-pending {
+  outline: 1px dashed var(--ink);
+  background: rgb(250 207 64 / 22%);
+}
+
+.notice .link-button {
+  margin-left: 0.4rem;
+}
+
+.reader-ocr-note {
+  margin-left: 0.4rem;
+  font-style: italic;
+}
+
+.reader-scan-hint .link-button {
+  margin-left: 0.2rem;
+}
+
+.reader-scan-hint .reader-tool {
+  margin-left: auto;
 }
 
 .reader-layout {
@@ -514,6 +573,15 @@
   white-space: pre;
   cursor: text;
   transform-origin: 0 0;
+}
+
+/* The text layer stays invisible when selected: only a translucent tint over the page image
+   shows, so a selection on a scan looks like one on the printed page. The app-wide ::selection
+   would paint the hidden OCR glyphs in ink on an opaque band. */
+.textLayer ::selection,
+.textLayer::selection {
+  background: rgb(66 110 200 / 24%);
+  color: transparent;
 }
 
 .pdf-thumbs {
@@ -783,7 +851,25 @@
   }
 
   .reader-main-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 0;
+  }
+
+  /* Phone: the toolbar wraps, so zoom keeps every control on a row of its own. */
+  .reader-toolbar {
+    flex: none;
+    flex-wrap: wrap;
+  }
+
+  .reader-zoom-bar {
+    order: 1;
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+
+  .reader-tool-rule {
+    display: none;
   }
 
   .reader-layout {

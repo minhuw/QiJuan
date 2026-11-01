@@ -31,6 +31,8 @@ export interface RenderPageInput {
   page: number;
   zoom: PdfPlace['zoom'];
   containerWidth: number;
+  /** Needed by fit-page only. */
+  containerHeight?: number;
   canvas: HTMLCanvasElement;
   textLayer: HTMLElement;
 }
@@ -47,7 +49,7 @@ export interface PdfSession {
   readonly thumbnailPages: number[];
   searchable(): Promise<boolean>;
   pageBox(page: number): Promise<PdfPageBox>;
-  pageSize(page: number, zoom: PdfPlace['zoom'], containerWidth: number): Promise<PdfPageSize>;
+  pageSize(page: number, zoom: PdfPlace['zoom'], containerWidth: number, containerHeight?: number): Promise<PdfPageSize>;
   /** Each canvas has its own render lifetime, allowing adjacent pages to paint together. */
   renderPage(input: RenderPageInput): Promise<RenderedPage | null>;
   /** Cancel a detached page's work and release its canvas and text-layer references. */

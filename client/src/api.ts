@@ -189,6 +189,10 @@ export interface LibraryEdition {
   favorite: boolean;
   /** False for an Unidentified edition. Older servers omit it. */
   identified?: boolean;
+  /** The file Read opens; null without a live file. */
+  readAssetId?: number | null;
+  /** This user's shelves that hold the edition. */
+  shelfIds?: number[];
 }
 
 export interface LibraryShelf {
@@ -197,8 +201,17 @@ export interface LibraryShelf {
   count: number;
 }
 
+/** A book in progress: the file last read, and how far in (null until a reader reports it). */
+export interface ContinueBook extends LibraryEdition {
+  updatedAt: string;
+  assetId?: number | null;
+  /** The cover's band colours, by day and by night; null without a clear hue. */
+  coverTint?: { light: string; dark: string } | null;
+  progress?: { fraction: number; page: number | null; pageCount: number | null } | null;
+}
+
 export interface HomePayload {
-  continueReading: Array<LibraryEdition & { updatedAt: string }>;
+  continueReading: Array<ContinueBook>;
   recent: LibraryEdition[];
   shelves: LibraryShelf[];
 }
@@ -247,8 +260,20 @@ export interface EditionAsset {
   originalFilename: string;
   /** Author - Title (Year).ext, computed by the server from current metadata. */
   displayFilename: string;
+  /** PDFs: text recognition, when it was ever requested. */
+  ocr?: AssetOcr | null;
   bytes: number;
   availability: 'present' | 'missing';
+}
+
+export interface AssetOcr {
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  /** A recognized copy is in use by the reader; can stay true while a new run is queued. */
+  ready: boolean;
+  error: string | null;
+  requestedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 export interface EditionIdentifier {

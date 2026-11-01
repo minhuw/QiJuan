@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type MutableRefObject, type RefObject } from 'react';
 import { PageStream } from './layout';
-import { parsePdfSelection, type PdfAnnotationMark, type PdfTextSelection } from './annotations';
+import { formatPdfSelection, parsePdfSelection, type PdfAnnotationMark, type PdfTextSelection } from './annotations';
+import { cleanCopiedText } from './copy-text';
 import { readPdfSelection, selectedPages, transformRect } from './selection';
 import type { PdfPageSize, PdfPlace, PdfSession, RenderedPage } from './types';
 
@@ -17,9 +18,27 @@ export interface PdfViewportProps {
   annotations?: readonly PdfAnnotationMark[];
   onSelection?: (selection: PdfTextSelection | null) => void;
   onSelectionTooLarge?: () => void;
+  /** While on, a drag on a page draws a rectangle instead of selecting text or scrolling. */
+  areaMode?: boolean;
+  /** A finished area: one rectangle on one page, with no quote. */
+  onArea?: (selection: PdfTextSelection) => void;
+  /** A drag across a painted page that has no text to select, while the area tool is off. */
+  onTextlessDrag?: () => void;
+  /** Filled while mounted: hit-testing and the live pinch preview. */
+  handleRef?: MutableRefObject<PdfViewportHandle | null>;
 }
 
-type Callbacks = Pick<PdfViewportProps, 'onPosition' | 'onRendered' | 'onReflow' | 'onError' | 'annotations' | 'onSelection' | 'onSelectionTooLarge'>;
+export interface PdfViewportHandle {
+  /** The PDF point under a client coordinate, on the nearest painted page. */
+  pointAt(clientX: number, clientY: number): { page: number; x: number; y: number } | null;
+  /** Scales the painted pages around a client point until the next paint replaces them. */
+  preview(factor: number, clientX: number, clientY: number): void;
+}
+
+/** The smallest area, in CSS pixels on each side, that counts as a deliberate drag. */
+export const AREA_MIN_PX = 6;
+
+type Callbacks = Pick<PdfViewportProps, 'onPosition' | 'onRendered' | 'onReflow' | 'onError' | 'annotations' | 'onSelection' | 'onSelectionTooLarge' | 'areaMode' | 'onArea' | 'onTextlessDrag'>;
 interface GeometryCache {
   session: PdfSession;
   zoom: PdfPlace['zoom'];
@@ -52,8 +71,11 @@ export function PdfViewport(props: PdfViewportProps) {
     if (!root || !session || !place || session.pageCount < 1) return;
     const mounted = mountViewport(root, session, place, flow, latest.current.enterAtBottom ?? false, latest, geometry);
     controller.current = mounted;
+    const handle = latest.current.handleRef;
+    if (handle) handle.current = mounted.handle;
     return () => {
       controller.current = null;
+      if (handle && handle.current === mounted.handle) handle.current = null;
       mounted.destroy();
     };
   }, [session, place, flow, scrollerRef]);
@@ -61,6 +83,10 @@ export function PdfViewport(props: PdfViewportProps) {
   useLayoutEffect(() => {
     controller.current?.refreshAnnotations();
   }, [props.annotations]);
+
+  useLayoutEffect(() => {
+    scrollerRef.current?.classList.toggle('pdf-area-mode', props.areaMode === true);
+  }, [props.areaMode, scrollerRef, session, place]);
 
   return <div ref={scrollerRef} className="pdf-scroller" style={{ overflowAnchor: 'none' }} />;
 }
@@ -113,7 +139,7 @@ function mountViewport(
             const bottom = Math.min(rendered.cssHeight, projected[3]);
             if (right <= left || bottom <= top) continue;
             const fragment = document.createElement('div');
-            fragment.className = mark.kind === 'note' ? 'pdf-note-rect' : 'pdf-highlight-rect';
+            fragment.className = mark.kind === 'note' ? 'pdf-note-rect' : mark.kind === 'pending' ? 'pdf-area-pending' : 'pdf-highlight-rect';
             fragment.dataset.annotationId = mark.id;
             Object.assign(fragment.style, { position: 'absolute', left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
             fragments.append(fragment);
@@ -162,6 +188,25 @@ function mountViewport(
   function pageLeft(page: number) {
     // Paginated mode retains the original reader's page-local scroll coordinates.
     return continuous ? Math.max(0, (layout.width(width) - layout.size(page).cssWidth) / 2) : 0;
+  }
+
+  /** Where a page shell sits horizontally in the stream (paginated pages are centred). */
+  function shellLeft(page: number) {
+    return continuous ? pageLeft(page) : Math.max(0, (width - layout.size(page).cssWidth) / 2);
+  }
+
+  /** The scroll position a pending command asks for, once its page has a transform. */
+  function pendingScroll(target: NonNullable<typeof pending>, rendered: RenderedPage | undefined) {
+    const page = target.place.page;
+    const focus = target.place.focus;
+    if (focus && rendered && !target.bottom) {
+      const point = rendered.toViewport(focus.x, focus.y);
+      return { top: pageTop(page) + point.y - focus.py, left: shellLeft(page) + point.x - focus.px };
+    }
+    const point = target.bottom && rendered
+      ? { x: 0, y: Math.max(0, rendered.cssHeight - height) }
+      : target.viewport ?? rendered?.toViewport(target.place.x, target.place.y);
+    return { top: pageTop(page) + (point?.y ?? 0), left: pageLeft(page) + (point?.x ?? 0) };
   }
 
   function visiblePage() {
@@ -229,10 +274,8 @@ function mountViewport(
     layout.sizes.set(page, size);
     arrange();
     if (pending) {
-      const target = pending.place;
-      const rendered = pages.get(target.page)?.rendered;
-      const point = pending.viewport ?? rendered?.toViewport(target.x, target.y);
-      writeScroll(pageTop(target.page) + (point?.y ?? 0), pageLeft(target.page) + (point?.x ?? 0));
+      const target = pendingScroll(pending, pages.get(pending.place.page)?.rendered);
+      writeScroll(target.top, target.left);
     } else {
       positionAnchor(anchor);
     }
@@ -253,10 +296,8 @@ function mountViewport(
     const page = restore.place.page;
     const rendered = pages.get(page)?.rendered;
     if (!rendered) return;
-    const point = restore.bottom
-      ? { x: 0, y: Math.max(0, rendered.cssHeight - height) }
-      : restore.viewport ?? rendered.toViewport(restore.place.x, restore.place.y);
-    writeScroll(pageTop(page) + point.y, pageLeft(page) + point.x);
+    const target = pendingScroll(restore, rendered);
+    writeScroll(target.top, target.left);
     const actual = readPosition();
     // At the end of a short final page, native clamping can leave the viewport
     // starting on its predecessor. Wait for that page's transform as well.
@@ -309,11 +350,11 @@ function mountViewport(
       const current = () => alive && generation === ticket && pages.get(page) === entry;
       void (async () => {
         try {
-          const size = await session.pageSize(page, request.zoom, width);
+          const size = await session.pageSize(page, request.zoom, width, height);
           if (!current()) return;
           recordSize(page, size);
           if (!current()) return;
-          const rendered = await session.renderPage({ page, zoom: request.zoom, containerWidth: width, canvas, textLayer: text });
+          const rendered = await session.renderPage({ page, zoom: request.zoom, containerWidth: width, containerHeight: height, canvas, textLayer: text });
           if (!current() || !rendered) return;
           // Keep the old transform while capturing an anchor if paint and measurement
           // disagree. The session normally supplies exactly the same viewport for both.
@@ -347,7 +388,9 @@ function mountViewport(
       for (const [page, size] of previous.sizes) {
         const scale = request.zoom === 'width'
           ? width / size.cssWidth
-          : typeof previous.zoom === 'number' ? request.zoom / previous.zoom : request.zoom / size.scale;
+          : request.zoom === 'page'
+            ? Math.min(width / size.cssWidth, height / size.cssHeight)
+            : typeof previous.zoom === 'number' ? request.zoom / previous.zoom : request.zoom / size.scale;
         sizes.set(page, {
           cssWidth: size.cssWidth * scale,
           cssHeight: size.cssHeight * scale,
@@ -355,7 +398,7 @@ function mountViewport(
         });
       }
     }
-    const scale = request.zoom === 'width' ? width / 612 : request.zoom;
+    const scale = request.zoom === 'width' ? width / 612 : request.zoom === 'page' ? Math.min(width / 612, height / 792) : request.zoom;
     layout = new PageStream(session.pageCount, sizes.values().next().value ?? { cssWidth: 612 * scale, cssHeight: 792 * scale, scale }, sizes);
     cache.current = { session, zoom: request.zoom, sizes };
     pending = { place, bottom: bottom && !continuous, notify, viewport };
@@ -376,8 +419,146 @@ function mountViewport(
     reportNativePosition();
   }
 
+  // Area highlights: a drag on one page draws a rectangle in that page's CSS space.
+  let drag: { pointerId: number; page: number; entry: PaintedPage; x: number; y: number; box: HTMLDivElement } | null = null;
+
+  function localPoint(entry: PaintedPage, clientX: number, clientY: number) {
+    const rect = entry.shell.getBoundingClientRect();
+    const rendered = entry.rendered!;
+    return {
+      x: Math.max(0, Math.min(rendered.cssWidth, clientX - rect.left)),
+      y: Math.max(0, Math.min(rendered.cssHeight, clientY - rect.top)),
+    };
+  }
+
+  function drawDrag(clientX: number, clientY: number) {
+    if (!drag) return;
+    const point = localPoint(drag.entry, clientX, clientY);
+    Object.assign(drag.box.style, {
+      left: `${Math.min(drag.x, point.x)}px`,
+      top: `${Math.min(drag.y, point.y)}px`,
+      width: `${Math.abs(point.x - drag.x)}px`,
+      height: `${Math.abs(point.y - drag.y)}px`,
+    });
+  }
+
+  function cancelDrag() {
+    drag?.box.remove();
+    drag = null;
+  }
+
+  let textless: { pointerId: number; x: number; y: number } | null = null;
+
+  function onPointerDown(event: PointerEvent) {
+    textless = null;
+    if (event.button !== 0) return;
+    if (!callbacks.current.areaMode) {
+      const shell = (event.target as Element | null)?.closest?.('.pdf-page') as HTMLDivElement | null;
+      const entry = pages.get(Number(shell?.dataset.page));
+      // A scanned page paints no text spans; a drag there selects nothing.
+      if (entry?.rendered && entry.shell === shell && !entry.text.querySelector('span')) {
+        textless = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      }
+      return;
+    }
+    const shell = (event.target as Element | null)?.closest?.('.pdf-page') as HTMLDivElement | null;
+    const page = Number(shell?.dataset.page);
+    const entry = pages.get(page);
+    if (!shell || !entry?.rendered || entry.shell !== shell) return;
+    event.preventDefault();
+    cancelDrag();
+    const start = localPoint(entry, event.clientX, event.clientY);
+    const box = document.createElement('div');
+    box.className = 'pdf-area-draft';
+    box.setAttribute('aria-hidden', 'true');
+    shell.append(box);
+    drag = { pointerId: event.pointerId, page, entry, x: start.x, y: start.y, box };
+    drawDrag(event.clientX, event.clientY);
+    try {
+      root.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Capture is a convenience; the document-level listeners still finish the drag.
+    }
+  }
+
+  function onPointerMove(event: PointerEvent) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    event.preventDefault();
+    drawDrag(event.clientX, event.clientY);
+  }
+
+  function onPointerUp(event: PointerEvent) {
+    if (textless && event.pointerId === textless.pointerId) {
+      const moved = Math.abs(event.clientX - textless.x) + Math.abs(event.clientY - textless.y);
+      textless = null;
+      if (moved > 24 && event.pointerType === 'mouse') callbacks.current.onTextlessDrag?.();
+      return;
+    }
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const { entry, page, box } = drag;
+    const end = localPoint(entry, event.clientX, event.clientY);
+    const left = Math.min(drag.x, end.x);
+    const top = Math.min(drag.y, end.y);
+    const right = Math.max(drag.x, end.x);
+    const bottom = Math.max(drag.y, end.y);
+    const anchor = box.getBoundingClientRect();
+    cancelDrag();
+    const rendered = entry.rendered;
+    if (!rendered || pages.get(page) !== entry || right - left < AREA_MIN_PX || bottom - top < AREA_MIN_PX) return;
+    const locator = formatPdfSelection({ pages: [{ page, rects: [transformRect([left, top, right, bottom], rendered.toPdf)] }] });
+    if (!locator) return;
+    callbacks.current.onArea?.({
+      locator,
+      quote: '',
+      anchor: { left: anchor.left, top: anchor.top, width: anchor.width, height: anchor.height },
+    });
+  }
+
+  function onAreaKey(event: KeyboardEvent) {
+    if (event.key === 'Escape' && drag) cancelDrag();
+  }
+
+  const handle: PdfViewportHandle = {
+    pointAt(clientX, clientY) {
+      let best: { page: number; x: number; y: number; distance: number } | null = null;
+      for (const [page, entry] of pages) {
+        if (!entry.rendered) continue;
+        const rect = entry.shell.getBoundingClientRect();
+        const dx = clientX < rect.left ? rect.left - clientX : clientX > rect.right ? clientX - rect.right : 0;
+        const dy = clientY < rect.top ? rect.top - clientY : clientY > rect.bottom ? clientY - rect.bottom : 0;
+        const distance = dx + dy;
+        if (best && best.distance <= distance) continue;
+        const local = localPoint(entry, clientX, clientY);
+        best = { page, ...entry.rendered.toPdf(local.x, local.y), distance };
+      }
+      return best ? { page: best.page, x: best.x, y: best.y } : null;
+    },
+    preview(factor, clientX, clientY) {
+      const rect = root.getBoundingClientRect();
+      stream.style.transformOrigin = `${clientX - rect.left + root.scrollLeft}px ${clientY - rect.top + root.scrollTop}px`;
+      stream.style.transform = factor === 1 ? '' : `scale(${factor})`;
+    },
+  };
+
+  // A copy from the text layer would carry its positioned, transparent spans as HTML.
+  // Put clean plain text on the clipboard instead.
+  function onCopy(event: ClipboardEvent) {
+    const selection = root.ownerDocument.getSelection();
+    if (!event.clipboardData || !selection || selection.isCollapsed || selectedPages(root, selection, pages).length === 0) return;
+    const text = cleanCopiedText(selection.toString());
+    if (!text) return;
+    event.clipboardData.setData('text/plain', text);
+    event.preventDefault();
+  }
+
+  root.addEventListener('pointerdown', onPointerDown);
+  root.addEventListener('pointermove', onPointerMove);
+  root.addEventListener('pointerup', onPointerUp);
+  root.addEventListener('pointercancel', cancelDrag);
   root.addEventListener('scroll', onScroll, { passive: true });
   const owner = root.ownerDocument;
+  owner.addEventListener('keydown', onAreaKey);
+  owner.addEventListener('copy', onCopy);
   owner.addEventListener('selectionchange', scheduleSelection);
   owner.addEventListener('pointerup', scheduleSelection);
   owner.addEventListener('keyup', scheduleSelection);
@@ -403,9 +584,16 @@ function mountViewport(
   });
   observer?.observe(root);
 
-  return { refreshAnnotations, destroy: () => {
+  return { refreshAnnotations, handle, destroy: () => {
     alive = false;
+    cancelDrag();
     clearSelection();
+    root.removeEventListener('pointerdown', onPointerDown);
+    root.removeEventListener('pointermove', onPointerMove);
+    root.removeEventListener('pointerup', onPointerUp);
+    root.removeEventListener('pointercancel', cancelDrag);
+    owner.removeEventListener('keydown', onAreaKey);
+    owner.removeEventListener('copy', onCopy);
     generation += 1;
     observer?.disconnect();
     root.removeEventListener('scroll', onScroll);

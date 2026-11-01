@@ -1,16 +1,21 @@
 const LOCATOR_MAX = 200;
 const NUM = '-?(?:0|[1-9]\\d{0,6})(?:\\.\\d{1,4})?';
-const PDF_POS = new RegExp(`^pdfpos\\(page=([1-9]\\d{0,6});x=(${NUM});y=(${NUM});(?:zoom=(${NUM})|fit=width)\\)$`);
+const PDF_POS = new RegExp(`^pdfpos\\(page=([1-9]\\d{0,6});x=(${NUM});y=(${NUM});(?:zoom=(${NUM})|fit=(width|page))\\)$`);
 
 export interface PdfPlace {
   page: number;
   x: number;
   y: number;
-  zoom: number | 'width';
+  zoom: number | 'width' | 'page';
+  /**
+   * Not stored: a zoom command's anchor. After painting, the PDF point (x, y) is scrolled to
+   * (px, py) in the viewport, so the point under the pointer or the centre stays put.
+   */
+  focus?: { x: number; y: number; px: number; py: number };
 }
 
 /**
- * Page, visible top-left in PDF user space, and zoom or fit-width.
+ * Page, visible top-left in PDF user space, and zoom, fit-width or fit-page.
  * Not a document-wide percentage.
  */
 export function parsePdfPlace(value: unknown): PdfPlace | null {
@@ -24,7 +29,7 @@ export function parsePdfPlace(value: unknown): PdfPlace | null {
   const y = Number(match[3]);
   if (!Number.isInteger(page) || page < 1 || page > 1_000_000) return null;
   if (!validCoord(x) || !validCoord(y)) return null;
-  if (match[4] === undefined) return { page, x, y, zoom: 'width' };
+  if (match[4] === undefined) return { page, x, y, zoom: match[5] === 'page' ? 'page' : 'width' };
   const zoom = Number(match[4]);
   if (!(zoom > 0) || zoom > 16) return null;
   return { page, x, y, zoom };
@@ -42,7 +47,9 @@ export function formatPdfLocator(place: PdfPlace): string | null {
   const x = formatCoord(place.x);
   const y = formatCoord(place.y);
   if (x == null || y == null) return null;
-  if (place.zoom === 'width') return parsePdfLocator(`pdfpos(page=${place.page};x=${x};y=${y};fit=width)`);
+  if (place.zoom === 'width' || place.zoom === 'page') {
+    return parsePdfLocator(`pdfpos(page=${place.page};x=${x};y=${y};fit=${place.zoom})`);
+  }
   const zoom = formatCoord(place.zoom);
   if (zoom == null) return null;
   const scale = Number(zoom);

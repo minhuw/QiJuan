@@ -3,7 +3,8 @@ import path from 'node:path';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { hashFile, managedBlobRelativePath, removeBlobFile, writeImmutableBlob } from './blobs.js';
 import type { AppDatabase } from './db.js';
-import { covers, editions, fileAssets, libraries, metadataPreviews, series } from './schema.js';
+import { sortKey } from './sort-key.js';
+import { assetOcr, covers, editions, fileAssets, libraries, metadataPreviews, series } from './schema.js';
 
 const TITLE_MAX = 500;
 const NAME_MAX = 300;
@@ -147,6 +148,7 @@ export function createEdition(db: AppDatabase, input: CreateEditionInput, now = 
       libraryId,
       title,
       sortTitle,
+      sortKey: sortKey(sortTitle),
       language,
       publisher,
       publishedDate,
@@ -174,7 +176,7 @@ export function listEditions(db: AppDatabase, libraryId: number): EditionRow[] {
     .select()
     .from(editions)
     .where(and(eq(editions.libraryId, libraryId), isNull(editions.trashedAt)))
-    .orderBy(asc(editions.sortTitle), asc(editions.id))
+    .orderBy(asc(editions.sortKey), asc(editions.sortTitle), asc(editions.id))
     .all();
 }
 
@@ -431,7 +433,13 @@ function countSha256(db: QueryDb, sha256: string): number {
     .from(metadataPreviews)
     .where(eq(metadataPreviews.coverSha256, sha256))
     .get();
-  return readCount(assetRow?.count) + readCount(coverRow?.count) + readCount(previewRow?.count);
+  // An OCR copy is a blob of its own; see migration 0022.
+  const ocrRow = db
+    .select({ count: sql<number>`count(*)` })
+    .from(assetOcr)
+    .where(eq(assetOcr.sha256, sha256))
+    .get();
+  return readCount(assetRow?.count) + readCount(coverRow?.count) + readCount(previewRow?.count) + readCount(ocrRow?.count);
 }
 
 function readCount(value: unknown): number {

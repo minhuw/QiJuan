@@ -263,10 +263,14 @@ describe('first-run gate', () => {
     fireEvent.change(screen.getByLabelText('Library name'), { target: { value: 'Home' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create administrator' }));
 
-    expect(await screen.findByRole('heading', { name: 'Library' })).toBeInTheDocument();
-    expect(screen.getByText('Home')).toBeInTheDocument();
+    // A new install lands on the Reading tab; Settings sits in the account menu.
+    expect(await screen.findByRole('heading', { name: 'Reading' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Library' })).toHaveAttribute('href', '/library');
     expect(await screen.findByText('ada')).toBeInTheDocument();
 
+    const account = screen.getByRole('button', { name: 'Account: ada' });
+    expect(account).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(account);
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
     expect(await screen.findByRole('heading', { name: 'Readers' })).toBeInTheDocument();
     expect(await screen.findByText('No readers yet.')).toBeInTheDocument();
@@ -517,7 +521,7 @@ describe('settings metadata agent', () => {
     const server = installSettingsFetch({ role: 'reader' });
     renderSettings();
 
-    expect(await screen.findByRole('heading', { name: catalogs.en.home.title })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: catalogs.en.tabs.reading })).toBeInTheDocument();
     expect(
       screen.queryByRole('heading', { name: catalogs.en.settings.assistant.title }),
     ).not.toBeInTheDocument();

@@ -10,7 +10,8 @@ const migration = migrate({
   migrationsDir: config.migrationsDir,
 });
 
-const app = await buildApp({ config });
+// Scanned PDFs are recognized automatically unless QIJUAN_OCR_AUTO=0.
+const app = await buildApp({ config, ocr: { auto: process.env.QIJUAN_OCR_AUTO?.trim() !== '0' } });
 
 if (migration.backupPath) {
   app.log.info({ backupPath: migration.backupPath }, 'wrote pre-migration backup');

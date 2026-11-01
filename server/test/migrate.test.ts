@@ -44,6 +44,10 @@ describe('migrations', () => {
       '0019_preview_applied.sql',
       '0020_cover_tint.sql',
       '0021_metadata_private.sql',
+      '0022_asset_ocr.sql',
+      '0023_asset_ocr_auto.sql',
+      '0024_edition_sort_key.sql',
+      '0025_reading_progress.sql',
     ]);
     expect(first.backupPath).toBeNull();
 
@@ -163,6 +167,10 @@ describe('migrations', () => {
       '0019_preview_applied.sql',
       '0020_cover_tint.sql',
       '0021_metadata_private.sql',
+      '0022_asset_ocr.sql',
+      '0023_asset_ocr_auto.sql',
+      '0024_edition_sort_key.sql',
+      '0025_reading_progress.sql',
     ]);
     expect(updated.backupPath).toBeTruthy();
     expect(existsSync(updated.backupPath!)).toBe(true);
@@ -310,7 +318,7 @@ describe('migrations', () => {
     seed.close();
 
     const updated = migrate({ databasePath, migrationsDir: packaged });
-    expect(updated.applied).toEqual(['0016_edition_identifiers.sql', '0017_preview_covers.sql', '0018_edition_ratings.sql', '0019_preview_applied.sql', '0020_cover_tint.sql', '0021_metadata_private.sql']);
+    expect(updated.applied).toEqual(['0016_edition_identifiers.sql', '0017_preview_covers.sql', '0018_edition_ratings.sql', '0019_preview_applied.sql', '0020_cover_tint.sql', '0021_metadata_private.sql', '0022_asset_ocr.sql', '0023_asset_ocr_auto.sql', '0024_edition_sort_key.sql', '0025_reading_progress.sql']);
 
     const db = new Database(databasePath);
     const rows = db
@@ -374,7 +382,7 @@ describe('migrations', () => {
     seed.close();
 
     const updated = migrate({ databasePath, migrationsDir: packaged });
-    expect(updated.applied).toEqual(['0018_edition_ratings.sql', '0019_preview_applied.sql', '0020_cover_tint.sql', '0021_metadata_private.sql']);
+    expect(updated.applied).toEqual(['0018_edition_ratings.sql', '0019_preview_applied.sql', '0020_cover_tint.sql', '0021_metadata_private.sql', '0022_asset_ocr.sql', '0023_asset_ocr_auto.sql', '0024_edition_sort_key.sql', '0025_reading_progress.sql']);
     const db = new Database(databasePath);
     db.pragma('foreign_keys = ON');
     // No backfill: existing identifiers queue nothing.
@@ -421,7 +429,7 @@ describe('migrations', () => {
     seed.close();
 
     const updated = migrate({ databasePath, migrationsDir: packaged });
-    expect(updated.applied).toEqual(['0021_metadata_private.sql']);
+    expect(updated.applied).toEqual(['0021_metadata_private.sql', '0022_asset_ocr.sql', '0023_asset_ocr_auto.sql', '0024_edition_sort_key.sql', '0025_reading_progress.sql']);
     const db = new Database(databasePath);
     expect(db.prepare('SELECT metadata_private FROM editions WHERE id = 1').get()).toEqual({ metadata_private: 0 });
     const columns = db.prepare("SELECT name FROM pragma_table_info('job_items')").all() as Array<{ name: string }>;

@@ -12,10 +12,12 @@ import {
   Library,
   ListTree,
   Loader2,
+  Maximize2,
   MoveHorizontal,
   RefreshCw,
   ScanText,
   Search,
+  SquareDashedMousePointer,
   X,
   ZoomIn,
   ZoomOut,
@@ -28,13 +30,16 @@ import { readReaderFlow, saveReaderFlow } from './flow';
 import { createPageScroll } from './page-scroll';
 import { formatPdfLocator, parsePdfPlace, type PdfPlace } from './pdf/locator';
 import { openPdfSession } from './pdf/session';
-import { PdfViewport } from './pdf/viewport';
+import { PdfViewport, type PdfViewportHandle } from './pdf/viewport';
+import { boundFactor, clampZoom, stepZoom, wheelFactor, zoomKey } from './pdf/zoom';
 import { PdfAnnotationPanel, PdfSelectionToolbar, pdfAnnotationPoint, usePdfAnnotations, type PdfHighlight, type PdfNote } from './pdf/annotation-tools';
 import { nearbyPages, THUMBNAIL_CSS_WIDTH, THUMBNAIL_RADIUS } from './pdf/thumbs';
 import type { PdfOutlineItem, PdfSearchHit, PdfSession, RenderedPage } from './pdf/types';
 import { useLocale } from '../shell';
 import { ReaderOptions, useReaderPanelFocus } from './reader-options';
 import { ReaderFlowSelect } from './flow-select';
+import { ReaderOcrAction } from '../book-ocr';
+import type { AssetOcr } from '../api';
 
 const ERROR_CODES = new Set([
   'invalid_request',
@@ -65,12 +70,6 @@ function errorText(t: (key: string) => string, code: string | null): string {
   return t(`errors.${known}`);
 }
 
-function stepZoom(scale: number, direction: 1 | -1): number {
-  const steps = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-  if (direction > 0) return steps.find((value) => value > scale + 0.01) ?? Math.min(4, Math.round(scale * 125) / 100);
-  return [...steps].reverse().find((value) => value < scale - 0.01) ?? Math.max(0.5, Math.round((scale / 1.25) * 100) / 100);
-}
-
 function OutlineTree({ items, onOpen }: { items: PdfOutlineItem[]; onOpen: (item: PdfOutlineItem) => void }) {
   return (
     <ul className="plain-list">
@@ -86,11 +85,20 @@ function OutlineTree({ items, onOpen }: { items: PdfOutlineItem[]; onOpen: (item
   );
 }
 
-export function PdfReader(props: { editionId: number; assetId: number; title: string }) {
+interface PdfReaderProps {
+  editionId: number;
+  assetId: number;
+  title: string;
+  /** Admins can start OCR from the reader's scan notices. */
+  admin?: boolean;
+  ocr?: AssetOcr | null;
+}
+
+export function PdfReader(props: PdfReaderProps) {
   return <PdfReaderDocument key={`${props.editionId}:${props.assetId}`} {...props} />;
 }
 
-function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; assetId: number; title: string }) {
+function PdfReaderDocument({ editionId, assetId, title, admin = false, ocr = null }: PdfReaderProps) {
   const { t } = useLocale();
   const searchId = useId();
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -133,7 +141,21 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
   const [scaleLabel, setScaleLabel] = useState<number | null>(null);
   const [pageDraft, setPageDraft] = useState('1');
   const [selectionTooLarge, setSelectionTooLarge] = useState(false);
+  const [areaMode, setAreaMode] = useState(false);
+  const areaModeRef = useRef(false);
+  areaModeRef.current = areaMode;
+  /** The once-per-book hint that a scanned page is marked with the area tool. */
+  const [scanHint, setScanHint] = useState(false);
+  const scanHintShown = useRef(false);
+  const viewportHandle = useRef<PdfViewportHandle | null>(null);
+  /** The painted scale, read by gestures and shortcuts between renders. */
+  const scaleRef = useRef<number | null>(null);
+  scaleRef.current = scaleLabel;
   const annotations = usePdfAnnotations({ editionId, assetId, settle, onOpen: setPanel });
+  const pendingArea = annotations.selection && !annotations.selection.quote ? annotations.selection : null;
+  const marks = pendingArea
+    ? [...annotations.marks, { id: 'pending-area', locator: pendingArea.locator, kind: 'pending' as const }]
+    : annotations.marks;
 
   function remember(place: PdfPlace) {
     if (holdRef.current) return;
@@ -179,9 +201,13 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
       const ticket = generationRef.current;
       const run = async () => {
         if (ticket !== generationRef.current) return;
+        // How far in, for the Reading tab: the saved place's page of the document's pages.
+        const pages = sessionRef.current?.pageCount ?? 0;
+        const page = parsePdfPlace(locator)?.page ?? 0;
+        const progress = pages > 0 && page >= 1 && page <= pages ? { fraction: page / pages, page, pageCount: pages } : undefined;
         const result = await api<{ position: { locator: string; revision: number } }>(
           `/api/editions/${editionId}/reading-place`,
-          { method: 'PUT', body: { locator, assetId, revision: revisionRef.current } },
+          { method: 'PUT', body: { locator, assetId, revision: revisionRef.current, ...(progress ? { progress } : {}) } },
         );
         if (!alive || ticket !== generationRef.current) return;
         if (result.status === 409) {
@@ -350,6 +376,17 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      const zoom = ready ? zoomKey(event) : null;
+      if (zoom) {
+        event.preventDefault();
+        const scale = scaleRef.current ?? 1;
+        zoomTo(zoom === 'reset' ? 1 : stepZoom(scale, zoom === 'in' ? 1 : -1));
+        return;
+      }
+      if (event.key === 'Escape' && areaModeRef.current && !annotations.selection) {
+        setAreaMode(false);
+        return;
+      }
       if (flow === 'continuous' && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) return;
       onReaderKey(event, {
         enabled: ready,
@@ -366,7 +403,78 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pageCount, flow, ready]);
+  }, [pageCount, flow, ready, annotations.selection]);
+
+  // Ctrl/⌘ + wheel (also a trackpad pinch in Chromium and Firefox) and Safari's gesture events:
+  // the painted pages scale live around the pointer, then the page re-renders crisply.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!ready || !scroller) return;
+    let gesture: { base: number; factor: number; x: number; y: number; timer: ReturnType<typeof setTimeout> | null } | null = null;
+    let safariStart = 1;
+
+    function begin(x: number, y: number) {
+      if (!gesture) gesture = { base: scaleRef.current ?? 1, factor: 1, x, y, timer: null };
+      gesture.x = x;
+      gesture.y = y;
+      return gesture;
+    }
+
+    function commit() {
+      const done = gesture;
+      gesture = null;
+      if (!done) return;
+      if (done.timer !== null) clearTimeout(done.timer);
+      const next = clampZoom(done.base * done.factor);
+      if (Math.abs(next - done.base) < 0.005) {
+        viewportHandle.current?.preview(1, done.x, done.y);
+        return;
+      }
+      zoomTo(next, { x: done.x, y: done.y });
+    }
+
+    function onWheel(event: WheelEvent) {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      const active = begin(event.clientX, event.clientY);
+      active.factor = boundFactor(active.base, active.factor * wheelFactor(event));
+      viewportHandle.current?.preview(active.factor, active.x, active.y);
+      if (active.timer !== null) clearTimeout(active.timer);
+      active.timer = setTimeout(commit, 180);
+    }
+
+    type GestureEvent = UIEvent & { scale: number; clientX: number; clientY: number };
+    function onGestureStart(event: Event) {
+      event.preventDefault();
+      const gestureEvent = event as GestureEvent;
+      const active = begin(gestureEvent.clientX, gestureEvent.clientY);
+      safariStart = active.factor;
+    }
+    function onGestureChange(event: Event) {
+      event.preventDefault();
+      const gestureEvent = event as GestureEvent;
+      const active = begin(gestureEvent.clientX, gestureEvent.clientY);
+      active.factor = boundFactor(active.base, safariStart * gestureEvent.scale);
+      viewportHandle.current?.preview(active.factor, active.x, active.y);
+    }
+    function onGestureEnd(event: Event) {
+      event.preventDefault();
+      commit();
+    }
+
+    scroller.addEventListener('wheel', onWheel, { passive: false });
+    scroller.addEventListener('gesturestart', onGestureStart);
+    scroller.addEventListener('gesturechange', onGestureChange);
+    scroller.addEventListener('gestureend', onGestureEnd);
+    return () => {
+      if (gesture?.timer != null) clearTimeout(gesture.timer);
+      gesture = null;
+      scroller.removeEventListener('wheel', onWheel);
+      scroller.removeEventListener('gesturestart', onGestureStart);
+      scroller.removeEventListener('gesturechange', onGestureChange);
+      scroller.removeEventListener('gestureend', onGestureEnd);
+    };
+  }, [ready]);
 
   async function goTo(page: number, point?: { x: number | null; y: number | null }, enterAtBottom = false) {
     const session = sessionRef.current;
@@ -414,6 +522,46 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
     setPainting(true);
     remember({ ...current, zoom });
     setView({ ...current, zoom });
+  }
+
+  /** Fit page shows the whole current page from its top. */
+  async function fitPage() {
+    const session = sessionRef.current;
+    const current = placeRef.current;
+    if (!session || !current || holdRef.current) return;
+    const box = await session.pageBox(current.page);
+    if (sessionRef.current !== session || holdRef.current) return;
+    bottomEntryRef.current = null;
+    navigationRef.current += 1;
+    setPainting(true);
+    const next: PdfPlace = { page: current.page, x: box.xMin, y: box.yMax, zoom: 'page' };
+    remember(next);
+    setView(next);
+  }
+
+  /**
+   * A numeric zoom anchored at a client point, the viewport centre by default: the PDF point
+   * under it stays under it after the re-render.
+   */
+  function zoomTo(zoom: number, at?: { x: number; y: number }) {
+    const current = placeRef.current;
+    const scroller = scrollerRef.current;
+    if (!current || !scroller || holdRef.current) return;
+    const next = clampZoom(zoom);
+    const rect = scroller.getBoundingClientRect();
+    const x = at?.x ?? rect.left + rect.width / 2;
+    const y = at?.y ?? rect.top + rect.height / 2;
+    const point = viewportHandle.current?.pointAt(x, y);
+    bottomEntryRef.current = null;
+    navigationRef.current += 1;
+    setPainting(true);
+    if (!point) {
+      remember({ ...current, zoom: next });
+      setView({ ...current, zoom: next });
+      return;
+    }
+    // The stored place is the visible top-left, which the paint reports back; only the command carries the focus.
+    setView({ page: point.page, x: point.x, y: point.y, zoom: next, focus: { x: point.x, y: point.y, px: x - rect.left, py: y - rect.top } });
   }
 
   async function reloadReading(adoptPosition: boolean): Promise<boolean> {
@@ -549,7 +697,7 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
             <span className="visually-hidden">{t('reader.backToBook')}</span>
           </Link>
           <h1 className="reader-title">{title}</h1>
-          <Link className="reader-library-link" to="/" title={t('reader.library')} onClick={() => saverRef.current?.flush()}>
+          <Link className="reader-library-link" to="/library" title={t('reader.library')} onClick={() => saverRef.current?.flush()}>
             <Library size={18} aria-hidden="true" />
             <span className="visually-hidden">{t('reader.library')}</span>
           </Link>
@@ -564,9 +712,23 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
           <p className="notice" role="status">
             <ScanText size={15} aria-hidden="true" />
             {t('reader.scanNoText')}
+            {admin ? <ReaderOcrAction editionId={editionId} assetId={assetId} initial={ocr} /> : null}
           </p>
         ) : null}
         {selectionTooLarge ? <p className="notice" role="status">{t('reader.selectionTooLarge')}</p> : null}
+        {scanHint ? (
+          <p className="notice reader-scan-hint" role="status">
+            <SquareDashedMousePointer size={15} aria-hidden="true" />
+            <span>{t('reader.scanHint')}</span>
+            <button type="button" className="link-button" onClick={() => { setScanHint(false); setAreaMode(true); }}>
+              {t('reader.areaTool')}
+            </button>
+            {admin ? <ReaderOcrAction editionId={editionId} assetId={assetId} initial={ocr} /> : null}
+            <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.close')} onClick={() => setScanHint(false)}>
+              <X size={14} aria-hidden="true" />
+            </button>
+          </p>
+        ) : null}
         {keptNewer ? (
           <p className="notice" role="status">
             <RefreshCw size={15} aria-hidden="true" />
@@ -621,6 +783,82 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
           >
             <Bookmark size={16} aria-hidden="true" />
           </button>
+          <div className="reader-zoom-bar" role="group" aria-label={t('reader.zoom')}>
+            <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomOut')} title={`${t('reader.zoomOut')} (Ctrl/⌘ −)`} disabled={!ready || (scaleLabel ?? 1) <= 0.5} onClick={() => zoomTo(stepZoom(scaleLabel ?? 1, -1))}>
+              <ZoomOut size={16} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="reader-zoom-label"
+              aria-label={`${t('reader.zoomReset')}${scaleLabel == null ? '' : ` (${Math.round(scaleLabel * 100)}%)`}`}
+              title={t('reader.zoomReset')}
+              disabled={!ready}
+              onClick={() => zoomTo(1)}
+            >
+              {scaleLabel == null ? '–' : `${Math.round(scaleLabel * 100)}%`}
+            </button>
+            <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomIn')} title={`${t('reader.zoomIn')} (Ctrl/⌘ +)`} disabled={!ready || (scaleLabel ?? 1) >= 4} onClick={() => zoomTo(stepZoom(scaleLabel ?? 1, 1))}>
+              <ZoomIn size={16} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="reader-tool reader-tool-icon"
+              aria-label={t('reader.fitWidth')}
+              title={t('reader.fitWidth')}
+              aria-pressed={view?.zoom === 'width'}
+              disabled={!ready}
+              onClick={() => setZoom('width')}
+            >
+              <MoveHorizontal size={15} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="reader-tool reader-tool-icon"
+              aria-label={t('reader.fitPage')}
+              title={t('reader.fitPage')}
+              aria-pressed={view?.zoom === 'page'}
+              disabled={!ready}
+              onClick={() => void fitPage()}
+            >
+              <Maximize2 size={15} aria-hidden="true" />
+            </button>
+          </div>
+          <span className="reader-tool-rule" aria-hidden="true" />
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.areaTool')}
+            title={t('reader.areaToolHint')}
+            aria-pressed={areaMode}
+            disabled={!ready}
+            onClick={() => {
+              setAreaMode((on) => !on);
+              setScanHint(false);
+              annotations.clearSelection();
+            }}
+          >
+            <SquareDashedMousePointer size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.highlights')}
+            title={t('reader.highlights')}
+            aria-pressed={panel === 'highlights'}
+            onClick={() => toggle('highlights')}
+          >
+            <Highlighter size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="reader-tool reader-tool-icon"
+            aria-label={t('reader.notes')}
+            title={t('reader.notes')}
+            aria-pressed={panel === 'notes'}
+            onClick={() => toggle('notes')}
+          >
+            <StickyNote size={16} aria-hidden="true" />
+          </button>
           <ReaderOptions>
             <form
               className="reader-page-form"
@@ -641,36 +879,7 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
               </label>
             </form>
 
-            <div className="reader-zoom-controls">
-              <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomOut')} title={t('reader.zoomOut')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, -1))}>
-                <ZoomOut size={16} aria-hidden="true" />
-              </button>
-              <span className="reader-zoom-label">
-                {t('reader.zoom')}
-                {scaleLabel == null ? '' : ` ${scaleLabel.toFixed(2)}`}
-              </span>
-              <button type="button" className="reader-tool reader-tool-icon" aria-label={t('reader.zoomIn')} title={t('reader.zoomIn')} disabled={!ready} onClick={() => setZoom(stepZoom(scaleLabel ?? 1, 1))}>
-                <ZoomIn size={16} aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                className="reader-tool reader-tool-icon"
-                aria-label={t('reader.fitWidth')}
-                title={t('reader.fitWidth')}
-                aria-pressed={view?.zoom === 'width'}
-                disabled={!ready}
-                onClick={() => setZoom('width')}
-              >
-                <MoveHorizontal size={15} aria-hidden="true" />
-              </button>
-            </div>
             <div className="reader-option-actions">
-              <button type="button" className="reader-tool reader-tool-icon" aria-pressed={panel === 'highlights'} data-dismiss-options onClick={() => toggle('highlights')}>
-                <Highlighter size={16} aria-hidden="true" /><span>{t('reader.highlights')}</span>
-              </button>
-              <button type="button" className="reader-tool reader-tool-icon" aria-pressed={panel === 'notes'} data-dismiss-options onClick={() => toggle('notes')}>
-                <StickyNote size={16} aria-hidden="true" /><span>{t('reader.notes')}</span>
-              </button>
               <button
                 type="button"
                 className="reader-tool reader-tool-icon"
@@ -855,8 +1064,21 @@ function PdfReaderDocument({ editionId, assetId, title }: { editionId: number; a
               flow={flow}
               scrollerRef={scrollerRef}
               enterAtBottom={view !== null && bottomEntryRef.current === view}
-              annotations={annotations.marks}
+              annotations={marks}
+              areaMode={areaMode}
+              handleRef={viewportHandle}
+              onArea={(selection) => {
+                setScanHint(false);
+                annotations.setSelection(selection);
+              }}
+              onTextlessDrag={() => {
+                if (scanHintShown.current || areaModeRef.current) return;
+                scanHintShown.current = true;
+                setScanHint(true);
+              }}
               onSelection={(selection) => {
+                // An area waiting for Highlight or Note is not cleared by an empty text selection.
+                if (!selection && areaModeRef.current) return;
                 annotations.setSelection(selection);
                 if (selection) setSelectionTooLarge(false);
               }}

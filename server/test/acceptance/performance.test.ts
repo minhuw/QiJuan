@@ -34,7 +34,7 @@ describe('catalog performance', () => {
         sqlite,
         `SELECT e.id FROM editions e
          WHERE e.trashed_at IS NULL AND e.library_id IN (?)
-         ORDER BY e.sort_title, e.id
+         ORDER BY e.sort_key, e.id
          LIMIT 24 OFFSET 0`,
         [seeded.libraryId],
       );
@@ -43,7 +43,7 @@ describe('catalog performance', () => {
         `SELECT e.id FROM editions e
          WHERE e.trashed_at IS NULL AND e.library_id IN (?)
            AND e.id IN (SELECT rowid FROM edition_fts WHERE edition_fts MATCH ?)
-         ORDER BY e.sort_title, e.id
+         ORDER BY e.sort_key, e.id
          LIMIT 24 OFFSET 0`,
         [seeded.libraryId, `"${TITLE_QUERY}"`],
       );

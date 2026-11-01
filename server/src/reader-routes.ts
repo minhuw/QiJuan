@@ -5,6 +5,7 @@ import type { AppDatabase } from './db.js';
 import { requireLiveEdition } from './editions.js';
 import { exportAnnotations, annotationsMarkdown } from './annotations-export.js';
 import { contentDisposition } from './file-names.js';
+import { ocrCopy } from './ocr.js';
 import {
   addBookmark,
   addHighlight,
@@ -21,6 +22,7 @@ import {
   updateBookmark,
   updateHighlight,
   updateNote,
+  type ReadingProgress,
 } from './reader.js';
 import type { AuthUser } from './sessions.js';
 
@@ -31,8 +33,14 @@ export function registerReaderRoutes(app: FastifyInstance, deps: { db: AppDataba
       const editionId = accessEdition(deps.db, user, (request.params as { editionId?: string }).editionId);
       const assetId = parseId((request.params as { assetId?: string }).assetId);
       if (!assetId) return reply.code(400).send({ error: 'invalid_request' });
-      const file = openAssetStream(deps.db, deps.dataDir, editionId, assetId);
-      const pdf = file.format === 'pdf';
+      const opened = openAssetStream(deps.db, deps.dataDir, editionId, assetId);
+      const pdf = opened.format === 'pdf';
+      const query = request.query as { download?: string; original?: string };
+      const download = query.download === '1';
+      // The reader gets the recognized copy of a scan; downloads and ?original=1 get the file as uploaded.
+      const copy = pdf && !download && query.original !== '1' ? ocrCopy(deps.db, deps.dataDir, assetId) : null;
+      const file = copy ? { ...opened, absolutePath: copy.absolutePath, bytes: copy.bytes } : opened;
+      if (pdf) reply.header('x-qijuan-ocr', copy ? '1' : '0');
       const rawRange = request.headers.range;
       const range = parseByteRange(Array.isArray(rawRange) ? rawRange[0] : rawRange, file.bytes);
       reply.header('accept-ranges', 'bytes');
@@ -43,7 +51,6 @@ export function registerReaderRoutes(app: FastifyInstance, deps: { db: AppDataba
         return reply.code(416).send({ error: 'invalid_request' });
       }
       reply.header('content-type', pdf ? 'application/pdf' : 'application/epub+zip');
-      const download = (request.query as { download?: string }).download === '1';
       reply.header('content-disposition', contentDisposition(file.filename, file.format, download ? 'attachment' : 'inline'));
       if (range) {
         reply.header('content-range', `bytes ${range.start}-${range.end}/${file.bytes}`);
@@ -254,12 +261,28 @@ function accessEdition(db: AppDatabase, user: AuthUser, raw: string | undefined)
   return edition.id;
 }
 
-function parsePosition(body: unknown): { locator: string; assetId: number; revision: number } {
+function parsePosition(body: unknown): { locator: string; assetId: number; revision: number; progress?: ReadingProgress } {
   const record = asRecord(body);
   if (!record) throw new CatalogError('invalid_request');
-  assertKeys(record, ['locator', 'assetId', 'revision']);
+  assertKeys(record, ['locator', 'assetId', 'revision', 'progress']);
   if (typeof record.locator !== 'string') throw new CatalogError('invalid_request');
-  return { locator: record.locator, assetId: parseAssetId(record.assetId), revision: parseRevision(record.revision) };
+  const position = { locator: record.locator, assetId: parseAssetId(record.assetId), revision: parseRevision(record.revision) };
+  return record.progress === undefined ? position : { ...position, progress: parseProgress(record.progress) };
+}
+
+/** `{ fraction: 0–1, page?, pageCount? }`; page needs a pageCount it does not exceed. */
+function parseProgress(value: unknown): ReadingProgress {
+  const record = asRecord(value);
+  if (!record) throw new CatalogError('invalid_request');
+  assertKeys(record, ['fraction', 'page', 'pageCount']);
+  const fraction = record.fraction;
+  if (typeof fraction !== 'number' || !Number.isFinite(fraction) || fraction < 0 || fraction > 1) throw new CatalogError('invalid_request');
+  const whole = (item: unknown) => typeof item === 'number' && Number.isInteger(item) && item >= 1 && item <= 1_000_000;
+  if (record.page === undefined && record.pageCount === undefined) return { fraction };
+  if (!whole(record.page) || !whole(record.pageCount) || (record.page as number) > (record.pageCount as number)) {
+    throw new CatalogError('invalid_request');
+  }
+  return { fraction, page: record.page as number, pageCount: record.pageCount as number };
 }
 
 function parseAnchored(

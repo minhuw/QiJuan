@@ -164,7 +164,7 @@ describe('removing books', () => {
     fireEvent.click(trigger);
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.removeAction }));
     const notice = await screen.findByText(fill(en.moved, { title: 'The Tale' }));
-    expect(window.location.pathname).toBe('/');
+    expect(window.location.pathname).toBe('/library');
     expect(calls(fetchMock, 'POST')).toEqual(['/api/editions/3/trash']);
     // The Trash link counts what is in trash.
     expect(await screen.findByRole('link', { name: `${en.link} · 2` })).toHaveAttribute('href', '/trash');
@@ -282,6 +282,7 @@ describe('trash screen', () => {
 
   it('hides the Trash link when trash is empty', async () => {
     installFetch(admin, (url) => (url === '/api/trash' ? json({ editions: [], assets: [] }) : null));
+    window.history.pushState({}, '', '/library');
     render(<App locale="en" />);
     expect(await screen.findByRole('heading', { name: catalogs.en!.home.title as string })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(catalogs.en!.library.catalogue as string)).toBeInTheDocument());
@@ -302,7 +303,7 @@ describe('readers', () => {
 
     window.history.pushState({}, '', '/trash');
     render(<App locale="en" />);
-    expect(await screen.findByRole('heading', { name: catalogs.en!.home.title as string })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: catalogs.en!.tabs.reading as string })).toBeInTheDocument();
     expect(window.location.pathname).toBe('/');
     expect(screen.queryByRole('link', { name: new RegExp(`^${en.link}`) })).toBeNull();
     expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/trash');
@@ -320,7 +321,7 @@ describe('zh-Hans', () => {
     expect(screen.getByRole('button', { name: zh.removeAction })).toBeInTheDocument();
     unmount();
 
-    window.history.pushState({}, '', '/');
+    window.history.pushState({}, '', '/library');
     const second = render(<App locale="zh-Hans" />);
     expect(await screen.findByRole('link', { name: '回收站 · 2' })).toHaveAttribute('href', '/trash');
     second.unmount();

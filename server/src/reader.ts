@@ -140,11 +140,22 @@ export function loadReadingPlace(db: AppDatabase, userId: number, editionId: num
   };
 }
 
+/** How far into the book a saved position is. */
+export interface ReadingProgress {
+  fraction: number;
+  page?: number;
+  pageCount?: number;
+}
+
 export function saveReadingPosition(
   db: AppDatabase,
-  input: { userId: number; editionId: number; assetId: number; locator: string; revision: number },
+  input: { userId: number; editionId: number; assetId: number; locator: string; revision: number; progress?: ReadingProgress },
   now = new Date(),
 ): StoredPosition {
+  // Absent progress keeps what was stored; an older client never clears it.
+  const progress = input.progress
+    ? { progress: input.progress.fraction, page: input.progress.page ?? null, pageCount: input.progress.pageCount ?? null }
+    : {};
   const asset = requirePresentAsset(db, input.editionId, input.assetId);
   const locator = locatorForAsset(asset.format, input.locator);
   const stamp = now.toISOString();
@@ -171,6 +182,7 @@ export function saveReadingPosition(
           locator,
           revision: 1,
           updatedAt: stamp,
+          ...progress,
         })
         .run();
       return { locator, revision: 1, assetId: input.assetId, updatedAt: stamp };
@@ -184,6 +196,7 @@ export function saveReadingPosition(
         locator,
         revision,
         updatedAt: stamp,
+        ...progress,
       })
       .where(and(eq(readingPositions.userId, input.userId), eq(readingPositions.editionId, input.editionId)))
       .run();

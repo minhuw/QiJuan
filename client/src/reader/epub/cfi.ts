@@ -31,6 +31,21 @@ function cfiText(value: unknown): string | null {
 }
 
 /**
+ * An estimate of how far a relocation is into the book: its chapter's place in the spine plus
+ * the page within that chapter. Chapters differ in length, so it is approximate.
+ */
+export function progressFromRelocation(location: unknown, sections: number): number | null {
+  if (!location || typeof location !== 'object' || !(sections > 0)) return null;
+  const start = (location as { start?: { index?: unknown; displayed?: { page?: unknown; total?: unknown } } }).start;
+  const index = start?.index;
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= sections) return null;
+  const page = Number(start?.displayed?.page);
+  const total = Number(start?.displayed?.total);
+  const within = Number.isFinite(page) && Number.isFinite(total) && total > 0 && page >= 1 ? Math.min(1, page / total) : 0;
+  return Math.min(1, Math.max(0, (index + within) / sections));
+}
+
+/**
  * The locator to persist from an epub.js relocation.
  * `start.percentage` is ignored. A bare percentage is never returned.
  */

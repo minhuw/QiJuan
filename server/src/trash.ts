@@ -11,7 +11,7 @@ import type { AppDatabase } from './db.js';
 import { latestCover, loadNames, releaseUnreferenced } from './edition-fields.js';
 import { editionAssetFilenames } from './file-names.js';
 import { discardPendingPreviews } from './metadata/privacy.js';
-import { covers, editionRatingsQueue, editions, fileAssets, metadataPreviews } from './schema.js';
+import { assetOcr, covers, editionRatingsQueue, editions, fileAssets, metadataPreviews } from './schema.js';
 
 export interface TrashFile {
   id: number;
@@ -105,10 +105,18 @@ export function deleteEdition(db: AppDatabase, dataDir: string, editionId: numbe
       .where(and(eq(metadataPreviews.editionId, edition.id), isNotNull(metadataPreviews.coverSha256)))
       .all()
       .flatMap((row) => (row.sha256 ? [row.sha256] : []));
+    // OCR rows go by cascade with their files; their recognized copies are released below.
+    const ocrCopies = query
+      .select({ sha256: assetOcr.sha256 })
+      .from(assetOcr)
+      .innerJoin(fileAssets, eq(fileAssets.id, assetOcr.assetId))
+      .where(eq(fileAssets.editionId, edition.id))
+      .all()
+      .flatMap((row) => (row.sha256 ? [row.sha256] : []));
     query.delete(editions).where(eq(editions.id, edition.id)).run();
     // The queue has no foreign key; its identifier triggers fire during the cascade.
     query.delete(editionRatingsQueue).where(eq(editionRatingsQueue.editionId, edition.id)).run();
-    return [...new Set([...managed, ...coverHashes, ...staged])];
+    return [...new Set([...managed, ...coverHashes, ...staged, ...ocrCopies])];
   }, { behavior: 'immediate' });
   releaseUnreferenced(db, dataDir, hashes);
 }
@@ -142,11 +150,14 @@ export function restoreEditionAsset(db: AppDatabase, editionId: number, assetId:
 export function deleteEditionAsset(db: AppDatabase, dataDir: string, editionId: number, assetId: number): void {
   const asset = requireLiveEditionAsset(db, editionId, assetId);
   if (!asset.trashedAt) throw new CatalogError('not_in_trash');
+  const copy = db.select({ sha256: assetOcr.sha256 }).from(assetOcr).where(eq(assetOcr.assetId, asset.id)).get()?.sha256;
   if (asset.storage === 'managed') {
     permanentlyDeleteAsset(db, { dataDir, assetId: asset.id });
-    return;
+  } else {
+    db.delete(fileAssets).where(and(eq(fileAssets.id, asset.id), isNotNull(fileAssets.trashedAt))).run();
   }
-  db.delete(fileAssets).where(and(eq(fileAssets.id, asset.id), isNotNull(fileAssets.trashedAt))).run();
+  // The OCR row went with the file by cascade; its recognized copy goes when nothing else uses it.
+  if (copy) releaseUnreferenced(db, dataDir, [copy]);
 }
 
 /** Trashed editions, newest first, and files trashed on their own from live editions. */

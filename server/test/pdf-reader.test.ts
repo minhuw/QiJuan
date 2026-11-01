@@ -62,6 +62,8 @@ describe('pdf locator', () => {
     expect(parsePdfLocator(`  ${beauPlace}  `)).toBe(beauPlace);
     expect(parsePdfPlace(adaPlace)).toEqual({ page: 2, x: 12.5, y: 240, zoom: 1.25 });
     expect(parsePdfPlace(beauPlace)).toEqual({ page: 5, x: 0, y: 400, zoom: 'width' });
+    expect(parsePdfPlace('pdfpos(page=5;x=0;y=400;fit=page)')).toEqual({ page: 5, x: 0, y: 400, zoom: 'page' });
+    expect(parsePdfPlace('pdfpos(page=5;x=0;y=400;fit=height)')).toBeNull();
     expect(parsePdfLocator('0.42')).toBeNull();
     expect(parsePdfLocator('42%')).toBeNull();
     expect(parsePdfLocator('1')).toBeNull();
@@ -163,6 +165,25 @@ describe('pdf reading place', () => {
     expect(first.json().position).toMatchObject({ locator: adaPlace, revision: 1, assetId });
     expect(parsePdfPlace(first.json().position.locator)).toEqual({ page: 2, x: 12.5, y: 240, zoom: 1.25 });
 
+    // Progress rides along with a position, is checked, and shows on the home's continue list.
+    const bad = await started.app.inject({
+      method: 'PUT', url: `/api/editions/${editionId}/reading-place`, headers: { cookie: started.cookie },
+      payload: { locator: adaPlace, assetId, revision: 1, progress: { fraction: 0.5, page: 9, pageCount: 4 } },
+    });
+    expect(bad.statusCode).toBe(400);
+    const withProgress = await started.app.inject({
+      method: 'PUT', url: `/api/editions/${editionId}/reading-place`, headers: { cookie: started.cookie },
+      payload: { locator: adaPlace, assetId, revision: 1, progress: { fraction: 0.25, page: 2, pageCount: 8 } },
+    });
+    expect(withProgress.statusCode).toBe(200);
+    // A save without progress keeps the stored one.
+    await started.app.inject({
+      method: 'PUT', url: `/api/editions/${editionId}/reading-place`, headers: { cookie: started.cookie },
+      payload: { locator: adaPlace, assetId, revision: 2 },
+    });
+    const home = await started.app.inject({ method: 'GET', url: '/api/home', headers: { cookie: started.cookie } });
+    expect(home.json().continueReading[0]).toMatchObject({ assetId, progress: { fraction: 0.25, page: 2, pageCount: 8 } });
+
     const marked = await started.app.inject({
       method: 'POST',
       url: `/api/editions/${editionId}/bookmarks`,
@@ -225,7 +246,8 @@ describe('pdf reading place', () => {
       headers: { cookie: started.cookie },
     });
     expect(adaAgain.statusCode).toBe(200);
-    expect(adaAgain.json().position).toMatchObject({ locator: adaPlace, revision: 1, assetId });
+    // Revision 3: the first save and the two progress saves above.
+    expect(adaAgain.json().position).toMatchObject({ locator: adaPlace, revision: 3, assetId });
     expect(adaAgain.json().bookmarks).toEqual([
       expect.objectContaining({ id: bookmarkId, locator: adaPlace, label: 'Page 2' }),
     ]);

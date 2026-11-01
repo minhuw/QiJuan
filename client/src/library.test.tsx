@@ -2,15 +2,19 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { App } from './App';
 import { thumbBands } from './library';
 import type { HomePayload, LibraryPage } from './api';
 import { catalogs } from './i18n';
 
+beforeEach(() => {
+  window.history.pushState({}, '', '/library');
+});
+
 afterEach(() => {
   cleanup();
-  window.history.pushState({}, '', '/');
+  window.history.pushState({}, '', '/library');
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -114,10 +118,11 @@ describe('library browser', () => {
     render(<App locale="en" />);
     expect(screen.getAllByRole('status').some((item) => item.textContent === catalogs.en.status.loading)).toBe(true);
     release?.();
-    expect(await screen.findByRole('heading', { name: catalogs.en.library.continue })).toBeInTheDocument();
-    expect(screen.getByText(catalogs.en.library.continueEmpty)).toBeInTheDocument();
-    expect(screen.getByText(catalogs.en.library.recentEmpty)).toBeInTheDocument();
-    expect(screen.getByText(catalogs.en.library.shelvesEmpty)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: catalogs.en.library.catalogue })).toBeInTheDocument();
+    // An empty library has nothing recent to repeat.
+    expect(screen.queryByRole('heading', { name: catalogs.en.library.recent })).not.toBeInTheDocument();
+    // With no shelves there are no shelf chips.
+    await waitFor(() => expect(screen.queryByRole('group', { name: catalogs.en.library.shelves })).toBeNull());
     expect(screen.getByText(catalogs.en.library.empty)).toBeInTheDocument();
 
     cleanup();
@@ -127,15 +132,19 @@ describe('library browser', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(catalogs.en.errors.internal);
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: catalogs.en.status.retry }));
-    expect(await screen.findByRole('heading', { name: catalogs.en.library.continue })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: catalogs.en.library.catalogue })).toBeInTheDocument();
   });
 
   it('keeps cover ratio, uses one query for both views, and focuses search with slash', async () => {
     const calls = installFetch((url) => route(url, home, library));
     render(<App locale="en" />);
-    expect(await screen.findByRole('heading', { name: catalogs.en.library.continue })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: catalogs.en.library.recent })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: catalogs.en.library.shelves })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: catalogs.en.library.catalogue })).toBeInTheDocument();
+    // Once the home data is in: every recent book is already on the catalogue page, so neither the
+    // section, the guide words nor the index repeats it.
+    expect(await screen.findByRole('group', { name: catalogs.en.library.shelves })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: catalogs.en.library.recent })).not.toBeInTheDocument();
+    expect(document.querySelector('.guide-word')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: catalogs.en.library.thumbIndex })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Weekend' })).toBeInTheDocument();
 
     const results = screen.getByRole('list', { name: catalogs.en.library.results });
@@ -177,7 +186,7 @@ describe('library browser', () => {
     fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.shell.language }), {
       target: { value: 'zh-Hans' },
     });
-    expect(screen.getByRole('heading', { name: catalogs['zh-Hans'].library.continue })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: catalogs['zh-Hans'].library.catalogue })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: catalogs['zh-Hans'].library.grid })).toBeInTheDocument();
     expect(screen.getAllByText('River').length).toBeGreaterThan(0);
   });
@@ -234,23 +243,29 @@ describe('library browser', () => {
     expect(css).toMatch(/\.cover-fallback\s*\{[^}]*font-family:\s*var\(--font-serif\)/s);
   });
 
-  it('folds recurring index runs into one band per initial, with CJK as a single band', () => {
+  it('shows Recently added when it holds a book the catalogue page does not', async () => {
+    installFetch((url) => route(url, { ...home, recent: [hill] }, { ...library, editions: [river], total: 30 }));
+    render(<App locale="en" />);
+    expect(await screen.findByRole('heading', { name: catalogs.en.library.recent })).toBeInTheDocument();
+  });
+
+  it('folds recurring index runs into one band per initial in one A–Z', () => {
     const bands = thumbBands(
       [
         { key: '#', offset: 0, count: 1 },
         { key: 'A', offset: 1, count: 30 },
         { key: 'W', offset: 31, count: 2 },
         { key: 'A', offset: 33, count: 1 },
-        { key: 'cjk', offset: 34, count: 20 },
+        { key: 'H', offset: 34, count: 20 },
       ],
       24,
       24,
     );
-    expect(bands.map((band) => band.key)).toEqual(['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'cjk']);
+    expect(bands.map((band) => band.key)).toEqual(['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ']);
     const byKey = new Map(bands.map((band) => [band.key, band]));
     expect(byKey.get('A')).toEqual({ key: 'A', target: 1, inView: true, current: true });
     expect(byKey.get('W')).toMatchObject({ target: 31, inView: true, current: false });
-    expect(byKey.get('cjk')).toMatchObject({ target: 34, inView: true, current: false });
+    expect(byKey.get('H')).toMatchObject({ target: 34, inView: true, current: false });
     expect(byKey.get('#')).toMatchObject({ target: 0, inView: false, current: false });
     expect(byKey.get('B')).toEqual({ key: 'B', target: null, inView: false, current: false });
   });
@@ -263,7 +278,7 @@ describe('library browser', () => {
         { key: '#', offset: 0, count: 2 },
         { key: 'A', offset: 2, count: 30 },
         { key: 'R', offset: 32, count: 10 },
-        { key: 'cjk', offset: 42, count: 18 },
+        { key: 'Y', offset: 42, count: 18 },
       ],
     };
     const calls = installFetch((url) => route(url, home, indexed));
@@ -275,9 +290,8 @@ describe('library browser', () => {
     expect(within(nav).getByRole('button', { name: 'A' })).not.toHaveAttribute('aria-current');
     expect(within(nav).getByRole('button', { name: 'B' })).toBeDisabled();
     expect(within(nav).getByRole('button', { name: 'Z' })).toBeDisabled();
-    const cjk = within(nav).getByRole('button', { name: catalogs.en.library.indexCjk });
-    expect(cjk).toBeEnabled();
-    expect(within(nav).getAllByRole('button').at(-1)).toBe(cjk);
+    expect(within(nav).getByRole('button', { name: 'Y' })).toBeEnabled();
+    expect(within(nav).getAllByRole('button').at(-1)).toHaveTextContent('Z');
 
     fireEvent.click(within(nav).getByRole('button', { name: 'R' }));
     await waitFor(() => {
@@ -292,7 +306,7 @@ describe('library browser', () => {
     });
     expect(
       within(screen.getByRole('navigation', { name: catalogs['zh-Hans'].library.thumbIndex })).getByRole('button', {
-        name: catalogs['zh-Hans'].library.indexCjk,
+        name: 'Y',
       }),
     ).toBeEnabled();
   });

@@ -22,3 +22,17 @@ if (dialogProto && typeof dialogProto.showModal !== 'function') {
     this.dispatchEvent(new Event('close'));
   };
 }
+
+// jsdom has no PointerEvent; a MouseEvent with a pointer id and type is enough for drag tests.
+if (typeof globalThis.PointerEvent === 'undefined' && typeof MouseEvent !== 'undefined') {
+  class TestPointerEvent extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+      this.pointerType = init.pointerType ?? 'mouse';
+    }
+  }
+  (globalThis as { PointerEvent?: unknown }).PointerEvent = TestPointerEvent;
+}

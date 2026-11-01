@@ -8,15 +8,15 @@ Measured by `server/test/acceptance/performance.test.ts`. That test is not part 
 
 ## Environment
 
-- Node.js: v22.23.4
-- CPU architecture (`process.arch`): x64
+- Node.js: v26.12.1
+- CPU architecture (`process.arch`): arm64
 
 ## Timings
 
 | Call | Answer | Time |
 | --- | --- | --- |
-| Warmed first library page (`searchLibrary`, no query, limit 24, offset 0) | 10,000 editions, first page of 24 | 9.8 ms |
-| Warmed title search for `山海闲读` | 1 hit(s) | 12.9 ms |
+| Warmed first library page (`searchLibrary`, no query, limit 24, offset 0) | 10,000 editions, first page of 24 | 8.7 ms |
+| Warmed title search for `山海闲读` | 1 hit(s) | 2.0 ms |
 
 Both warmed calls were under 2 seconds.
 

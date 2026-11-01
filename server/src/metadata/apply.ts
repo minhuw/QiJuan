@@ -22,6 +22,7 @@ import { runMetadataAgent } from './assistant/agent.js';
 import { AssistantError, type AssistantTransport } from './assistant/client.js';
 import { readAssistantSettings } from './assistant-settings.js';
 import { assertNotPrivate, isEditionPrivate } from './privacy.js';
+import { sortKey } from '../sort-key.js';
 import { appendTrajectoryStep, linkTrajectoryPreview, startTrajectory, type TrajectoryRecorder } from './trajectory.js';
 import { describeCoverResult, fetchVerifiedCover, imageDimensions } from './cover-fetch.js';
 import { cleanCover, type AssistantCover } from './assistant/submit.js';
@@ -347,7 +348,10 @@ export async function applyMetadataPreview(
 
     if (confirm.has('title') && !currentLocks.has('title') && proposal.title) {
       values.title = proposal.title;
-      if (!currentLocks.has('sort_title') && edition.sortTitle === edition.title) values.sortTitle = proposal.title;
+      if (!currentLocks.has('sort_title') && edition.sortTitle === edition.title) {
+        values.sortTitle = proposal.title;
+        values.sortKey = sortKey(proposal.title);
+      }
       toLock.push('title');
       changed = true;
     }

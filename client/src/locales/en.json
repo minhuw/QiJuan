@@ -46,7 +46,8 @@
     "signOut": "Sign out",
     "admin": "Administrator",
     "reader": "Reader",
-    "passwordHint": "At least 8 characters."
+    "passwordHint": "At least 8 characters.",
+    "menu": "Account"
   },
   "settings": {
     "open": "Settings",
@@ -224,6 +225,23 @@
     "atAGlance": "At a glance",
     "read": "Read",
     "download": "Download",
+    "ocr": {
+      "start": "Recognize text (OCR)",
+      "hint": "Adds an invisible text layer to scanned pages so you can search and select them. Runs on this server; the original file is not changed.",
+      "queued": "Waiting to recognize text…",
+      "running": "Recognizing text… {minutes} min so far",
+      "ready": "Text recognized (OCR)",
+      "failed": "Text recognition failed.",
+      "fileMissing": "Text recognition failed: the file is missing.",
+      "retry": "Try again",
+      "cancel": "Cancel",
+      "remove": "Remove OCR",
+      "removeTitle": "Remove recognized text?",
+      "removeConfirm": "The reader goes back to the scanned file without a text layer. The original file stays as it is, and you can recognize the text again later.",
+      "unavailable": "OCR is not installed on this server.",
+      "actionFailed": "That did not work. Try again.",
+      "readerRunning": "Recognizing text in the background. Reopen this book when it finishes."
+    },
     "cover": "Cover",
     "replaceCover": "Replace cover",
     "chooseCover": "Choose image",
@@ -332,7 +350,6 @@
     "continue": "Continue reading",
     "continueEmpty": "Nothing in progress.",
     "recent": "Recently added",
-    "recentEmpty": "Nothing added yet.",
     "shelves": "Shelves",
     "shelvesEmpty": "No shelves yet.",
     "previous": "Previous",
@@ -342,14 +359,29 @@
     "clearFilters": "Clear filters",
     "of": "of",
     "thumbIndex": "Thumb index",
-    "indexCjk": "CJK",
     "indexOther": "Numbers and symbols",
     "lastRead": "Last read",
     "catalogue": "Catalogue",
     "identifier": "Identifier",
     "identifierAny": "Any identifier",
     "identified": "Identified",
-    "unidentified": "Unidentified"
+    "unidentified": "Unidentified",
+    "select": "Select {title}",
+    "moreActions": "More actions for {title}",
+    "allBooks": "All books",
+    "selection": "Selected books",
+    "selectedCount": "{count} selected",
+    "clearSelection": "Clear selection",
+    "menu": {
+      "open": "Open",
+      "read": "Read",
+      "edit": "Edit details",
+      "clearStatus": "Clear status",
+      "addToShelf": "Add to shelf",
+      "unfavorite": "Unfavorite"
+    },
+    "countBooks": "{count} books",
+    "countShelves": "{count} shelves"
   },
   "reading": {
     "title": "Reading",
@@ -425,6 +457,12 @@
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "fitWidth": "Fit width",
+    "fitPage": "Fit page",
+    "zoomReset": "Reset zoom to 100%",
+    "areaTool": "Highlight area",
+    "areaToolHint": "Highlight area: drag a box on the page",
+    "areaHighlight": "Marked area",
+    "scanHint": "This page is a scan, so its text cannot be selected. Mark it with",
     "zoom": "Zoom",
     "page": "Page",
     "thumbnails": "Thumbnails",
@@ -646,6 +684,26 @@
       "last_asset": "A book keeps at least one file. Remove the book instead.",
       "not_in_trash": "That is no longer in Trash.",
       "failed": "That did not work. Try again."
-    }
+    },
+    "movedMany": "Moved {count} books to Trash.",
+    "restoredMany": "Restored {count} books.",
+    "removeManyConfirm": "Move {count} books to Trash? They leave the library, search and OPDS. You can restore them from Trash with their reading state, shelves and notes."
+  },
+  "tabs": {
+    "reading": "Reading",
+    "library": "Library"
+  },
+  "readingTab": {
+    "lastBook": "Your last book",
+    "continue": "Continue reading",
+    "details": "Book details",
+    "alsoReading": "Also reading",
+    "empty": "Nothing in progress yet.",
+    "emptyHint": "Open a book from the library and it waits for you here.",
+    "browse": "Browse the library",
+    "progressPages": "p. {page} of {pages} · {percent}",
+    "progressPercent": "{percent} read",
+    "pageOf": "p. {page} of {pages}",
+    "seeLibrary": "Open library"
   }
 }

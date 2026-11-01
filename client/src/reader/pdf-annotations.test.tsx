@@ -12,7 +12,7 @@ import type { PdfHighlight, PdfNote } from './pdf/annotation-tools';
 
 vi.mock('./pdf/session', () => ({ openPdfSession: vi.fn() }));
 vi.mock('./pdf/viewport', () => ({
-  PdfViewport: function MockViewport({ session, place, scrollerRef, annotations, onSelection, onRendered }: PdfViewportProps) {
+  PdfViewport: function MockViewport({ session, place, scrollerRef, annotations, onSelection, onRendered, areaMode, onArea, onTextlessDrag }: PdfViewportProps) {
     useLayoutEffect(() => {
       if (session && place) onRendered(place, painted, place);
     }, [session, place]);
@@ -21,6 +21,10 @@ vi.mock('./pdf/viewport', () => ({
         <button type="button" disabled={!session} onClick={() => onSelection?.({
           locator: selected, quote: 'Selected passage', anchor: { left: 100, top: 100, width: 90, height: 15 },
         })}>Select passage</button>
+        <button type="button" disabled={!areaMode} onClick={() => onArea?.({
+          locator: area, quote: '', anchor: { left: 40, top: 60, width: 120, height: 80 },
+        })}>Draw area</button>
+        <button type="button" onClick={() => onTextlessDrag?.()}>Drag on scan</button>
         <output aria-label="Viewport page">{place?.page}</output>
         <ul aria-label="Annotation overlays">{annotations?.map((mark) => <li key={mark.id}>{mark.id}</li>)}</ul>
       </div>
@@ -31,6 +35,7 @@ vi.mock('./pdf/viewport', () => ({
 const t = catalogs.en.reader;
 const selected = 'pdfsel({"v":1,"pages":[{"page":1,"rects":[[10,20,90,35]]}]})';
 const saved = 'pdfpos(page=4;x=15;y=220;zoom=1.5)';
+const area = 'pdfsel({"v":1,"pages":[{"page":4,"rects":[[40,120,160,200]]}]})';
 const painted: RenderedPage = {
   scale: 1.5, cssWidth: 300, cssHeight: 400,
   toViewport: (x, y) => ({ x, y }), toPdf: (x, y) => ({ x, y }),
@@ -88,7 +93,6 @@ async function renderReader() {
 }
 
 function openPanel(name: 'notes' | 'highlights') {
-  fireEvent.click(screen.getByRole('button', { name: t.options }));
   fireEvent.click(screen.getByRole('button', { name: t[name] }));
   return screen.getByRole('complementary', { name: t[name] });
 }
@@ -115,6 +119,38 @@ afterEach(() => {
 });
 
 describe('PDF annotations through the reader', () => {
+  it('draws an area with the area tool, saves it as a highlight, and lists it by page', async () => {
+    const marked: PdfHighlight = { id: 22, assetId: 10, locator: area, quote: null, revision: 1 };
+    const { requests } = install({ mutate: () => json({ highlight: marked }, 201) });
+    await renderReader();
+    const tool = screen.getByRole('button', { name: t.areaTool });
+    expect(tool).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(tool);
+    expect(tool).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Draw area' }));
+    // The drawn area shows as pending until it is saved.
+    expect(overlays()).toEqual(['pending-area']);
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Selected text' })).getByRole('button', { name: t.highlight }));
+    await waitFor(() => expect(overlays()).toEqual(['highlight-22']));
+    expect(requests).toEqual([{
+      path: '/api/editions/3/highlights', method: 'POST',
+      body: { assetId: 10, locator: area, quote: '', revision: 0 },
+    }]);
+    const panel = within(openPanel('highlights'));
+    expect(panel.getByRole('button', { name: new RegExp(`${t.page} 4.*${t.areaHighlight}`) })).toBeInTheDocument();
+  });
+
+  it('suggests the area tool once when a drag on a scanned page selects nothing', async () => {
+    install();
+    await renderReader();
+    fireEvent.click(screen.getByRole('button', { name: 'Drag on scan' }));
+    const hint = screen.getByText(t.scanHint).closest('p')!;
+    fireEvent.click(within(hint).getByRole('button', { name: t.close }));
+    expect(screen.queryByText(t.scanHint)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Drag on scan' }));
+    expect(screen.queryByText(t.scanHint)).not.toBeInTheDocument();
+  });
+
   it('posts selected text as a highlight and displays it in overlays and the Highlights panel', async () => {
     const { requests } = install({ mutate: () => json({ highlight }, 201) });
     await renderReader();

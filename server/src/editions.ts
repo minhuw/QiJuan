@@ -25,6 +25,8 @@ import {
   saveCoverRow,
 } from './edition-fields.js';
 import { editionAssetFilenames } from './file-names.js';
+import { sortKey } from './sort-key.js';
+import { editionOcr, type OcrView } from './ocr.js';
 import { recordIdentifierSuggestions } from './suggestions.js';
 import { editions, fileAssets, libraries, series } from './schema.js';
 import { sniffImage } from './metadata.js';
@@ -43,6 +45,8 @@ export interface EditionAsset {
   originalFilename: string;
   /** Computed from current metadata by file-names.ts; never stored. */
   displayFilename: string;
+  /** PDFs only: text recognition, when it was ever requested. */
+  ocr: OcrView | null;
   bytes: number;
   availability: 'present' | 'missing';
 }
@@ -120,7 +124,7 @@ export function listEditionSummaries(db: AppDatabase, libraryIds: number[]): Edi
     .select()
     .from(editions)
     .where(and(inArray(editions.libraryId, libraryIds), isNull(editions.trashedAt)))
-    .orderBy(asc(editions.sortTitle), asc(editions.id))
+    .orderBy(asc(editions.sortKey), asc(editions.sortTitle), asc(editions.id))
     .all();
   if (rows.length === 0) return [];
   const authors = new Map<number, string[]>();
@@ -178,6 +182,7 @@ export function getEditionDetail(
     .orderBy(asc(fileAssets.id))
     .all();
   const displayNames = editionAssetFilenames(db, edition.id);
+  const ocr = editionOcr(db, edition.id);
   return {
     id: edition.id,
     libraryId: edition.libraryId,
@@ -203,6 +208,7 @@ export function getEditionDetail(
       format: asset.format,
       originalFilename: asset.originalFilename,
       displayFilename: displayNames.get(asset.id) ?? asset.originalFilename,
+      ocr: ocr.get(asset.id) ?? null,
       bytes: asset.bytes,
       availability: asset.availability,
     })),
@@ -232,6 +238,7 @@ export function updateEdition(db: AppDatabase, editionId: number, patch: Edition
     }
     if (patch.sortTitle !== undefined) {
       values.sortTitle = requireClean(cleanTitle(patch.sortTitle));
+      values.sortKey = sortKey(values.sortTitle);
       locks.push(API_TO_LOCK.sortTitle);
     }
     if (patch.description !== undefined) {

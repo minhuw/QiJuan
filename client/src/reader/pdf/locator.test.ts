@@ -11,6 +11,11 @@ describe('pdf locator', () => {
     expect(parsePdfLocator(`  ${place}  `)).toBe(place);
     expect(formatPdfLocator({ page: 3, x: 12.5, y: 240, zoom: 1.25 })).toBe(place);
     expect(formatPdfLocator({ page: 2, x: 0, y: 400.0004, zoom: 'width' })).toBe(fitted);
+    expect(parsePdfPlace('pdfpos(page=2;x=0;y=400;fit=page)')).toEqual({ page: 2, x: 0, y: 400, zoom: 'page' });
+    expect(formatPdfLocator({ page: 2, x: 0, y: 400, zoom: 'page' })).toBe('pdfpos(page=2;x=0;y=400;fit=page)');
+    expect(parsePdfPlace('pdfpos(page=2;x=0;y=400;fit=height)')).toBeNull();
+    // A zoom command's focus is never stored.
+    expect(formatPdfLocator({ page: 3, x: 12.5, y: 240, zoom: 1.25, focus: { x: 1, y: 2, px: 3, py: 4 } })).toBe(place);
     for (const locator of [place, fitted]) {
       expect(locator.includes('%')).toBe(false);
       expect(locator.startsWith('pdfpos(')).toBe(true);

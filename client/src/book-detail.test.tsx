@@ -198,7 +198,7 @@ describe('book detail', () => {
       '/books/3',
     );
     expect(
-      screen.getAllByRole('link', { name: catalogs.en.reader.library }).some((link) => link.getAttribute('href') === '/'),
+      screen.getAllByRole('link', { name: catalogs.en.reader.library }).some((link) => link.getAttribute('href') === '/library'),
     ).toBe(true);
     expect(await screen.findByRole('alert')).toBeInTheDocument();
 
@@ -1820,7 +1820,7 @@ describe('book page tabs', () => {
     expect(page.style.getPropertyValue('--tint-day')).toBe('#e6e7f3');
     expect(page.style.getPropertyValue('--tint-night')).toBe('#15151b');
     // The ground holds the back link and the card; the card holds the cover plate.
-    expect(within(page).getByRole('link', { name: catalogs.en.book.back })).toHaveAttribute('href', '/');
+    expect(within(page).getByRole('link', { name: catalogs.en.book.back })).toHaveAttribute('href', '/library');
     expect(page.querySelector('.book-jacket .cover-image')).toHaveAttribute('src', '/api/editions/3/cover');
     expect(page.querySelector('.book-band')).toBeNull();
     cleanup();

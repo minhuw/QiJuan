@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogOut, Menu, X } from 'lucide-react';
+import { BookOpen, ChevronDown, Library, LogOut, Menu, X } from 'lucide-react';
 import { api } from './api';
 import { catalogs, localeIds, resolveLocale, translate } from './i18n';
 
@@ -79,7 +79,7 @@ function LanguageSelect({ value, onChange }: { value: string; onChange: (value: 
 function Brand() {
   const { t } = useLocale();
   return (
-    <Link className="brand" to="/" aria-label={`${t('brand.name')} — ${t('home.title')}`}>
+    <Link className="brand" to="/" aria-label={`${t('brand.name')} — ${t('tabs.reading')}`}>
       <span className="brand-mark" lang="zh-Hans" aria-hidden="true">
         {t('brand.mark')}
       </span>
@@ -97,24 +97,116 @@ function Revision({ revision }: { revision: string }) {
   );
 }
 
-function NavItem({
-  to,
-  label,
-  active,
-  admin = false,
-  onNavigate,
-}: {
-  to: string;
-  label: string;
-  active: boolean;
-  admin?: boolean;
-  onNavigate: () => void;
-}) {
-  const className = ['nav-item', admin ? 'nav-item-admin' : '', active ? 'nav-item-active' : ''].filter(Boolean).join(' ');
+/** One of the app's main tabs. The icon shows only in the phone and tablet bottom bar. */
+function TabItem({ to, label, icon, active }: { to: string; label: string; icon: ReactNode; active: boolean }) {
   return (
-    <Link className={className} to={to} aria-current={active ? 'page' : undefined} onClick={onNavigate}>
-      {label}
+    <Link className={active ? 'tab-item tab-item-active' : 'tab-item'} to={to} aria-current={active ? 'page' : undefined}>
+      <span className="tab-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="tab-label">{label}</span>
     </Link>
+  );
+}
+
+/** The tab a path belongs to: book and reader pages sit under Library. */
+export function tabFor(path: string): 'reading' | 'library' | null {
+  if (path === '/') return 'reading';
+  if (path === '/library' || path.startsWith('/books/') || path === '/import') return 'library';
+  return null;
+}
+
+/** The account button opens the rarely used pages: Settings, Backup and Trash (admins), and Sign out. */
+function AccountMenu({ account, path, onNavigate }: { account: AccountChrome; path: string; onNavigate: () => void }) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const admin = account.role === 'admin';
+  const initial = account.username.trim().charAt(0).toLocaleUpperCase() || '?';
+
+  useEffect(() => setOpen(false), [path]);
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(event: PointerEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      setOpen(false);
+      button.current?.focus();
+    }
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  const item = (to: string, label: string) => (
+    <li>
+      <Link
+        className={path === to ? 'account-menu-item account-menu-item-active' : 'account-menu-item'}
+        to={to}
+        aria-current={path === to ? 'page' : undefined}
+        onClick={() => {
+          setOpen(false);
+          onNavigate();
+        }}
+      >
+        {label}
+      </Link>
+    </li>
+  );
+
+  return (
+    <div className="account" ref={root} onBlur={(event) => {
+      if (open && !root.current?.contains(event.relatedTarget as Node | null) && event.relatedTarget) setOpen(false);
+    }}>
+      <button
+        ref={button}
+        type="button"
+        className="account-button"
+        aria-expanded={open}
+        aria-controls={menuId}
+        aria-label={`${t('account.menu')}: ${account.username}`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="account-initial" aria-hidden="true">
+          {initial}
+        </span>
+        <span className="account-copy" aria-hidden="true">
+          <span className="account-name">{account.username}</span>
+          <span className="account-role">{t(admin ? 'account.admin' : 'account.reader')}</span>
+        </span>
+        <ChevronDown className="account-caret" size={14} strokeWidth={1.5} aria-hidden="true" />
+      </button>
+      <ul className="account-menu" id={menuId} hidden={!open}>
+        {admin ? (
+          <>
+            {item('/settings', t('settings.open'))}
+            {item('/backup', t('backup.open'))}
+            {item('/trash', t('trash.title'))}
+          </>
+        ) : null}
+        <li>
+          <button
+            type="button"
+            className="account-menu-item"
+            onClick={() => {
+              setOpen(false);
+              account.onSignOut();
+            }}
+          >
+            <LogOut size={15} strokeWidth={1.5} aria-hidden="true" />
+            {t('account.signOut')}
+          </button>
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -135,9 +227,7 @@ function AppBar({
 }) {
   const { t } = useLocale();
   const menuButton = useRef<HTMLButtonElement>(null);
-  const admin = account.role === 'admin';
-  const onLibrary = path === '/' || path.startsWith('/books/');
-  const initial = account.username.trim().charAt(0).toLocaleUpperCase() || '?';
+  const tab = tabFor(path);
   const close = () => onMenu(false);
 
   useEffect(() => {
@@ -166,38 +256,14 @@ function AppBar({
         >
           {menuOpen ? <X size={20} strokeWidth={1.5} aria-hidden="true" /> : <Menu size={20} strokeWidth={1.5} aria-hidden="true" />}
         </button>
+        <nav className="app-tabs" aria-label={t('shell.navigation')}>
+          <TabItem to="/" label={t('tabs.reading')} icon={<BookOpen size={20} strokeWidth={1.5} />} active={tab === 'reading'} />
+          <TabItem to="/library" label={t('tabs.library')} icon={<Library size={20} strokeWidth={1.5} />} active={tab === 'library'} />
+        </nav>
         <div className={menuOpen ? 'app-bar-panel app-bar-panel-open' : 'app-bar-panel'} id="app-navigation">
-          <nav className="app-nav" aria-label={t('shell.navigation')}>
-            <NavItem to="/" label={t('home.title')} active={onLibrary} onNavigate={close} />
-            <NavItem to="/import" label={t('import.open')} active={path === '/import'} onNavigate={close} />
-            {admin ? (
-              <>
-                <span className="app-nav-divider" aria-hidden="true" />
-                <NavItem to="/settings" label={t('settings.open')} active={path === '/settings'} admin onNavigate={close} />
-                <NavItem to="/backup" label={t('backup.open')} active={path === '/backup'} admin onNavigate={close} />
-              </>
-            ) : null}
-          </nav>
           <div className="app-bar-end">
             <LanguageSelect value={active} onChange={onLocale} />
-            <div className="account">
-              <span className="account-initial" aria-hidden="true">
-                {initial}
-              </span>
-              <span className="account-copy">
-                <span className="account-name">{account.username}</span>
-                <span className="account-role">{t(admin ? 'account.admin' : 'account.reader')}</span>
-              </span>
-              <button
-                type="button"
-                className="icon-button account-signout"
-                onClick={account.onSignOut}
-                aria-label={t('account.signOut')}
-                title={t('account.signOut')}
-              >
-                <LogOut size={17} strokeWidth={1.5} aria-hidden="true" />
-              </button>
-            </div>
+            <AccountMenu account={account} path={path} onNavigate={close} />
           </div>
         </div>
       </header>

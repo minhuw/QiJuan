@@ -12,6 +12,14 @@ COPY . .
 
 RUN npm run build
 
+# Text recognition for scanned PDFs: OCRmyPDF with simplified Chinese and English data, and
+# Poppler's pdfinfo/pdftotext to tell scans from PDFs that already have text.
+RUN set -eu \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-eng poppler-utils \
+ && rm -rf /var/lib/apt/lists/* \
+ && ocrmypdf --version
+
 # Pinned restic. The checksum is the linux amd64 build recorded in
 # server/restic-release.json. Other architectures fail this step.
 RUN set -eu \

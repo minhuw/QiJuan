@@ -120,7 +120,7 @@ describe('pdf reader', () => {
     expect(thumbs.length).toBeLessThan(8);
     expect(session.renderThumbnail).not.toHaveBeenCalledWith(1, expect.anything(), expect.anything());
     expect(session.renderThumbnail).not.toHaveBeenCalledWith(8, expect.anything(), expect.anything());
-    expect(screen.getByRole('link', { name: catalogs.en.reader.library })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: catalogs.en.reader.library })).toHaveAttribute('href', '/library');
     expect(screen.getByRole('link', { name: catalogs.en.reader.backToBook })).toHaveAttribute('href', '/books/3');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText(catalogs.en.reader.scanNoText)).not.toBeInTheDocument();
@@ -145,9 +145,36 @@ describe('pdf reader', () => {
     install(chinese);
     renderReader('zh-Hans');
     expect(await screen.findByRole('button', { name: catalogs['zh-Hans'].reader.outline })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.library })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.library })).toHaveAttribute('href', '/library');
     fireEvent.click(screen.getByRole('button', { name: catalogs['zh-Hans'].reader.options }));
     expect(screen.getByRole('button', { name: catalogs['zh-Hans'].reader.fitWidth })).toBeInTheDocument();
+  });
+
+  it('zooms with Ctrl/⌘ shortcuts and Ctrl+wheel, and fits the page', async () => {
+    const session = sessionFor();
+    install(session);
+    renderReader('en');
+    await waitFor(() => expect(document.querySelector('.pdf-stage')).toHaveAttribute('aria-busy', 'false'));
+    expect(screen.getByRole('button', { name: /^Reset zoom to 100%/ })).toHaveTextContent('150%');
+    fireEvent.keyDown(window, { key: '=', ctrlKey: true });
+    await waitFor(() => expect(session.renderPage).toHaveBeenLastCalledWith(expect.objectContaining({ zoom: 2 })));
+    fireEvent.keyDown(window, { key: '0', metaKey: true });
+    await waitFor(() => expect(session.renderPage).toHaveBeenLastCalledWith(expect.objectContaining({ zoom: 1 })));
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.fitPage }));
+    await waitFor(() => expect(session.renderPage).toHaveBeenLastCalledWith(expect.objectContaining({ zoom: 'page' })));
+
+    // A plain wheel is left to the page; Ctrl+wheel zooms once the gesture settles.
+    const scroller = document.querySelector('.pdf-scroller')!;
+    const calls = vi.mocked(session.renderPage).mock.calls.length;
+    const plain = new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true });
+    scroller.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(false);
+    const pinch = new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true });
+    scroller.dispatchEvent(pinch);
+    expect(pinch.defaultPrevented).toBe(true);
+    await waitFor(() => expect(vi.mocked(session.renderPage).mock.calls.length).toBeGreaterThan(calls));
+    const last = vi.mocked(session.renderPage).mock.calls.at(-1)![0];
+    expect(typeof last.zoom === 'number' && last.zoom > 1.5).toBe(true);
   });
 
   it('starts with panels and advanced tools closed and dismisses options accessibly', async () => {
@@ -158,7 +185,9 @@ describe('pdf reader', () => {
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Chapter' })).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: catalogs.en.reader.page })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: catalogs.en.reader.zoomIn })).not.toBeInTheDocument();
+    // Zoom lives on the toolbar, not in Options.
+    expect(screen.getByRole('button', { name: catalogs.en.reader.zoomIn })).toBeEnabled();
+    expect(screen.getByRole('button', { name: catalogs.en.reader.fitPage })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: catalogs.en.reader.thumbnails })).not.toBeInTheDocument();
     expect(session.renderThumbnail).not.toHaveBeenCalled();
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
@@ -166,7 +195,9 @@ describe('pdf reader', () => {
     expect(options).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(options);
     expect(screen.getByRole('textbox', { name: catalogs.en.reader.page })).toHaveValue('4');
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.zoomOut }));
+    fireEvent.click(options);
     await waitFor(() => expect(session.renderPage).toHaveBeenLastCalledWith(expect.objectContaining({ zoom: 1.25 })));
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

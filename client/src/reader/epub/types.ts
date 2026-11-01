@@ -37,6 +37,8 @@ export interface EpubSession {
   underline(cfi: string): void;
   removeMark(cfi: string, kind: 'highlight' | 'underline'): void;
   onRelocated(listener: (cfi: string) => void): () => void;
+  /** Roughly how far in the last relocation was, 0–1, by chapter and page within it; null before one. */
+  progress(): number | null;
   onSelected(listener: (cfi: string, quote: string) => void): () => void;
   search(query: string): Promise<SearchHit[]>;
   destroy(): void;

@@ -4,6 +4,7 @@ import { Converter } from 'opencc-js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { migrate } from '../src/migrate.js';
+import { sortKey } from '../src/sort-key.js';
 import { defaultMigrationsDir } from '../src/paths.js';
 import { makeTempDir, tempConfig } from './helpers.js';
 
@@ -72,13 +73,14 @@ function insertEdition(
   const edition = sqlite
     .prepare(
       `INSERT INTO editions (
-        library_id, title, sort_title, language, series_id, series_order, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        library_id, title, sort_title, sort_key, language, series_id, series_order, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.libraryId,
       input.title,
       input.sortTitle,
+      sortKey(input.sortTitle),
       input.language,
       input.seriesId ?? null,
       input.seriesOrder ?? null,
@@ -360,6 +362,17 @@ describe('library search and personal state', () => {
       expect(saved.statusCode).toBe(200);
     }
 
+    // Library cards say which of this user's shelves hold a book, and which file Read opens.
+    const cards = (await app.inject({ method: 'GET', url: '/api/library?limit=48', headers: { cookie } })).json().editions as Array<{
+      id: number;
+      shelfIds: number[];
+      readAssetId: number | null;
+      formats: string[];
+    }>;
+    expect(cards.find((card) => card.id === pdf)?.shelfIds).toEqual([shelfId]);
+    expect(cards.find((card) => card.id === readingOnly)?.shelfIds).toEqual([]);
+    for (const card of cards) expect(card.readAssetId === null).toBe(card.formats.length === 0);
+
     const adaEdition = await read(cookie, main);
     expect(adaEdition.reading).toMatchObject({ status: 'reading', rating: 5, favorite: true, queued: true });
     expect(adaEdition.reading.shelves).toEqual([{ id: shelfId, name: 'Weekend', included: true }]);
@@ -512,27 +525,32 @@ describe('library search and personal state', () => {
       };
     };
 
+    // One A–Z: case and accents fold, Chinese files under its pinyin initial (红 H, 三 S),
+    // and a script without one (kana) goes to '#'.
     const all = await get('limit=2&offset=4');
-    expect(all.editions.map((item) => item.title)).toEqual(['The Waves', 'atlas of remote islands']);
+    expect(all.editions.map((item) => item.title)).toEqual(['Beloved', 'Émile']);
     expect(all.index).toEqual([
       { key: '#', offset: 0, count: 1 },
-      { key: 'A', offset: 1, count: 2 },
-      { key: 'B', offset: 3, count: 1 },
-      { key: 'W', offset: 4, count: 1 },
-      { key: 'A', offset: 5, count: 1 },
-      { key: '#', offset: 6, count: 1 },
-      { key: 'cjk', offset: 7, count: 3 },
+      { key: 'A', offset: 1, count: 3 },
+      { key: 'B', offset: 4, count: 1 },
+      { key: 'E', offset: 5, count: 1 },
+      { key: 'H', offset: 6, count: 1 },
+      { key: 'S', offset: 7, count: 1 },
+      { key: 'W', offset: 8, count: 1 },
+      { key: '#', offset: 9, count: 1 },
     ]);
 
     const english = await get('limit=24&language=en');
     expect(english.index).toEqual([
       { key: '#', offset: 0, count: 1 },
-      { key: 'A', offset: 1, count: 2 },
-      { key: 'B', offset: 3, count: 1 },
-      { key: 'W', offset: 4, count: 1 },
-      { key: 'A', offset: 5, count: 1 },
+      { key: 'A', offset: 1, count: 3 },
+      { key: 'B', offset: 4, count: 1 },
+      { key: 'W', offset: 5, count: 1 },
     ]);
-    expect((await get('limit=24&language=zh')).index).toEqual([{ key: 'cjk', offset: 0, count: 2 }]);
+    expect((await get('limit=24&language=zh')).index).toEqual([
+      { key: 'H', offset: 0, count: 1 },
+      { key: 'S', offset: 1, count: 1 },
+    ]);
     expect((await get('limit=24&q=nothing-matches-this')).index).toEqual([]);
   });
 });

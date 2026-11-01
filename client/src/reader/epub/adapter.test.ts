@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDebouncedSave } from './debounce';
-import { isSavedEpubLocator, locatorFromRelocation } from './cfi';
+import { isSavedEpubLocator, locatorFromRelocation, progressFromRelocation } from './cfi';
 import { neutralizeRemoteAssets, replaceRemoteCssUrls, resolveArchivedImages } from './remote';
 import { openEpubSession } from './session';
 import { CJK_SANS, CJK_SERIF, fontStack, mountRendition, renditionOptionsFor, themeCss } from './settings';
@@ -233,6 +233,14 @@ describe('epub adapter', () => {
     expect(parent.getAttribute('src')).toBe('blob:/cover.jpg');
     expect(remote.getAttribute('src')).toBe('https://cdn.example/remote.jpg');
     expect(embedded.getAttribute('src')?.startsWith('data:')).toBe(true);
+  });
+
+  it('estimates progress from the chapter and the page within it', () => {
+    expect(progressFromRelocation({ start: { index: 2, displayed: { page: 1, total: 4 } } }, 10)).toBeCloseTo(0.225);
+    expect(progressFromRelocation({ start: { index: 9, displayed: { page: 4, total: 4 } } }, 10)).toBe(1);
+    expect(progressFromRelocation({ start: { index: 3 } }, 10)).toBeCloseTo(0.3);
+    expect(progressFromRelocation({ start: { index: 12 } }, 10)).toBeNull();
+    expect(progressFromRelocation(null, 10)).toBeNull();
   });
 
   it('writes the last cfi once after a burst of page turns', () => {

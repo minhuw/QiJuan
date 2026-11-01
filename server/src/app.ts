@@ -11,8 +11,11 @@ import { createSpawnRunner, resolveResticBin, type ResticRunner } from './backup
 import type { AppConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { backfillCoverTints } from './edition-fields.js';
+import { backfillSortKeys } from './sort-key.js';
 import { registerEditionRoutes } from './edition-routes.js';
 import { registerTrashRoutes } from './trash-routes.js';
+import { registerOcrRoutes } from './ocr-routes.js';
+import { createOcrmypdfRunner, ocrAvailable, popplerDetector, startOcrWorker, type OcrDetector, type OcrRunner } from './ocr.js';
 import { registerImportRoutes } from './import-routes.js';
 import { registerLibraryRoutes } from './library-routes.js';
 import { registerMetadataRoutes } from './metadata-routes.js';
@@ -47,6 +50,16 @@ export interface BuildAppOptions {
   ratings?: RatingsFetcherOptions & { worker?: boolean; pollMs?: number };
   /** Provider site icons. Tests pass a stub transport. */
   providerIcons?: Omit<ProviderIconsOptions, 'dataDir'>;
+  /** Text recognition. Tests pass a fake runner and availability, or `worker: false`. */
+  ocr?: {
+    runner?: OcrRunner;
+    available?: () => boolean;
+    worker?: boolean;
+    pollMs?: number;
+    /** Recognize scanned PDFs without being asked. Off unless the caller turns it on (the server does). */
+    auto?: boolean;
+    detector?: OcrDetector;
+  };
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -78,9 +91,12 @@ export async function buildApp(options: BuildAppOptions) {
   let stopWorker: (() => void) | null = null;
   let stopBackup: (() => void) | null = null;
   let stopRatings: (() => void) | null = null;
+  let stopOcr: (() => void) | null = null;
   app.addHook('onClose', async () => {
     stopRatings?.();
     stopRatings = null;
+    stopOcr?.();
+    stopOcr = null;
     stopBackup?.();
     stopBackup = null;
     stopWorker?.();
@@ -144,6 +160,13 @@ export async function buildApp(options: BuildAppOptions) {
         return state.db;
       },
       dataDir: options.config.dataDir,
+    });
+    registerOcrRoutes(app, {
+      get db() {
+        return state.db;
+      },
+      dataDir: options.config.dataDir,
+      available: options.ocr?.available ?? (() => ocrAvailable()),
     });
     registerTrashRoutes(app, {
       get db() {
@@ -235,6 +258,13 @@ export async function buildApp(options: BuildAppOptions) {
     } catch (error) {
       app.log.error({ err: error }, 'staged lookup cover backfill failed');
     }
+    // Editions stored before pinyin sort keys existed; a no-op once done.
+    try {
+      const keyed = backfillSortKeys(state.db);
+      if (keyed > 0) app.log.info({ editions: keyed }, 'filled catalogue sort keys');
+    } catch (error) {
+      app.log.error({ err: error }, 'sort key backfill failed');
+    }
     // Covers stored before band tints existed; a no-op once done.
     try {
       const tinted = backfillCoverTints(state.db, options.config.dataDir);
@@ -274,6 +304,24 @@ export async function buildApp(options: BuildAppOptions) {
         },
       });
       stopRatings = ratings.stop;
+    }
+    if (options.ocr?.worker !== false) {
+      stopOcr = startOcrWorker({
+        get db() {
+          return state.db;
+        },
+        dataDir: options.config.dataDir,
+        runner: options.ocr?.runner ?? createOcrmypdfRunner(),
+        auto: options.ocr?.auto
+          ? { available: options.ocr.available ?? (() => ocrAvailable()), detector: options.ocr.detector ?? popplerDetector }
+          : undefined,
+        pollMs: options.ocr?.pollMs,
+        log: {
+          error(context, message) {
+            app.log.error(context, message);
+          },
+        },
+      }).stop;
     }
     stopBackup = backup.start().stop;
 

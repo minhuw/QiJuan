@@ -1,17 +1,17 @@
 const LOCATOR_MAX = 200;
 const NUM = '-?(?:0|[1-9]\\d{0,6})(?:\\.\\d{1,4})?';
-const PDF_POS = new RegExp(`^pdfpos\\(page=([1-9]\\d{0,6});x=(${NUM});y=(${NUM});(?:zoom=(${NUM})|fit=width)\\)$`);
+const PDF_POS = new RegExp(`^pdfpos\\(page=([1-9]\\d{0,6});x=(${NUM});y=(${NUM});(?:zoom=(${NUM})|fit=(width|page))\\)$`);
 
 export interface PdfPlace {
   page: number;
   x: number;
   y: number;
-  zoom: number | 'width';
+  zoom: number | 'width' | 'page';
 }
 
 /**
  * A PDF place is a page, the visible top-left in PDF user space, and a zoom
- * factor or fit-width. A document-wide fraction or percent is not a place.
+ * factor, fit-width or fit-page. A document-wide fraction or percent is not a place.
  */
 export function parsePdfPlace(value: unknown): PdfPlace | null {
   if (typeof value !== 'string') return null;
@@ -24,7 +24,7 @@ export function parsePdfPlace(value: unknown): PdfPlace | null {
   const y = Number(match[3]);
   if (!Number.isInteger(page) || page < 1 || page > 1_000_000) return null;
   if (!validCoord(x) || !validCoord(y)) return null;
-  if (match[4] === undefined) return { page, x, y, zoom: 'width' };
+  if (match[4] === undefined) return { page, x, y, zoom: match[5] === 'page' ? 'page' : 'width' };
   const zoom = Number(match[4]);
   if (!(zoom > 0) || zoom > 16) return null;
   return { page, x, y, zoom };

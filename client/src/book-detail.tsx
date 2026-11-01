@@ -43,6 +43,7 @@ import { BookTabs, useTabHash, type BookTab } from './book-tabs';
 import { ReadingActions, ShelfMenu } from './reading-actions';
 import { useLocale } from './shell';
 import { ConfirmDialog } from './components/ui/confirm-dialog';
+import { PdfOcrControl } from './book-ocr';
 import { fill } from './trash-screen';
 
 const ERROR_CODES = new Set([
@@ -333,7 +334,7 @@ export function BookDetail({
       setRemoveError(result.error ?? 'network');
       return;
     }
-    navigate('/', { state: { trashed: { id: result.data.edition.id, title: result.data.edition.title } } });
+    navigate('/library', { state: { trashed: { id: result.data.edition.id, title: result.data.edition.title } } });
   }
 
   async function removeAsset(assetId: number) {
@@ -668,7 +669,7 @@ export function BookDetail({
     return (
       <div className="state-page">
         <ErrorNotice message={errorText(t, error)} />
-        <Link className="back-link" to="/">
+        <Link className="back-link" to="/library">
           <ArrowLeft size={15} strokeWidth={1.5} aria-hidden="true" />
           {t('book.back')}
         </Link>
@@ -867,6 +868,7 @@ export function BookDetail({
                   <span className="format-text">{asset.format.toUpperCase()}</span>
                   {asset.availability === 'missing' ? <StateTag tone="error">{t('book.missing')}</StateTag> : null}
                 </span>
+                <PdfOcrControl editionId={edition.id} asset={asset} admin={role === 'admin'} onEdition={setEdition} />
               </span>
               <span className="format-actions">
                 {asset.availability === 'present' ? (
@@ -1290,7 +1292,7 @@ export function BookDetail({
   return (
     <div className="book-page" data-tint={tint ? 'cover' : 'stock'} style={tintStyle}>
       <div className="book-page-inner">
-        <Link className="back-link" to="/">
+        <Link className="back-link" to="/library">
           <ArrowLeft size={15} strokeWidth={1.5} aria-hidden="true" />
           {t('book.back')}
         </Link>
@@ -1464,9 +1466,11 @@ function safeHttpUrl(value: string): string | null {
 export function ReaderPage({
   editionId,
   assetId,
+  role = 'reader',
 }: {
   editionId: number;
   assetId: number;
+  role?: 'admin' | 'reader';
 }) {
   const { t } = useLocale();
   const [edition, setEdition] = useState<EditionDetail | null>(null);
@@ -1491,7 +1495,7 @@ export function ReaderPage({
     return (
       <div className="state-page">
         <ErrorNotice message={errorText(t, error)} />
-        <Link className="back-link" to="/">
+        <Link className="back-link" to="/library">
           <ArrowLeft size={15} strokeWidth={1.5} aria-hidden="true" />
           {t('book.back')}
         </Link>
@@ -1504,7 +1508,7 @@ export function ReaderPage({
     return (
       <div className="state-page">
         <ErrorNotice message={t('errors.not_found')} />
-        <Link className="back-link" to="/">
+        <Link className="back-link" to="/library">
           <ArrowLeft size={15} strokeWidth={1.5} aria-hidden="true" />
           {t('book.back')}
         </Link>
@@ -1533,7 +1537,7 @@ export function ReaderPage({
   return (
     <>
       {asset.format === 'pdf' ? (
-        <PdfReader editionId={edition.id} assetId={asset.id} title={edition.title} />
+        <PdfReader editionId={edition.id} assetId={asset.id} title={edition.title} admin={role === 'admin'} ocr={asset.ocr ?? null} />
       ) : (
         <EpubReader editionId={edition.id} assetId={asset.id} title={edition.title} />
       )}

@@ -1,6 +1,6 @@
 import ePub from 'epubjs';
 import { createPageScroll } from '../page-scroll';
-import { isSavedEpubLocator, locatorFromRelocation } from './cfi';
+import { isSavedEpubLocator, locatorFromRelocation, progressFromRelocation } from './cfi';
 import { onReaderKey, type ReaderKeyEvent } from './keys';
 import { isArchivedStylesheet, isFontOrImage, isRemoteUrl, neutralizeRemoteAssets, resolveArchivedImages, rewriteArchivedText, substituteFor } from './remote';
 import { fontStack, mountRendition, renditionOptionsFor, themeCss, type ReaderFlow } from './settings';
@@ -178,6 +178,7 @@ export async function openEpubSession(
   let changingFlow = false;
   let stopPageScroll = () => {};
   const relocated = new Set<(cfi: string) => void>();
+  let currentProgress: number | null = null;
   const selected = new Set<(cfi: string, quote: string) => void>();
   const marks = new Map<string, 'highlight' | 'underline'>();
 
@@ -230,6 +231,7 @@ export async function openEpubSession(
       const cfi = locatorFromRelocation(location);
       if (!cfi) return;
       currentCfi = cfi;
+      currentProgress = progressFromRelocation(location, book.spine.spineItems.length) ?? currentProgress;
       for (const listener of relocated) listener(cfi);
     }) as (...args: never[]) => void);
     target.on('selected', ((cfiRange: unknown, contents: unknown) => {
@@ -343,6 +345,9 @@ export async function openEpubSession(
       } catch {
         // Already detached.
       }
+    },
+    progress() {
+      return currentProgress;
     },
     onRelocated(listener) {
       relocated.add(listener);

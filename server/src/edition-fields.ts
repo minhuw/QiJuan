@@ -8,10 +8,11 @@ import { sniffImage } from './metadata.js';
 import { upsertPerson } from './persons.js';
 import {
   alternateTitles,
+  assetOcr,
   covers,
   editionContributors,
-  fieldLocks,
   editionIdentifiers,
+  fieldLocks,
   fileAssets,
   metadataPreviews,
   persons,
@@ -513,7 +514,13 @@ function countReferences(db: AppDatabase, sha256: string): number {
     .from(metadataPreviews)
     .where(eq(metadataPreviews.coverSha256, sha256))
     .get();
-  return readCount(assetRow?.count) + readCount(coverRow?.count) + readCount(previewRow?.count);
+  // An OCR copy is a blob of its own; see migration 0022.
+  const ocrRow = db
+    .select({ count: sql<number>`count(*)` })
+    .from(assetOcr)
+    .where(eq(assetOcr.sha256, sha256))
+    .get();
+  return readCount(assetRow?.count) + readCount(coverRow?.count) + readCount(previewRow?.count) + readCount(ocrRow?.count);
 }
 
 function readCount(value: unknown): number {

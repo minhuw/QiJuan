@@ -26,6 +26,7 @@ import {
 } from './api';
 import { BackupScreen } from './backup-screen';
 import { BookDetail, ReaderPage } from './book-detail';
+import { ReadingHome } from './reading-home';
 import { Entry } from './components/ui/entry';
 import { PageHeader } from './components/ui/page-header';
 import { StateTag } from './components/ui/status-mark';
@@ -206,7 +207,7 @@ export function Gate() {
     const editionId = pathId(readMatch[1] ?? '');
     const assetId = pathId(readMatch[2] ?? '');
     if (editionId && assetId) {
-      return <ReaderPage editionId={editionId} assetId={assetId} />;
+      return <ReaderPage editionId={editionId} assetId={assetId} role={phase.user.role} />;
     }
   }
   const bookMatch = location.pathname.match(/^\/books\/([1-9]\d*)$/);
@@ -217,7 +218,11 @@ export function Gate() {
     }
   }
 
-  return <LibraryBrowser libraries={phase.libraries} role={phase.user.role} />;
+  if (location.pathname === '/library') {
+    return <LibraryBrowser libraries={phase.libraries} role={phase.user.role} />;
+  }
+
+  return <ReadingHome role={phase.user.role} />;
 }
 
 function AuthLayout({

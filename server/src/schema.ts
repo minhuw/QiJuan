@@ -66,6 +66,8 @@ export const editions = sqliteTable('editions', {
     .references(() => libraries.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   sortTitle: text('sort_title').notNull(),
+  /** Derived from sortTitle by sort-key.ts; '' until filled at start. See migration 0024. */
+  sortKey: text('sort_key').notNull().default(''),
   language: text('language'),
   publisher: text('publisher'),
   publishedDate: text('published_date'),
@@ -435,6 +437,10 @@ export const readingPositions = sqliteTable(
     locator: text('locator').notNull(),
     revision: integer('revision').notNull().default(1),
     updatedAt: text('updated_at').notNull(),
+    /** 0–1, page and pageCount (PDF only), as last reported by the reader. See migration 0025. */
+    progress: real('progress'),
+    page: integer('page'),
+    pageCount: integer('page_count'),
   },
   (table) => [primaryKey({ columns: [table.userId, table.editionId] })],
 );
@@ -506,4 +512,21 @@ export const editionRatingsQueue = sqliteTable('edition_ratings_queue', {
   editionId: integer('edition_id').primaryKey(),
   queuedAt: text('queued_at').notNull(),
   notBefore: text('not_before'),
+});
+
+/** OCR of one PDF file and its recognized copy. See migrations 0022 and 0023. */
+export const assetOcr = sqliteTable('asset_ocr', {
+  assetId: integer('asset_id').primaryKey(),
+  status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed', 'not_needed', 'off'] }).notNull(),
+  /** Tesseract languages, e.g. chi_sim+eng. */
+  languages: text('languages').notNull(),
+  error: text('error'),
+  /** The recognized copy; set together, only when succeeded. */
+  sha256: text('sha256'),
+  bytes: integer('bytes'),
+  relativePath: text('relative_path'),
+  requestedAt: text('requested_at').notNull(),
+  startedAt: text('started_at'),
+  finishedAt: text('finished_at'),
+  updatedAt: text('updated_at').notNull(),
 });

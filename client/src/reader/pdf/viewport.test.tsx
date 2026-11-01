@@ -34,9 +34,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function geometry(page: number, zoom: PdfPlace['zoom'], containerWidth: number): RenderedPage {
+function geometry(page: number, zoom: PdfPlace['zoom'], containerWidth: number, containerHeight = 480): RenderedPage {
   void page;
-  const scale = zoom === 'width' ? containerWidth / 400 : zoom;
+  const scale = zoom === 'width'
+    ? containerWidth / 400
+    : zoom === 'page' ? Math.min(containerWidth / 400, containerHeight / 1000) : zoom;
   return {
     cssWidth: 400 * scale,
     cssHeight: 1000 * scale,
@@ -92,6 +94,57 @@ async function settled(props: PdfViewportProps, count = 1) {
 }
 
 describe('PdfViewport', () => {
+  it('copies a page selection as clean plain text, without the text layer markup', async () => {
+    const view = setup();
+    await settled(view.props);
+    const text = view.root.querySelector('[data-page="1"] .textLayer')!;
+    const span = document.createElement('span');
+    span.textContent = '书 有 归 处';
+    text.append(span);
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+    const data = new Map<string, string>();
+    const event = new Event('copy', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', { value: { setData: (type: string, value: string) => data.set(type, value) } });
+    document.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect([...data]).toEqual([['text/plain', '书有归处']]);
+    document.getSelection()!.removeAllRanges();
+  });
+
+  it('turns a drag in area mode into one rectangle in PDF coordinates, ignoring tiny drags', async () => {
+    const onArea = vi.fn();
+    const view = setup({ areaMode: true, onArea });
+    await settled(view.props);
+    expect(view.root).toHaveClass('pdf-area-mode');
+    const page = view.root.querySelector('[data-page="1"]')!;
+    fireEvent.pointerDown(page, { button: 0, pointerId: 1, clientX: 40, clientY: 60 });
+    expect(page.querySelector('.pdf-area-draft')).not.toBeNull();
+    fireEvent.pointerMove(view.root, { pointerId: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(view.root, { pointerId: 1, clientX: 160, clientY: 140 });
+    expect(page.querySelector('.pdf-area-draft')).toBeNull();
+    // The test geometry maps CSS (x, y) to PDF (10 + x, 1000 - y) at zoom 1.
+    expect(onArea).toHaveBeenCalledWith(expect.objectContaining({
+      locator: 'pdfsel({"v":1,"pages":[{"page":1,"rects":[[50,860,170,940]]}]})',
+      quote: '',
+    }));
+    fireEvent.pointerDown(page, { button: 0, pointerId: 2, clientX: 40, clientY: 60 });
+    fireEvent.pointerUp(view.root, { pointerId: 2, clientX: 43, clientY: 62 });
+    expect(onArea).toHaveBeenCalledTimes(1);
+    view.update({ areaMode: false });
+    expect(view.root).not.toHaveClass('pdf-area-mode');
+  });
+
+  it('keeps a zoom command’s focus point under the same viewport pixel', async () => {
+    const view = setup({ place: { page: 1, x: 110, y: 900, zoom: 2, focus: { x: 110, y: 900, px: 50, py: 20 } } });
+    await settled(view.props);
+    // At zoom 2 the PDF point (110, 900) is at CSS (200, 200) on page 1.
+    expect(view.root.scrollTop).toBe(180);
+    expect(view.root.scrollLeft).toBe(150);
+  });
+
   it('keeps the scroller ref available before a session or place exists', async () => {
     const view = setup({ session: null, place: null });
     expect(view.root).toHaveClass('pdf-scroller');
@@ -210,7 +263,7 @@ describe('PdfViewport', () => {
   it('preserves the current native-scroll anchor on fit-width resize and subsequent zoom', async () => {
     const session = sessionFor(20, (page, zoom, containerWidth) => {
       if (page !== 1) return geometry(page, zoom, containerWidth);
-      const scale = zoom === 'width' ? containerWidth / 1000 : zoom;
+      const scale = zoom === 'width' || zoom === 'page' ? containerWidth / 1000 : zoom;
       return {
         scale, cssWidth: 1000 * scale, cssHeight: 600 * scale,
         toViewport: (x, y) => ({ x: (x - 10) * scale, y: (600 - y) * scale }),

@@ -46,7 +46,8 @@
     "signOut": "退出",
     "admin": "管理员",
     "reader": "读者",
-    "passwordHint": "至少 8 个字符。"
+    "passwordHint": "至少 8 个字符。",
+    "menu": "账户"
   },
   "settings": {
     "open": "设置",
@@ -224,6 +225,23 @@
     "atAGlance": "概要",
     "read": "阅读",
     "download": "下载",
+    "ocr": {
+      "start": "识别文字（OCR）",
+      "hint": "为扫描页加上一层隐形文字，以便搜索和选中。在本服务器上运行，不改动原文件。",
+      "queued": "等待识别文字…",
+      "running": "正在识别文字…已进行 {minutes} 分钟",
+      "ready": "已识别文字（OCR）",
+      "failed": "文字识别失败。",
+      "fileMissing": "文字识别失败：文件缺失。",
+      "retry": "重试",
+      "cancel": "取消",
+      "remove": "移除 OCR",
+      "removeTitle": "移除识别的文字？",
+      "removeConfirm": "阅读器会改回没有文字层的扫描文件。原文件保持不变，以后可以再次识别。",
+      "unavailable": "本服务器未安装 OCR。",
+      "actionFailed": "操作没有成功，请重试。",
+      "readerRunning": "正在后台识别文字，完成后重新打开本书即可。"
+    },
     "cover": "封面",
     "replaceCover": "更换封面",
     "chooseCover": "选择图片",
@@ -332,7 +350,6 @@
     "continue": "继续阅读",
     "continueEmpty": "还没有读到的位置。",
     "recent": "最近加入",
-    "recentEmpty": "还没有新书。",
     "shelves": "书架",
     "shelvesEmpty": "还没有书架。",
     "previous": "上一页",
@@ -342,14 +359,29 @@
     "clearFilters": "清除筛选",
     "of": "共",
     "thumbIndex": "书名索引",
-    "indexCjk": "中文",
     "indexOther": "数字与符号",
     "lastRead": "上次阅读",
     "catalogue": "书目",
     "identifier": "标识",
     "identifierAny": "全部标识",
     "identified": "已识别",
-    "unidentified": "未识别"
+    "unidentified": "未识别",
+    "select": "选择《{title}》",
+    "moreActions": "《{title}》的更多操作",
+    "allBooks": "全部",
+    "selection": "已选的书",
+    "selectedCount": "已选 {count} 本",
+    "clearSelection": "取消选择",
+    "menu": {
+      "open": "打开",
+      "read": "阅读",
+      "edit": "编辑信息",
+      "clearStatus": "清除状态",
+      "addToShelf": "加入书架",
+      "unfavorite": "取消收藏"
+    },
+    "countBooks": "{count} 本书",
+    "countShelves": "{count} 个书架"
   },
   "reading": {
     "title": "阅读",
@@ -425,6 +457,12 @@
     "zoomIn": "放大",
     "zoomOut": "缩小",
     "fitWidth": "适合页宽",
+    "fitPage": "适合整页",
+    "zoomReset": "恢复到 100%",
+    "areaTool": "框选标注",
+    "areaToolHint": "框选标注：在页面上拖出一个框",
+    "areaHighlight": "框选区域",
+    "scanHint": "这一页是扫描图像，文字无法选中。可以改用",
     "zoom": "缩放",
     "page": "页码",
     "thumbnails": "缩略图",
@@ -646,6 +684,26 @@
       "last_asset": "每本书至少保留一个文件。要移除，请移除整本书。",
       "not_in_trash": "它已经不在回收站里了。",
       "failed": "操作没有成功，请重试。"
-    }
+    },
+    "movedMany": "已将 {count} 本书移到回收站。",
+    "restoredMany": "已恢复 {count} 本书。",
+    "removeManyConfirm": "把 {count} 本书移到回收站？它们会从书库、搜索和 OPDS 中消失。可以在回收站恢复，阅读状态、书架和笔记都会保留。"
+  },
+  "tabs": {
+    "reading": "在读",
+    "library": "书库"
+  },
+  "readingTab": {
+    "lastBook": "上次读的书",
+    "continue": "继续阅读",
+    "details": "书籍详情",
+    "alsoReading": "也在读",
+    "empty": "还没有在读的书。",
+    "emptyHint": "从书库打开一本书，它就会在这里等你。",
+    "browse": "浏览书库",
+    "progressPages": "第 {page} / {pages} 页 · {percent}",
+    "progressPercent": "已读 {percent}",
+    "pageOf": "第 {page} / {pages} 页",
+    "seeLibrary": "去书库"
   }
 }

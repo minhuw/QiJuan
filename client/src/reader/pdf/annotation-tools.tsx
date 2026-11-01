@@ -210,7 +210,7 @@ export function PdfAnnotationPanel({ kind, tools, onNavigate, onPageNote, ready 
             <button type="button" className="pdf-annotation-jump" onClick={() => item.locator && onNavigate(item.locator)}>
               <span className="pdf-annotation-page">{t('reader.page')} {pdfAnnotationPoint(item.locator)?.page}</span>
               <span className={kind === 'highlights' ? 'pdf-annotation-quote' : 'pdf-annotation-body'}>
-                {'quote' in item ? item.quote || t('reader.highlight') : item.body}
+                {'quote' in item ? item.quote || t('reader.areaHighlight') : item.body}
               </span>
             </button>
             <div className="pdf-annotation-actions">

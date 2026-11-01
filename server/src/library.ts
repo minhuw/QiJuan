@@ -5,6 +5,8 @@ import { CatalogError } from './catalog.js';
 import type { AppDatabase } from './db.js';
 import { getEditionDetail, requireLiveEdition } from './editions.js';
 import { presentRatings, ratingsQueued } from './ratings.js';
+import { coverTintPair, type CoverTint } from './cover-tint.js';
+import { latestCover } from './edition-fields.js';
 import { IDENTIFIER_SCHEMES } from './identifiers.js';
 import {
   editions,
@@ -70,6 +72,10 @@ export interface LibraryCard {
   favorite: boolean;
   /** False for an Unidentified edition: no identifier in a catalog scheme. */
   identified: boolean;
+  /** The file Read opens: the one last read by this user, else the first live file. */
+  readAssetId: number | null;
+  /** This user's shelves that hold the edition. */
+  shelfIds: number[];
 }
 
 export interface ShelfSummary {
@@ -94,10 +100,10 @@ export interface LibraryQuery {
 
 /**
  * One contiguous run of a title initial in the filtered catalogue order. `key`
- * is an ASCII letter A–Z, '#' for digits and other marks, or 'cjk' for CJK
- * initials: sort_title carries no pinyin, so CJK titles are not split by
- * reading. sort_title orders by code point, so a key can recur ('atlas' sorts
- * after 'Zola', 'Émile' after both); runs are listed by offset.
+ * is a letter A–Z, or '#' for digits, marks and scripts without one. The order
+ * is sort_key (sort-key.ts), which gives Chinese titles their pinyin initial,
+ * so 黑格尔 files under H beside Latin titles. Runs are listed by offset; a key
+ * recurs only for a key not yet filled in at start.
  */
 export interface LibraryIndexEntry {
   key: string;
@@ -116,7 +122,7 @@ export interface LibraryPage {
 }
 
 export interface HomePayload {
-  continueReading: Array<LibraryCard & { updatedAt: string }>;
+  continueReading: Array<LibraryCard & { updatedAt: string; assetId: number | null; coverTint: CoverTint | null; progress: { fraction: number; page: number | null; pageCount: number | null } | null }>;
   recent: LibraryCard[];
   shelves: ShelfSummary[];
 }
@@ -138,14 +144,11 @@ const IDENTIFIED_SQL = `EXISTS (
   WHERE ei.edition_id = e.id AND ei.scheme IN (${IDENTIFIER_SCHEMES.map((scheme) => `'${scheme}'`).join(', ')})
 )`;
 
-/** First sort_title code point, upper-cased for ASCII only. */
-const INITIAL_CODE_EXPR = 'unicode(upper(substr(e.sort_title, 1, 1)))';
+/** First sort_key code point; the key is lowercase. */
+const INITIAL_CODE_EXPR = 'unicode(substr(e.sort_key, 1, 1))';
 /** CJK radicals through unified ideographs, compatibility ideographs, and the supplementary ideograph planes. */
 const INITIAL_KEY_EXPR = `CASE
-  WHEN ${INITIAL_CODE_EXPR} BETWEEN 65 AND 90 THEN char(${INITIAL_CODE_EXPR})
-  WHEN ${INITIAL_CODE_EXPR} BETWEEN 11904 AND 40959
-    OR ${INITIAL_CODE_EXPR} BETWEEN 63744 AND 64255
-    OR ${INITIAL_CODE_EXPR} BETWEEN 131072 AND 262143 THEN 'cjk'
+  WHEN ${INITIAL_CODE_EXPR} BETWEEN 97 AND 122 THEN char(${INITIAL_CODE_EXPR} - 32)
   ELSE '#'
 END`;
 
@@ -328,12 +331,34 @@ export function loadCards(db: AppDatabase, userId: number, ids: number[]): Libra
   const formats = new Map<number, Array<'epub' | 'pdf'>>();
   const formatRows = sqlite
     .prepare(
-      `SELECT edition_id AS editionId, format
+      `SELECT id, edition_id AS editionId, format
       FROM file_assets
       WHERE trashed_at IS NULL AND edition_id IN (${marks})
       ORDER BY id`,
     )
-    .all(...ids) as Array<{ editionId: number; format: string }>;
+    .all(...ids) as Array<{ id: number; editionId: number; format: string }>;
+  const liveAssets = new Map<number, number[]>();
+  for (const row of formatRows) {
+    liveAssets.set(row.editionId, [...(liveAssets.get(row.editionId) ?? []), row.id]);
+  }
+  const lastRead = new Map(
+    (
+      sqlite
+        .prepare(`SELECT edition_id AS editionId, asset_id AS assetId FROM reading_positions WHERE user_id = ? AND edition_id IN (${marks})`)
+        .all(userId, ...ids) as Array<{ editionId: number; assetId: number | null }>
+    ).map((row) => [row.editionId, row.assetId]),
+  );
+  const shelvesOf = new Map<number, number[]>();
+  for (const row of sqlite
+    .prepare(
+      `SELECT si.edition_id AS editionId, si.shelf_id AS shelfId
+      FROM shelf_items si JOIN shelves s ON s.id = si.shelf_id
+      WHERE s.user_id = ? AND si.edition_id IN (${marks})
+      ORDER BY si.shelf_id`,
+    )
+    .all(userId, ...ids) as Array<{ editionId: number; shelfId: number }>) {
+    shelvesOf.set(row.editionId, [...(shelvesOf.get(row.editionId) ?? []), row.shelfId]);
+  }
   for (const row of formatRows) {
     if (!isFormat(row.format)) continue;
     const list = formats.get(row.editionId) ?? [];
@@ -364,9 +389,16 @@ export function loadCards(db: AppDatabase, userId: number, ids: number[]): Libra
       rating: row.rating,
       favorite: row.favorite === 1,
       identified: row.identified === 1,
+      readAssetId: readAsset(liveAssets.get(row.id) ?? [], lastRead.get(row.id) ?? null),
+      shelfIds: shelvesOf.get(row.id) ?? [],
     });
   }
   return cards;
+}
+
+function readAsset(live: number[], last: number | null): number | null {
+  if (last != null && live.includes(last)) return last;
+  return live[0] ?? null;
 }
 
 export function listUserShelves(db: AppDatabase, userId: number, libraryIds: number[]): ShelfSummary[] {
@@ -429,7 +461,7 @@ export function searchLibrary(db: AppDatabase, input: LibraryQuery): LibraryPage
     .prepare(
       `SELECT e.id FROM editions e
       WHERE ${where.sql}
-      ORDER BY e.sort_title, e.id
+      ORDER BY e.sort_key, e.id
       LIMIT ? OFFSET ?`,
     )
     .all(...where.params, input.limit, input.offset) as Array<{ id: number }>;
@@ -439,7 +471,7 @@ export function searchLibrary(db: AppDatabase, input: LibraryQuery): LibraryPage
       FROM (
         SELECT key, position, position - row_number() OVER (PARTITION BY key ORDER BY position) AS run
         FROM (
-          SELECT ${INITIAL_KEY_EXPR} AS key, row_number() OVER (ORDER BY e.sort_title, e.id) AS position
+          SELECT ${INITIAL_KEY_EXPR} AS key, row_number() OVER (ORDER BY e.sort_key, e.id) AS position
           FROM editions e
           WHERE ${where.sql}
         )
@@ -466,18 +498,21 @@ export function loadHome(db: AppDatabase, userId: number, libraryIds: number[]):
   const marks = libraryIds.map(() => '?').join(', ');
   const continueRows = sqlite
     .prepare(
-      `SELECT e.id, rp.updated_at AS updatedAt
+      `SELECT e.id, rp.updated_at AS updatedAt, rp.asset_id AS assetId, rp.progress, rp.page, rp.page_count AS pageCount
       FROM reading_positions rp
       JOIN editions e ON e.id = rp.edition_id
       WHERE rp.user_id = ? AND e.trashed_at IS NULL AND e.library_id IN (${marks})
       ORDER BY rp.updated_at DESC, e.id DESC
       LIMIT ${CONTINUE_LIMIT}`,
     )
-    .all(userId, ...libraryIds) as Array<{ id: number; updatedAt: string }>;
+    .all(userId, ...libraryIds) as Array<{ id: number; updatedAt: string; assetId: number | null; progress: number | null; page: number | null; pageCount: number | null }>;
   const continueCards = new Map(loadCards(db, userId, continueRows.map((row) => row.id)).map((card) => [card.id, card]));
   const continueReading = continueRows.flatMap((row) => {
     const card = continueCards.get(row.id);
-    return card ? [{ ...card, updatedAt: row.updatedAt }] : [];
+    const progress = row.progress == null ? null : { fraction: row.progress, page: row.page, pageCount: row.pageCount };
+    // The Reading tab sets the book on its cover's tint, like the book page.
+    const coverTint = card?.hasCover ? coverTintPair(latestCover(db, row.id)?.tint) : null;
+    return card ? [{ ...card, updatedAt: row.updatedAt, assetId: row.assetId, coverTint, progress }] : [];
   });
   const recentRows = sqlite
     .prepare(

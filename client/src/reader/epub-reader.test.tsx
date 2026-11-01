@@ -35,6 +35,7 @@ function install(annotations?: { highlights?: unknown[]; notes?: unknown[] }) {
     highlight: vi.fn(),
     underline: vi.fn(),
     removeMark: vi.fn(),
+    progress: vi.fn(() => 0.4),
     onRelocated: vi.fn((listener: (cfi: string) => void) => {
       relocated = listener;
       return () => {};
@@ -173,7 +174,7 @@ describe('epub reader', () => {
     expect(screen.getByRole('combobox', { name: catalogs['zh-Hans'].reader.mode })).toHaveValue('continuous');
     expect(openEpubSession).toHaveBeenLastCalledWith(expect.any(ArrayBuffer), expect.any(HTMLElement), expect.objectContaining({ flow: 'continuous' }));
     expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.backToBook })).toHaveAttribute('href', '/books/3');
-    expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.library })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: catalogs['zh-Hans'].reader.library })).toHaveAttribute('href', '/library');
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: catalogs['zh-Hans'].reader.options }));
     expect(screen.getByRole('combobox', { name: catalogs['zh-Hans'].reader.theme })).toBeInTheDocument();

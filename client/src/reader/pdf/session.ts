@@ -112,9 +112,9 @@ export async function openPdfSession(data: ArrayBuffer, options?: { workerSrc?: 
       const [xMin, yMin, xMax, yMax] = page.view;
       return { xMin, yMin, xMax, yMax };
     },
-    async pageSize(pageNumber, zoom, containerWidth): Promise<PdfPageSize> {
+    async pageSize(pageNumber, zoom, containerWidth, containerHeight): Promise<PdfPageSize> {
       const page = await doc.getPage(clampPage(pageNumber, pageCount));
-      const { scale, viewport } = pageGeometry(page, zoom, containerWidth);
+      const { scale, viewport } = pageGeometry(page, zoom, containerWidth, containerHeight);
       return { scale, cssWidth: viewport.width, cssHeight: viewport.height };
     },
     renderPage(input) {
@@ -204,10 +204,12 @@ function invalidatePage(state: PageRenderState) {
   state.text = null;
 }
 
-function pageGeometry(page: PdfPage, zoom: RenderPageInput['zoom'], containerWidth: number) {
+function pageGeometry(page: PdfPage, zoom: RenderPageInput['zoom'], containerWidth: number, containerHeight?: number) {
   const base = page.getViewport({ scale: 1 });
   const fitted = base.width > 0 ? Math.max(containerWidth, 1) / base.width : 1;
-  const scale = clampScale(zoom === 'width' ? fitted : zoom);
+  // Fit page: the whole page in view; without a known height it falls back to fit width.
+  const tall = base.height > 0 && containerHeight && containerHeight > 0 ? containerHeight / base.height : fitted;
+  const scale = clampScale(zoom === 'width' ? fitted : zoom === 'page' ? Math.min(fitted, tall) : zoom);
   return { scale, viewport: page.getViewport({ scale }) };
 }
 
@@ -223,7 +225,7 @@ async function paintPage(
   try {
     page = await doc.getPage(clampPage(input.page, doc.numPages));
     if (!isCurrent()) return null;
-    geometry = pageGeometry(page, input.zoom, input.containerWidth);
+    geometry = pageGeometry(page, input.zoom, input.containerWidth, input.containerHeight);
     const { viewport } = geometry;
     const transform = prepareCanvas(input.canvas, viewport.width, viewport.height);
     const task = page.render({ canvas: input.canvas, viewport, transform });
