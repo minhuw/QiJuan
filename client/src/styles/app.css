@@ -5104,7 +5104,8 @@ a.rating-card:hover {
   background: transparent;
 }
 
-/* Real and drawn covers share one shape; a real cover fills it, trimmed evenly from the centre. */
+/* Real and drawn covers share one shape; a real cover close to it fills it, trimmed evenly from
+   the centre. One far from it (e.g. a photo of a boxed set) is shown whole instead; see below. */
 .book-object .cover-art {
   aspect-ratio: var(--book-aspect);
 }
@@ -5115,6 +5116,21 @@ a.rating-card:hover {
   max-height: none;
   object-fit: cover;
   object-position: center;
+}
+
+/* A cover shown whole: the book narrows (its width is set inline) and centres, so the shadow
+   and spine light follow the picture instead of leaving empty strips beside it. */
+.book-object.book-object-whole {
+  margin-inline: auto;
+}
+
+.book-object-whole .cover-art {
+  aspect-ratio: auto;
+}
+
+.book-object-whole .cover-image {
+  height: auto;
+  object-fit: contain;
 }
 
 .book-object-mini {
