@@ -3,12 +3,14 @@ import { PageStream } from './layout';
 import { formatPdfSelection, parsePdfSelection, type PdfAnnotationMark, type PdfTextSelection } from './annotations';
 import { cleanCopiedText } from './copy-text';
 import { readPdfSelection, selectedPages, transformRect } from './selection';
+import { spreadOf, spreadPages, type Spread } from './spread';
 import type { PdfPageSize, PdfPlace, PdfSession, RenderedPage } from './types';
 
 export interface PdfViewportProps {
   session: PdfSession | null;
   place: PdfPlace | null;
-  flow: 'paginated' | 'continuous';
+  /** 'spread' shows two pages side by side. */
+  flow: 'paginated' | 'spread' | 'continuous';
   scrollerRef: RefObject<HTMLDivElement | null>;
   enterAtBottom?: boolean;
   onPosition: (place: PdfPlace) => void;
@@ -104,6 +106,8 @@ function mountViewport(
 ) {
   const continuous = flow === 'continuous';
   const requestedPage = Math.max(1, Math.min(session.pageCount, request.page));
+  // Two pages side by side, each fitted to half the width.
+  const pair: Spread | null = flow === 'spread' ? spreadOf(requestedPage, session.pageCount) : null;
   const command = { ...request, page: requestedPage };
   const stream = document.createElement('div');
   stream.style.position = 'relative';
@@ -181,6 +185,21 @@ function mountViewport(
     });
   }
 
+  /** The width one page is fitted to. */
+  function areaWidth() {
+    return pair ? width / 2 : width;
+  }
+
+  /** Where the spine sits in the stream, and the stream's size, with the pair centred on it. */
+  function spreadBox(spread: Spread) {
+    // An empty side keeps the width of the other, so a lone page stays on its own side.
+    const leftWidth = layout.size(spread.left ?? spread.right!).cssWidth;
+    const rightWidth = layout.size(spread.right ?? spread.left!).cssWidth;
+    const streamWidth = Math.max(width, leftWidth + rightWidth);
+    const heights = spreadPages(requestedPage, session.pageCount).map((page) => layout.size(page).cssHeight);
+    return { spine: (streamWidth - leftWidth - rightWidth) / 2 + leftWidth, width: streamWidth, height: Math.max(0, ...heights) };
+  }
+
   function pageTop(page: number) {
     return continuous ? layout.offset(page) : 0;
   }
@@ -192,6 +211,10 @@ function mountViewport(
 
   /** Where a page shell sits horizontally in the stream (paginated pages are centred). */
   function shellLeft(page: number) {
+    if (pair) {
+      const { spine } = spreadBox(pair);
+      return page === pair.left ? spine - layout.size(page).cssWidth : spine;
+    }
     return continuous ? pageLeft(page) : Math.max(0, (width - layout.size(page).cssWidth) / 2);
   }
 
@@ -250,14 +273,15 @@ function mountViewport(
   }
 
   function arrange() {
-    stream.style.width = `${continuous ? layout.width(width) : Math.max(width, layout.size(requestedPage).cssWidth)}px`;
-    stream.style.height = `${continuous ? layout.height : layout.size(requestedPage).cssHeight}px`;
+    const box = pair ? spreadBox(pair) : null;
+    stream.style.width = `${box ? box.width : continuous ? layout.width(width) : Math.max(width, layout.size(requestedPage).cssWidth)}px`;
+    stream.style.height = `${box ? box.height : continuous ? layout.height : layout.size(requestedPage).cssHeight}px`;
     for (const [page, entry] of pages) {
       const size = layout.size(page);
       Object.assign(entry.shell.style, {
         position: 'absolute',
         top: `${pageTop(page)}px`,
-        left: `${continuous ? pageLeft(page) : Math.max(0, (width - size.cssWidth) / 2)}px`,
+        left: `${shellLeft(page)}px`,
         margin: '0',
         width: `${size.cssWidth}px`,
         height: `${size.cssHeight}px`,
@@ -319,7 +343,9 @@ function mountViewport(
 
   function reconcile() {
     if (!alive) return;
-    const wanted = new Set(continuous ? layout.range(root.scrollTop, height) : [requestedPage]);
+    const wanted = new Set(
+      continuous ? layout.range(root.scrollTop, height) : pair ? spreadPages(requestedPage, session.pageCount) : [requestedPage],
+    );
     if (pending) wanted.add(pending.place.page);
     for (const page of selectedPages(root, root.ownerDocument.getSelection(), pages)) wanted.add(page);
     for (const [page, entry] of pages) {
@@ -331,7 +357,7 @@ function mountViewport(
     for (const page of wanted) {
       if (pages.has(page)) continue;
       const shell = document.createElement('div');
-      shell.className = 'pdf-page';
+      shell.className = pair ? `pdf-page ${page === pair.left ? 'pdf-page-left' : 'pdf-page-right'}` : 'pdf-page';
       shell.dataset.page = String(page);
       shell.setAttribute('aria-busy', 'true');
       const canvas = document.createElement('canvas');
@@ -350,11 +376,11 @@ function mountViewport(
       const current = () => alive && generation === ticket && pages.get(page) === entry;
       void (async () => {
         try {
-          const size = await session.pageSize(page, request.zoom, width, height);
+          const size = await session.pageSize(page, request.zoom, areaWidth(), height);
           if (!current()) return;
           recordSize(page, size);
           if (!current()) return;
-          const rendered = await session.renderPage({ page, zoom: request.zoom, containerWidth: width, containerHeight: height, canvas, textLayer: text });
+          const rendered = await session.renderPage({ page, zoom: request.zoom, containerWidth: areaWidth(), containerHeight: height, canvas, textLayer: text });
           if (!current() || !rendered) return;
           // Keep the old transform while capturing an anchor if paint and measurement
           // disagree. The session normally supplies exactly the same viewport for both.
@@ -387,9 +413,9 @@ function mountViewport(
     if (previous?.session === session) {
       for (const [page, size] of previous.sizes) {
         const scale = request.zoom === 'width'
-          ? width / size.cssWidth
+          ? areaWidth() / size.cssWidth
           : request.zoom === 'page'
-            ? Math.min(width / size.cssWidth, height / size.cssHeight)
+            ? Math.min(areaWidth() / size.cssWidth, height / size.cssHeight)
             : typeof previous.zoom === 'number' ? request.zoom / previous.zoom : request.zoom / size.scale;
         sizes.set(page, {
           cssWidth: size.cssWidth * scale,
@@ -398,7 +424,7 @@ function mountViewport(
         });
       }
     }
-    const scale = request.zoom === 'width' ? width / 612 : request.zoom === 'page' ? Math.min(width / 612, height / 792) : request.zoom;
+    const scale = request.zoom === 'width' ? areaWidth() / 612 : request.zoom === 'page' ? Math.min(areaWidth() / 612, height / 792) : request.zoom;
     layout = new PageStream(session.pageCount, sizes.values().next().value ?? { cssWidth: 612 * scale, cssHeight: 792 * scale, scale }, sizes);
     cache.current = { session, zoom: request.zoom, sizes };
     pending = { place, bottom: bottom && !continuous, notify, viewport };

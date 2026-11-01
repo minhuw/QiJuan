@@ -4,7 +4,8 @@ const FLOW_KEY = 'qijuan.reader.flow';
 
 export function readReaderFlow(): ReaderFlow {
   try {
-    return localStorage.getItem(FLOW_KEY) === 'continuous' ? 'continuous' : 'paginated';
+    const saved = localStorage.getItem(FLOW_KEY);
+    return saved === 'continuous' || saved === 'spread' ? saved : 'paginated';
   } catch {
     return 'paginated';
   }

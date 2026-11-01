@@ -25,7 +25,8 @@ import {
 import { api, type ApiResult } from '../api';
 import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
-import type { ReaderFlow } from './epub/settings';
+import { turnsPages, type ReaderFlow } from './epub/settings';
+import { spreadPages, spreadTurnTarget } from './pdf/spread';
 import { readReaderFlow, saveReaderFlow } from './flow';
 import { createPageScroll } from './page-scroll';
 import { formatPdfLocator, parsePdfPlace, type PdfPlace } from './pdf/locator';
@@ -317,7 +318,7 @@ function PdfReaderDocument({ editionId, assetId, title, admin = false, ocr = nul
     let gestureAxis = 'vertical';
     const pageScroll = createPageScroll({
       horizontal: true,
-      enabled: () => flow === 'paginated' && !holdRef.current && renderedRef.current !== null,
+      enabled: () => turnsPages(flow) && !holdRef.current && renderedRef.current !== null,
       canTurn: (turn, _target, axis) => {
         gestureAxis = axis;
         const current = placeRef.current;
@@ -326,12 +327,13 @@ function PdfReaderDocument({ editionId, assetId, title, admin = false, ocr = nul
         const atEnd = axis === 'horizontal'
           ? scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 2
           : scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
-        return turn === 'next' ? current.page < pageCount && atEnd : current.page > 1 && atStart;
+        return turnTarget(current.page, turn) !== null && (turn === 'next' ? atEnd : atStart);
       },
       turn: (turn) => {
         const current = placeRef.current;
-        if (!current) return;
-        return goTo(current.page + (turn === 'next' ? 1 : -1), undefined, turn === 'prev' && gestureAxis === 'vertical');
+        const target = current ? turnTarget(current.page, turn) : null;
+        if (target === null) return;
+        return goTo(target, undefined, turn === 'prev' && gestureAxis === 'vertical');
       },
       onError: () => setError('internal'),
     });
@@ -393,11 +395,13 @@ function PdfReaderDocument({ editionId, assetId, title, admin = false, ocr = nul
         direction: 'ltr',
         next: () => {
           const place = placeRef.current;
-          if (place) void goTo(place.page + 1);
+          const target = place ? turnTarget(place.page, 'next') : null;
+          if (target !== null) void goTo(target);
         },
         prev: () => {
           const place = placeRef.current;
-          if (place) void goTo(place.page - 1);
+          const target = place ? turnTarget(place.page, 'prev') : null;
+          if (target !== null) void goTo(target);
         },
       });
     }
@@ -475,6 +479,13 @@ function PdfReaderDocument({ editionId, assetId, title, admin = false, ocr = nul
       scroller.removeEventListener('gestureend', onGestureEnd);
     };
   }, [ready]);
+
+  /** The page a turn opens: the neighbouring page, or in two-page view the neighbouring spread. */
+  function turnTarget(page: number, turn: 'next' | 'prev'): number | null {
+    if (flow === 'spread') return spreadTurnTarget(page, pageCount, turn);
+    const target = page + (turn === 'next' ? 1 : -1);
+    return target >= 1 && target <= pageCount ? target : null;
+  }
 
   async function goTo(page: number, point?: { x: number | null; y: number | null }, enterAtBottom = false) {
     const session = sessionRef.current;
@@ -1122,21 +1133,28 @@ function PdfReaderDocument({ editionId, assetId, title, admin = false, ocr = nul
             className="reader-tool reader-tool-icon"
             aria-label={t('reader.previousPage')}
             title={t('reader.previousPage')}
-            disabled={!ready || currentPage <= 1}
-            onClick={() => void goTo(currentPage - 1)}
+            disabled={!ready || turnTarget(currentPage, 'prev') === null}
+            onClick={() => {
+              const target = turnTarget(currentPage, 'prev');
+              if (target !== null) void goTo(target);
+            }}
           >
             <ChevronLeft size={16} aria-hidden="true" />
           </button>
         <span className="reader-page-indicator">
-          {ready ? currentPage : '–'} <span aria-hidden="true">/</span> {pageCount || '–'}
+          {ready ? (flow === 'spread' ? spreadPages(currentPage, pageCount).join('–') : currentPage) : '–'}{' '}
+          <span aria-hidden="true">/</span> {pageCount || '–'}
         </span>
           <button
             type="button"
             className="reader-tool reader-tool-icon"
             aria-label={t('reader.nextPage')}
             title={t('reader.nextPage')}
-            disabled={!ready || !view || currentPage >= pageCount}
-            onClick={() => void goTo(currentPage + 1)}
+            disabled={!ready || !view || turnTarget(currentPage, 'next') === null}
+            onClick={() => {
+              const target = turnTarget(currentPage, 'next');
+              if (target !== null) void goTo(target);
+            }}
           >
             <ChevronRight size={16} aria-hidden="true" />
           </button>

@@ -19,9 +19,13 @@ export function ReaderFlowSelect({
         title={t('reader.mode')}
         value={value}
         disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.value === 'continuous' ? 'continuous' : 'paginated')}
+        onChange={(event) => {
+          const next = event.currentTarget.value;
+          onChange(next === 'continuous' || next === 'spread' ? next : 'paginated');
+        }}
       >
         <option value="paginated">{t('reader.paginated')}</option>
+        <option value="spread">{t('reader.spread')}</option>
         <option value="continuous">{t('reader.scrolled')}</option>
       </select>
       <ChevronDown size={12} aria-hidden="true" />

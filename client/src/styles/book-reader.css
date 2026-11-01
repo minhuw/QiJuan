@@ -554,6 +554,24 @@
   outline: 1px solid var(--hairline);
 }
 
+/* In two-page view the pages meet at the spine, shaded a little as the paper curves into the binding. */
+.pdf-page-left::after,
+.pdf-page-right::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  content: '';
+  pointer-events: none;
+}
+
+.pdf-page-left::after {
+  background: linear-gradient(to left, rgb(0 0 0 / 0.16), rgb(0 0 0 / 0.05) 2.5%, transparent 7%);
+}
+
+.pdf-page-right::after {
+  background: linear-gradient(to right, rgb(0 0 0 / 0.16), rgb(0 0 0 / 0.05) 2.5%, transparent 7%);
+}
+
 .pdf-page canvas {
   display: block;
   background: #fff;

@@ -733,3 +733,33 @@ describe('PdfViewport selection and overlays', () => {
     expect(onSelection).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('PdfViewport two-page spread', () => {
+  function shells(root: HTMLDivElement) {
+    return [...root.querySelectorAll<HTMLDivElement>('.pdf-page')].map((shell) => ({
+      page: Number(shell.dataset.page),
+      side: shell.classList.contains('pdf-page-left') ? 'left' : 'right',
+      left: shell.style.left,
+      width: shell.style.width,
+    }));
+  }
+
+  it('sets a pair of pages either side of the spine, each fitted to half the width', async () => {
+    const view = setup({ flow: 'spread', place: { page: 3, x: 10, y: 1000, zoom: 'page' } });
+    await settled(view.props);
+    // Half of 640 wide and 480 high: 0.48 scale, so 192px pages meeting at 320.
+    expect(view.props.session!.pageSize).toHaveBeenCalledWith(2, 'page', 320, 480);
+    expect(shells(view.root)).toEqual([
+      { page: 2, side: 'left', left: '128px', width: '192px' },
+      { page: 3, side: 'right', left: '320px', width: '192px' },
+    ]);
+
+    view.update({ place: { page: 1, x: 10, y: 1000, zoom: 'page' } });
+    await settled(view.props, 2);
+    expect(shells(view.root)).toEqual([{ page: 1, side: 'right', left: '320px', width: '192px' }]);
+
+    view.update({ place: { page: 20, x: 10, y: 1000, zoom: 'page' } });
+    await settled(view.props, 3);
+    expect(shells(view.root)).toEqual([{ page: 20, side: 'left', left: '128px', width: '192px' }]);
+  });
+});

@@ -1,7 +1,16 @@
 export const CJK_SERIF = '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Palatino, serif';
 export const CJK_SANS = '"Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Segoe UI", sans-serif';
 
-export type ReaderFlow = 'paginated' | 'continuous';
+/** One page at a time, two pages side by side, or one continuous scroll. */
+export type ReaderFlow = 'paginated' | 'spread' | 'continuous';
+
+/** Whether a flow turns pages (as opposed to scrolling). */
+export function turnsPages(flow: ReaderFlow): boolean {
+  return flow !== 'continuous';
+}
+
+/** Narrower than this, a two-page flow shows one page, as a single column would not fit two. */
+export const MIN_SPREAD_WIDTH = 800;
 export type ReaderFont = 'serif' | 'sans';
 export type ReaderTheme = 'paper' | 'ink';
 
@@ -10,7 +19,8 @@ export interface RenditionOptions {
   height: number | string;
   flow: 'paginated' | 'scrolled';
   manager: 'default' | 'continuous';
-  spread: 'none';
+  spread: 'none' | 'auto';
+  minSpreadWidth: number;
   allowScriptedContent: false;
   allowPopups: false;
 }
@@ -29,7 +39,8 @@ export function renditionOptionsFor(
     height: size.height,
     flow: mode === 'continuous' ? 'scrolled' : 'paginated',
     manager: mode === 'continuous' ? 'continuous' : 'default',
-    spread: 'none',
+    spread: mode === 'spread' ? 'auto' : 'none',
+    minSpreadWidth: MIN_SPREAD_WIDTH,
     allowScriptedContent: false,
     allowPopups: false,
   };

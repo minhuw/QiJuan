@@ -357,6 +357,30 @@ describe('pdf reader', () => {
     await waitFor(() => expect(puts.at(-1)).toBe('pdfpos(page=5;x=0;y=20;zoom=1.5)'));
   });
 
+  it('shows two pages side by side in Two pages mode and turns a spread at a time', async () => {
+    const session = sessionFor();
+    install(session);
+    renderReader('en');
+    await waitFor(() => expect(document.querySelector('.pdf-stage')).toHaveAttribute('aria-busy', 'false'));
+    fireEvent.change(screen.getByRole('combobox', { name: catalogs.en.reader.mode }), { target: { value: 'spread' } });
+    expect(localStorage.getItem('qijuan.reader.flow')).toBe('spread');
+    // The saved page 4 opens the spread of pages 4 and 5.
+    await waitFor(() => expect(document.querySelector('.pdf-page-left[data-page="4"]')).toBeInTheDocument());
+    expect(document.querySelector('.pdf-page-right[data-page="5"]')).toBeInTheDocument();
+    const indicator = document.querySelector('.reader-page-indicator')!;
+    expect(indicator.textContent).toBe('4–5 / 8');
+
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.nextPage }));
+    await waitFor(() => expect(indicator.textContent).toBe('6–7 / 8'));
+    await waitFor(() => expect(document.querySelector('.pdf-page-right[data-page="7"]')).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    await waitFor(() => expect(indicator.textContent).toBe('8 / 8'));
+    expect(screen.getByRole('button', { name: catalogs.en.reader.nextPage })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: catalogs.en.reader.previousPage }));
+    await waitFor(() => expect(indicator.textContent).toBe('6–7 / 8'));
+  });
+
   it('turns horizontally in Pages mode while continuous mode keeps horizontal input native', async () => {
     let now = 0;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);

@@ -21,7 +21,7 @@ import { createDebouncedSave, POSITION_SAVE_DELAY_MS } from './epub/debounce';
 import { onReaderKey } from './epub/keys';
 import { readReaderFlow, saveReaderFlow } from './flow';
 import { openEpubSession } from './epub/session';
-import { fontStack, type ReaderFlow, type ReaderFont, type ReaderTheme } from './epub/settings';
+import { fontStack, turnsPages, type ReaderFlow, type ReaderFont, type ReaderTheme } from './epub/settings';
 import type { BookFacts, EpubSession, SearchHit, TocItem, Typography } from './epub/types';
 import { useLocale } from '../shell';
 import { ReaderOptions, useReaderPanelFocus } from './reader-options';
@@ -344,7 +344,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       onReaderKey(event, {
-        enabled: flow === 'paginated',
+        enabled: turnsPages(flow),
         direction: facts.direction,
         next: () => {
           void sessionRef.current?.next();
@@ -816,7 +816,7 @@ export function EpubReader({ editionId, assetId, title }: { editionId: number; a
           />
         </div>
       </div>
-      {flow === 'paginated' ? (
+      {turnsPages(flow) ? (
         <footer className="reader-footer">
           <button
             type="button"

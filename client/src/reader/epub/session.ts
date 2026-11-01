@@ -3,7 +3,7 @@ import { createPageScroll } from '../page-scroll';
 import { isSavedEpubLocator, locatorFromRelocation, progressFromRelocation } from './cfi';
 import { onReaderKey, type ReaderKeyEvent } from './keys';
 import { isArchivedStylesheet, isFontOrImage, isRemoteUrl, neutralizeRemoteAssets, resolveArchivedImages, rewriteArchivedText, substituteFor } from './remote';
-import { fontStack, mountRendition, renditionOptionsFor, themeCss, type ReaderFlow } from './settings';
+import { fontStack, mountRendition, renditionOptionsFor, themeCss, turnsPages, type ReaderFlow } from './settings';
 import type { BookFacts, EpubSession, OpenEpubOptions, SearchHit, TocItem, Typography } from './types';
 
 interface LooseArchive {
@@ -202,7 +202,7 @@ export async function openEpubSession(
     const pageScroll = createPageScroll({
       horizontal: true,
       direction: facts.direction,
-      enabled: () => !destroyed && !changingFlow && mode === 'paginated',
+      enabled: () => !destroyed && !changingFlow && turnsPages(mode),
       canTurn: () => true,
       turn: (turn) => turn === 'next' ? target.next() : target.prev(),
     });
@@ -217,7 +217,7 @@ export async function openEpubSession(
     });
     target.hooks.content.register((contents) => {
       if (!contents.document) return;
-      if (mode === 'paginated') chapters.set(contents.document, pageScroll.attach(contents.document));
+      if (turnsPages(mode)) chapters.set(contents.document, pageScroll.attach(contents.document));
       try {
         neutralizeRemoteAssets(contents.document);
       } catch {
@@ -245,7 +245,7 @@ export async function openEpubSession(
       if (!event || typeof event !== 'object' || typeof (event as ReaderKeyEvent).key !== 'string') return;
       if (typeof (event as ReaderKeyEvent).preventDefault !== 'function') return;
       onReaderKey(event as ReaderKeyEvent, {
-        enabled: !destroyed && mode === 'paginated',
+        enabled: !destroyed && turnsPages(mode),
         direction: facts.direction,
         next: () => {
           void target.next();
